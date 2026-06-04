@@ -1,0 +1,191 @@
+/* ── Typography ─────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+body {
+    background-color: #DBDBDB;
+    color: #e6edf3;
+    font-family: 'IBM Plex Sans', sans-serif;
+    margin: 0;
+}
+
+.price, .number {
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Panels ─────────────────────────────────────────────────────── */
+.panel {
+    background-color: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.card {
+    background-color: #21262d;
+    border-radius: 4px;
+    padding: 0.75rem;
+}
+
+/* ── Colors ─────────────────────────────────────────────────────── */
+.bull  { color: #00ff88; }
+.bear  { color: #ff3366; }
+.alert { color: #ffd700; }
+.muted { color: #7d8590; }
+
+/* ── Border pulse animations ────────────────────────────────────── */
+@keyframes pulse-long-kf {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.7); }
+    50%       { box-shadow: 0 0 0 12px rgba(0, 255, 136, 0); }
+}
+
+@keyframes pulse-short-kf {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 51, 102, 0.7); }
+    50%       { box-shadow: 0 0 0 12px rgba(255, 51, 102, 0); }
+}
+
+.pulse-long  { animation: pulse-long-kf  0.5s ease-out 3; border: 2px solid #00ff88; }
+.pulse-short { animation: pulse-short-kf 0.5s ease-out 3; border: 2px solid #ff3366; }
+
+/* ── Drawdown meter ─────────────────────────────────────────────── */
+.drawdown-bar { height: 8px; border-radius: 4px; background: #21262d; }
+.drawdown-fill-ok     { background: #00ff88; }
+.drawdown-fill-amber  { background: #ffd700; }
+.drawdown-fill-danger { background: #ff3366; }
+
+/* ── Dropdown: light background, BLACK text ─────────────────────── */
+/* Nuclear selector — covers all react-select versions in Dash 4.x  */
+#pair-select *,
+.dash-dropdown * {
+    color: #111111 !important;
+}
+/* Selected option badge stays white-on-blue */
+.dash-dropdown .Select-option.is-selected,
+.dash-dropdown [class*="-option--is-selected"] {
+    background-color: #2962ff !important;
+    color: #ffffff !important;
+}
+/* Container and menu backgrounds */
+.dash-dropdown .Select-control,
+.dash-dropdown .Select-menu-outer,
+.dash-dropdown [class*="-control"],
+.dash-dropdown [class*="-menu"],
+.dash-dropdown [class*="-MenuList"] {
+    background-color: #f0f0f0 !important;
+    border-color: #aaaaaa !important;
+    box-shadow: none !important;
+}
+/* Option rows */
+.dash-dropdown .Select-option,
+.dash-dropdown [class*="-option"] {
+    background-color: #f0f0f0 !important;
+    font-size: 0.85rem;
+}
+.dash-dropdown .Select-option.is-focused,
+.dash-dropdown .Select-option:hover,
+.dash-dropdown [class*="-option"]:hover,
+.dash-dropdown [class*="-option--is-focused"] {
+    background-color: #d0d0d0 !important;
+}
+.dash-dropdown .Select-arrow {
+    border-color: #444 transparent transparent !important;
+}
+.dash-dropdown [class*="-indicatorSeparator"] {
+    background-color: #aaaaaa !important;
+}
+.dash-dropdown [class*="-dropdownIndicator"],
+.dash-dropdown [class*="-dropdownIndicator"] * {
+    color: #444444 !important;
+}
+
+/* ── TradingView Lightweight Charts container ────────────────────── */
+#tvlw-chart {
+    overflow: hidden;
+    border-radius: 4px;
+}
+/* TWLC pane separator line */
+#tvlw-chart td[class*="separator"] {
+    background: #21262d !important;
+}
+
+/* ── SVG Trendline overlay ──────────────────────────────────────── */
+#apex-trend-overlay {
+    pointer-events: none;
+}
+#apex-trend-overlay line.apex-trend-hit {
+    pointer-events: stroke;
+}
+#apex-trend-overlay circle.apex-trend-handle {
+    pointer-events: all;
+    transition: r 0.1s ease;
+}
+#apex-trend-overlay circle.apex-trend-handle:hover {
+    r: 7;
+}
+
+/* ── Drawing style panel ────────────────────────────────────────── */
+#draw-style-panel {
+    user-select: none;
+}
+
+/* Custom color input normalization */
+#draw-style-panel input[type="color"] {
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0;
+    border-radius: 3px;
+    cursor: pointer;
+}
+#draw-style-panel input[type="color"]::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+#draw-style-panel input[type="color"]::-webkit-color-swatch {
+    border: none;
+    border-radius: 2px;
+}
+
+/* ── Shutdown panel ─────────────────────────────────────────────── */
+#shutdown-panel {
+    user-select: none;
+}
+#shutdown-status {
+    min-height: 16px;
+}
+
+/* ── Floating trade panel ───────────────────────────────────────── */
+#quick-trade-panel {
+    /* Semi-transparent blur glass effect */
+    transition: box-shadow 0.15s ease;
+}
+#quick-trade-panel:hover {
+    box-shadow: 0 6px 20px rgba(0,0,0,0.65) !important;
+}
+.apex-drag-handle {
+    cursor: grab !important;
+}
+.apex-drag-handle:active {
+    cursor: grabbing !important;
+}
+#chart-area-wrapper {
+    /* Clip overflow from positioned overlays on x-axis; let y overflow for panel */
+    overflow: visible;
+}
+
+/* ── Time input dark theme ──────────────────────────────────────── */
+input[type="time"] {
+    color-scheme: dark;
+}
+
+/* ── Left panel (Signal Monitor + Open Trades) ──────────────────── */
+#left-col .panel { padding: 0.6rem; }
+#left-col h4     { font-size: 0.9rem; margin-bottom: 0.5rem; }
+#left-col td, #left-col th { padding: 0.2rem 0.3rem; font-size: 0.78rem; }
+
+/* ── Score bar ──────────────────────────────────────────────────── */
+.score-bar-green { background: #00ff88; height: 6px; border-radius: 3px; }
+.score-bar-amber { background: #ffd700; height: 6px; border-radius: 3px; }
+.score-bar-grey  { background: #7d8590; height: 6px; border-radius: 3px; }
+
+/* ── Suggestion cards ───────────────────────────────────────────── */
+.suggestion-boost    { border-left: 3px solid #00ff88; }
+.suggestion-warning  { border-left: 3px solid #ff3366; }
+.suggestion-optimize { border-left: 3px solid #ffd700; }

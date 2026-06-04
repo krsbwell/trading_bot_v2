@@ -1,0 +1,14 @@
+oandapyV20
+alpaca-py
+pandas
+pandas-ta
+numpy
+plotly
+dash
+scikit-learn
+joblib
+pygame-ce       # pygame community edition — Python 3.12+ wheels available
+# pygame        # fallback if pygame-ce unavailable (may require Visual C++)
+python-dotenv
+apscheduler
+pydub

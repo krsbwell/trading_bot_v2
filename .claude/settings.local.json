@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(set PYTHONPATH=.)",
+      "Bash(venv\\\\Scripts\\\\python.exe -c \"from dashboard.app import app; print\\('Import OK'\\)\")"
+    ]
+  }
+}
