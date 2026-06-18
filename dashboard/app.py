@@ -194,9 +194,16 @@ app = Dash(
 
 # ── Layout helpers ────────────────────────────────────────────────────────────
 
+def _fmt_pair(p: str) -> str:
+    """Display EUR_USD as EUR/USD; crypto BTC/USD already correct."""
+    return p.replace("_", "/")
+
+
 def _pair_options():
-    return [{"label": p, "value": p}
-            for p in config.FOREX_PAIRS + config.CRYPTO_PAIRS]
+    all_pairs = (config.FOREX_PAIRS
+                 + getattr(config, "FOREX_WATCH", [])
+                 + config.CRYPTO_PAIRS)
+    return [{"label": _fmt_pair(p), "value": p} for p in all_pairs]
 
 def _sep():
     return html.Div(style={"width": "1px", "height": "22px",
@@ -229,8 +236,21 @@ app.layout = html.Div(
                             "marginLeft": "1rem", "border": "1px solid #ff3366",
                             "borderRadius": "3px", "padding": "2px 10px"},
                      children="⛔ TRADING HALTED — 3% drawdown breached"),
-            html.Div(style={"marginLeft": "auto", "display": "flex", "gap": "0.5rem"},
+            html.Div(style={"marginLeft": "auto", "display": "flex", "gap": "0.5rem",
+                             "alignItems": "center"},
                      children=[
+                html.Button("▶ Scan Now", id="scan-now-btn", n_clicks=0,
+                            title="Run signal scan immediately (don't wait for the hour)",
+                            style={"background": "#003d1f", "color": "#00ff88",
+                                   "border": "1px solid #00ff88", "borderRadius": "4px",
+                                   "padding": "0.35rem 0.75rem", "cursor": "pointer",
+                                   "fontSize": "0.82rem", "fontWeight": 700}),
+                html.Span(id="scan-status", children="",
+                          style={"color": "#8b949e", "fontSize": "0.75rem"}),
+                html.Button("Backtest", id="backtest-btn", n_clicks=0,
+                            style={"background": "#21262d", "color": "#38b6ff",
+                                   "border": "1px solid #30363d", "borderRadius": "4px",
+                                   "padding": "0.35rem 0.75rem", "cursor": "pointer"}),
                 html.Button("Trade Log", id="drawer-toggle-btn",
                             style={"background": "#21262d", "color": "#e6edf3",
                                    "border": "1px solid #30363d", "borderRadius": "4px",
@@ -243,8 +263,73 @@ app.layout = html.Div(
         html.Div([
             # Left (25%)
             html.Div([
+                # Adjustable signal threshold slider
+                html.Div([
+                    html.Span("Min Score Threshold:",
+                              style={"color": "#8b949e", "fontSize": "0.7rem"}),
+                    html.Span(id="min-score-label",
+                              style={"color": "#ffd700", "fontSize": "0.7rem",
+                                     "fontWeight": 700, "marginLeft": "6px"}),
+                    dcc.Slider(
+                        id="min-score-slider",
+                        min=40, max=90, step=5,
+                        value=config.MIN_CONFLUENCE_SCORE,
+                        marks={40: "40", 50: "50", 60: "60", 70: "70", 80: "80", 90: "90"},
+                        tooltip={"always_visible": False},
+                        className="apex-slider",
+                    ),
+                ], style={"background": "#161b22", "borderRadius": "4px",
+                           "padding": "0.5rem 0.75rem", "marginBottom": "0.5rem"}),
                 html.Div(id="signal-monitor"),
                 html.Div(id="open-trades"),
+
+                # ── Edit Trade panel (hidden until EDIT clicked) ───────────
+                html.Div(
+                    id="edit-trade-panel",
+                    style={"display": "none", "background": "#161b22",
+                           "borderRadius": "4px", "padding": "0.75rem",
+                           "marginTop": "0.5rem", "border": "1px solid #ffd700"},
+                    children=[
+                        html.Div([
+                            html.Span(id="edit-trade-title",
+                                      style={"color": "#ffd700", "fontWeight": 700,
+                                             "fontSize": "0.9rem"}),
+                            html.Button("×", id="edit-cancel-btn", n_clicks=0,
+                                        style={"background": "transparent", "border": "none",
+                                               "color": "#8b949e", "cursor": "pointer",
+                                               "fontSize": "1.1rem", "marginLeft": "auto",
+                                               "padding": "0"}),
+                        ], style={"display": "flex", "alignItems": "center",
+                                  "marginBottom": "0.5rem"}),
+                        html.Div([
+                            _order_field("Stop Loss", "edit-sl-input",   "#ff3366"),
+                            _order_field("TP 1",      "edit-tp1-input",  "#00ff88"),
+                            _order_field("TP 2",      "edit-tp2-input",  "#00ff88"),
+                            _order_field("TP 3",      "edit-tp3-input",  "#00ff88"),
+                        ], style={"display": "grid",
+                                  "gridTemplateColumns": "repeat(2, 1fr)",
+                                  "gap": "0.4rem", "marginBottom": "0.5rem"}),
+                        html.Button("↑ Move SL to Breakeven",
+                                    id="edit-breakeven-btn", n_clicks=0,
+                                    style={"width": "100%", "background": "#21262d",
+                                           "color": "#ffd700",
+                                           "border": "1px solid #ffd700",
+                                           "borderRadius": "3px", "padding": "0.3rem",
+                                           "cursor": "pointer", "fontSize": "0.78rem",
+                                           "marginBottom": "0.4rem"}),
+                        html.Button("✓ Update Trade",
+                                    id="edit-confirm-btn", n_clicks=0,
+                                    style={"width": "100%", "background": "#003d1f",
+                                           "color": "#00ff88",
+                                           "border": "1px solid #00ff88",
+                                           "borderRadius": "3px", "padding": "0.3rem",
+                                           "cursor": "pointer", "fontSize": "0.82rem",
+                                           "fontWeight": 700}),
+                        html.Div(id="edit-result",
+                                 style={"color": "#8b949e", "fontSize": "0.75rem",
+                                        "marginTop": "0.3rem"}),
+                    ],
+                ),
             ], id="left-col", style={"flex": "0 0 25%", "overflowY": "auto",
                        "maxHeight": "760px", "paddingRight": "0.5rem", "minWidth": 0}),
 
@@ -648,6 +733,58 @@ app.layout = html.Div(
         dcc.Store(id="draw-width-store",  data=1),
         dcc.Store(id="draw-style-store",  data="solid"),
         dcc.Store(id="open-trades-store", data=[]),
+        dcc.Store(id="edit-trade-store",     data=None),
+        dcc.Store(id="backtest-result-store", data=None),
+
+        # Backtest panel (hidden overlay)
+        html.Div(
+            id="backtest-panel",
+            style={"display": "none", "position": "fixed", "top": "60px",
+                   "left": "50%", "transform": "translateX(-50%)",
+                   "width": "700px", "maxHeight": "80vh", "overflowY": "auto",
+                   "background": "#161b22", "border": "1px solid #30363d",
+                   "borderRadius": "8px", "padding": "1.5rem", "zIndex": 2000,
+                   "boxShadow": "0 8px 32px rgba(0,0,0,0.6)"},
+            children=[
+                html.Div([
+                    html.H4("Backtest", style={"color": "#38b6ff", "margin": 0}),
+                    html.Button("×", id="backtest-close-btn", n_clicks=0,
+                                style={"background": "transparent", "border": "none",
+                                       "color": "#8b949e", "cursor": "pointer",
+                                       "fontSize": "1.3rem", "marginLeft": "auto",
+                                       "padding": "0"}),
+                ], style={"display": "flex", "alignItems": "center",
+                           "marginBottom": "1rem"}),
+                # Config row
+                html.Div([
+                    html.Span("Pair:", style={"color": "#8b949e", "fontSize": "0.8rem",
+                                              "alignSelf": "center"}),
+                    dcc.Dropdown(id="bt-pair-select",
+                                 options=_pair_options(),
+                                 value=config.FOREX_PAIRS[0], clearable=False,
+                                 style={"width": "150px", "fontSize": "0.85rem"}),
+                    html.Span("Bars:", style={"color": "#8b949e", "fontSize": "0.8rem",
+                                              "alignSelf": "center", "marginLeft": "0.5rem"}),
+                    dcc.Input(id="bt-bars-input", type="number", value=1500,
+                              min=200, max=4500, step=100, debounce=True,
+                              style={"width": "70px", "background": "#21262d",
+                                     "color": "#e6edf3", "border": "1px solid #30363d",
+                                     "borderRadius": "3px", "padding": "0.2rem 0.4rem",
+                                     "fontSize": "0.8rem"}),
+                    html.Button("▶ Run", id="backtest-run-btn", n_clicks=0,
+                                style={"background": "#003d1f", "color": "#00ff88",
+                                       "border": "1px solid #00ff88", "borderRadius": "4px",
+                                       "padding": "0.3rem 0.9rem", "cursor": "pointer",
+                                       "fontSize": "0.82rem", "fontWeight": 700,
+                                       "marginLeft": "auto"}),
+                ], style={"display": "flex", "gap": "0.4rem", "alignItems": "center",
+                           "marginBottom": "1rem", "flexWrap": "wrap"}),
+                html.Div(id="backtest-status",
+                         style={"color": "#8b949e", "fontSize": "0.8rem",
+                                "marginBottom": "0.5rem"}),
+                html.Div(id="backtest-results"),
+            ],
+        ),
         dcc.Store(id="shutdown-config",
                   data={"enabled": False, "time": "16:00", "warn_minutes": 5}),
         # EMA settings: current active settings for the visible chart
@@ -759,6 +896,19 @@ def update_chart(n_intervals, pair, tf, ema_settings):
         for t in all_trades
         if t.get("pair") == pair and t.get("entry")
     ]
+
+    # Signal levels overlay — entry/SL/TP from the last qualifying signal for this pair
+    sig = (state.get_key("signal_details") or {}).get(pair)
+    if sig and sig.get("score", 0) >= 50:
+        result["signal_levels"] = {
+            "entry":     sig.get("entry"),
+            "sl":        sig.get("stop_loss"),
+            "tp1":       (sig.get("tp_levels") or {}).get("tp1"),
+            "tp2":       (sig.get("tp_levels") or {}).get("tp2"),
+            "tp3":       (sig.get("tp_levels") or {}).get("tp3"),
+            "direction": sig.get("direction"),
+        }
+
     return result
 
 
@@ -916,6 +1066,41 @@ def update_and_save_ema_settings(periods, _cc, _wc, _vc,
         per_pair[key] = settings
 
     return settings, per_pair
+
+
+# ── Order type toggle (Market ↔ Limit) ───────────────────────────────────────
+
+@app.callback(
+    Output("order-type-market-btn", "style"),
+    Output("order-type-limit-btn",  "style"),
+    Output("order-limit-row",       "style"),
+    Output("order-form-store",      "data"),
+    Input("order-type-market-btn",  "n_clicks"),
+    Input("order-type-limit-btn",   "n_clicks"),
+    State("order-form-store",       "data"),
+    prevent_initial_call=True,
+)
+def toggle_order_type(market_n, limit_n, form_data):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update, no_update, no_update, no_update
+    btn = ctx.triggered[0]["prop_id"].split(".")[0]
+    is_limit = (btn == "order-type-limit-btn")
+
+    active   = {**_tf_btn_style(True),  "fontSize": "0.72rem", "padding": "2px 10px"}
+    inactive = {**_tf_btn_style(False), "fontSize": "0.72rem", "padding": "2px 10px"}
+    limit_row_style = {"display": "block"} if is_limit else {"display": "none"}
+
+    # Update the form store with the selected order type
+    new_data = dict(form_data or {})
+    new_data["order_type"] = "limit" if is_limit else "market"
+
+    return (
+        inactive if is_limit else active,
+        active   if is_limit else inactive,
+        limit_row_style,
+        new_data,
+    )
 
 
 # ── Drawing tool toggle ───────────────────────────────────────────────────────
@@ -1209,23 +1394,34 @@ def _do_shutdown():
 # ── Spread display ────────────────────────────────────────────────────────────
 
 @app.callback(
-    Output("spread-display", "children"),
+    Output("spread-display",  "children"),
+    Output("quick-buy-btn",   "children"),
+    Output("quick-sell-btn",  "children"),
     Input("interval-5s",  "n_intervals"),
     Input("pair-select",  "value"),
 )
 def update_spread(_, pair):
-    if not pair or "_" not in pair:
-        return "—"
-    connector = state.get_key("forex_connector")
+    blank = "—", "▲ BUY", "▼ SELL"
+    if not pair:
+        return blank
+    is_forex  = "_" in pair
+    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
     if connector is None:
-        return "—"
+        return blank
     try:
-        _bid, _ask, spread = connector.get_spread(pair)
-        pip  = 0.01 if "JPY" in pair else 0.0001
-        pips = round(spread / pip, 1)
-        return f"{pips} pips"
+        q   = connector.get_current_quote(pair)
+        bid = q.get("bid", 0)
+        ask = q.get("ask", 0)
+        sp  = q.get("spread_pips", 0)
+        if not ask:
+            return blank
+        dec        = 3 if "JPY" in pair else 5
+        spread_txt = f"{sp} pips" if is_forex else f"${sp}"
+        buy_lbl    = f"▲ BUY  {ask:.{dec}f}"
+        sell_lbl   = f"▼ SELL  {bid:.{dec}f}"
+        return spread_txt, buy_lbl, sell_lbl
     except Exception:
-        return "—"
+        return blank
 
 
 # ── Order form: open / close ──────────────────────────────────────────────────
@@ -1287,24 +1483,34 @@ def populate_order_form(form_data, default_lot):
 
     if connector:
         try:
+            # Use live bid/ask for the entry price (BUY=ask, SELL=bid)
+            quote     = connector.get_current_quote(pair)
+            entry_val = round(
+                float(quote["ask"] if direction == "long" else quote["bid"]) or 0,
+                3 if "JPY" in pair else 5,
+            ) or None
+
+            # Fetch recent candles for ATR-based SL
             gran = "H1" if is_forex else "1Hour"
             df   = connector.get_candles(pair, gran, 50)
             if df is not None and not df.empty:
-                entry_val = round(float(df["close"].iloc[-1]), 5)
+                if not entry_val:
+                    entry_val = round(float(df["close"].iloc[-1]), 5)
                 try:
                     from engine.indicators import atr as _atr
                     atr_val = float(_atr(df["high"], df["low"], df["close"], 14).iloc[-1])
                     sl_dist = atr_val * 1.5
                 except Exception:
-                    sl_dist = 0.005 if is_forex else entry_val * 0.015
+                    sl_dist = 0.005 if is_forex else (entry_val or 1) * 0.015
                 sl_val = round(
-                    entry_val - sl_dist if direction == "long" else entry_val + sl_dist, 5
+                    entry_val - sl_dist if direction == "long" else entry_val + sl_dist,
+                    3 if "JPY" in pair else 5,
                 )
                 from risk.risk_manager import get_tp_levels, calculate_position_size
-                tp       = get_tp_levels(entry_val, sl_val, direction)
-                tp1_val  = round(tp["tp1"], 5)
-                tp2_val  = round(tp["tp2"], 5)
-                tp3_val  = round(tp["tp3"], 5)
+                tp      = get_tp_levels(entry_val, sl_val, direction)
+                tp1_val = round(tp["tp1"], 3 if "JPY" in pair else 5)
+                tp2_val = round(tp["tp2"], 3 if "JPY" in pair else 5)
+                tp3_val = round(tp["tp3"], 3 if "JPY" in pair else 5)
                 if not default_lot:
                     account = state.get_key("account", {})
                     balance = account.get("balance") or account.get("cash", 500.0)
@@ -1337,7 +1543,7 @@ def populate_order_form(form_data, default_lot):
         "fontWeight":   700,
     }
 
-    return (panel_style, f"{arrow}  {pair}", title_style,
+    return (panel_style, f"{arrow}  {pair.replace('_', '/')}", title_style,
             entry_val, sl_val, tp1_val, tp2_val, tp3_val, lot_val, confirm_style)
 
 
@@ -1379,29 +1585,44 @@ def confirm_order(n, form_data, entry, sl, tp1, tp2, tp3, lot):
         return ("✗ Paper trader unavailable (live mode: use broker)",
                 {"color": "#ff3366", "fontSize": "0.78rem"})
 
-    trade_id = paper_trader.open_trade(
-        pair=pair, direction=direction,
-        entry_price=entry, sl=sl,
-        tp_levels={"tp1": tp1, "tp2": tp2, "tp3": tp3},
-        size=lot,
-    )
+    order_type  = form_data.get("order_type", "market")
+    tp_levels   = {"tp1": tp1, "tp2": tp2, "tp3": tp3}
+
+    if order_type == "limit":
+        # Limit order: entry is the limit price, fills when price reaches it
+        limit_price = entry   # user set entry field = limit price
+        trade_id    = paper_trader.open_limit_order(
+            pair=pair, direction=direction,
+            limit_price=limit_price, sl=sl,
+            tp_levels=tp_levels, size=lot,
+        )
+        order_label = "LIMIT"
+    else:
+        trade_id = paper_trader.open_trade(
+            pair=pair, direction=direction,
+            entry_price=entry, sl=sl,
+            tp_levels=tp_levels, size=lot,
+        )
+        order_label = "MARKET"
+
     state.update(
-        open_trades   = list(paper_trader.open_trades),
-        closed_trades = list(paper_trader.closed_trades),
+        open_trades    = list(paper_trader.open_trades),
+        closed_trades  = list(paper_trader.closed_trades),
+        pending_orders = list(paper_trader.pending_orders),
     )
 
     if not trade_id:
         return ("✗ Rejected (duplicate pair or max trades)",
                 {"color": "#ff3366", "fontSize": "0.78rem"})
 
-    is_forex = "_" in pair
-    pip      = 0.01 if "JPY" in pair else 0.0001
-    sl_pips  = round(abs(entry - sl) / pip)
-    arrow    = "▲ LONG" if direction == "long" else "▼ SHORT"
-    dec      = 3 if "JPY" in pair else 5
-    clr      = "#00ff88" if direction == "long" else "#ff3366"
-    msg      = (f"{arrow}  {pair}  @{entry:.{dec}f}  "
-                f"SL {sl:.{dec}f} ({sl_pips}p)  TP1 {tp1:.{dec}f}  Lot {lot}")
+    pip        = 0.01 if "JPY" in pair else 0.0001
+    sl_pips    = round(abs(entry - sl) / pip)
+    arrow      = "▲ LONG" if direction == "long" else "▼ SHORT"
+    dec        = 3 if "JPY" in pair else 5
+    clr        = "#00ff88" if direction == "long" else "#ff3366"
+    pair_disp  = pair.replace("_", "/")
+    msg        = (f"{arrow} {order_label}  {pair_disp}  @{entry:.{dec}f}  "
+                  f"SL {sl:.{dec}f} ({sl_pips}p)  TP1 {tp1:.{dec}f}  Lot {lot}")
     return msg, {"color": clr, "fontSize": "0.78rem"}
 
 
@@ -1471,11 +1692,228 @@ def update_connector_status(_):
 # ── Signal monitor ────────────────────────────────────────────────────────────
 
 @app.callback(
-    Output("signal-monitor", "children"),
-    Input("interval-60s",    "n_intervals"),
+    Output("min-score-label", "children"),
+    Input("min-score-slider", "value"),
 )
-def update_signals(_):
-    return signal_monitor_panel(state.get_key("signals", {}))
+def update_score_label(v):
+    return f"{v}/100"
+
+
+# ── Scan Now: trigger a full signal scan without waiting for the hourly tick ──
+
+@app.callback(
+    Output("scan-status",  "children"),
+    Output("scan-status",  "style"),
+    Input("scan-now-btn",  "n_clicks"),
+    prevent_initial_call=True,
+)
+def trigger_scan(n):
+    if not n:
+        return no_update, no_update
+
+    import threading as _th
+
+    def _run():
+        """Run the full signal scan in a background thread."""
+        try:
+            forex_conn  = state.get_key("forex_connector")
+            crypto_conn = state.get_key("crypto_connector")
+            from engine.signal_engine import SignalEngine
+            from engine.strategy_ema_cci_macd import clear_cache
+
+            clear_cache()  # ensure fresh EMA fit
+
+            tasks = []
+            if forex_conn:
+                eng = SignalEngine(forex_conn.get_candles)
+                tasks += [(p, "forex",  eng) for p in config.FOREX_PAIRS]
+            if crypto_conn:
+                def _alpaca_get(pair, gran, count):
+                    tf_map = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}
+                    return crypto_conn.get_candles(pair, tf_map.get(gran, "1Hour"), count)
+                eng_c = SignalEngine(_alpaca_get)
+                tasks += [(p, "crypto", eng_c) for p in config.CRYPTO_PAIRS]
+
+            for pair, market, engine in tasks:
+                try:
+                    sig = engine.run(pair, market)
+                    if sig is None:
+                        state.update_signal(pair, 0, "—")
+                        continue
+                    if sig.get("no_signal"):
+                        state.update_signal(pair, 0, "—",
+                                            timeframe=sig.get("timeframe", "H1"))
+                        state.update_signal_detail(pair, sig)
+                        continue
+                    score = sig["score"]
+                    state.update_signal(pair, score, sig["direction"],
+                                        timeframe=sig.get("timeframe", "H1"))
+                    state.update_signal_detail(pair, sig)
+                except Exception as exc:
+                    logger.warning("Scan failed for %s: %s", pair, exc)
+
+        except Exception as exc:
+            logger.error("Scan Now failed: %s", exc)
+
+    _th.Thread(target=_run, daemon=True, name="scan-now").start()
+
+    from datetime import datetime as _dt2
+    ts = _dt2.now().strftime("%H:%M:%S")
+    return (f"scanning… {ts}",
+            {"color": "#ffd700", "fontSize": "0.75rem"})
+
+
+# ── Backtest panel show / hide ────────────────────────────────────────────────
+
+@app.callback(
+    Output("backtest-panel", "style"),
+    Input("backtest-btn",       "n_clicks"),
+    Input("backtest-close-btn", "n_clicks"),
+    State("backtest-panel",     "style"),
+    prevent_initial_call=True,
+)
+def toggle_backtest_panel(open_n, close_n, current_style):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    _show = {**(current_style or {}), "display": "block"}
+    _hide = {**(current_style or {}), "display": "none"}
+    return _show if triggered == "backtest-btn" else _hide
+
+
+# ── Backtest run ──────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("backtest-status",  "children"),
+    Output("backtest-results", "children"),
+    Input("backtest-run-btn",  "n_clicks"),
+    State("bt-pair-select",    "value"),
+    State("bt-bars-input",     "value"),
+    prevent_initial_call=True,
+)
+def run_backtest_callback(n, pair, bars):
+    if not n or not pair:
+        return no_update, no_update
+
+    bars = int(bars or 1500)
+    is_forex  = "_" in pair
+    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
+    if connector is None:
+        return "Error: connector not available.", no_update
+
+    try:
+        gran_h1 = "H1"   if is_forex else "1Hour"
+        gran_h4 = "H4"   if is_forex else "4Hour"
+        df_h1   = connector.get_candles(pair, gran_h1, bars)
+        df_h4   = connector.get_candles(pair, gran_h4, max(200, bars // 4))
+    except Exception as exc:
+        return f"Data fetch failed: {exc}", no_update
+
+    from backtest.runner import run_backtest
+    market = "forex" if is_forex else "crypto"
+    res    = run_backtest(pair, df_h1, df_h4,
+                          starting_balance=state.get_key("account", {}).get("balance", 500.0),
+                          min_score=state.get_key("min_score", config.MIN_CONFLUENCE_SCORE),
+                          market=market)
+
+    if "error" in res:
+        return f"Backtest error: {res['error']}", no_update
+
+    # ── Summary cards ─────────────────────────────────────────────────────────
+    wr    = res["win_rate"]
+    dd    = res["max_drawdown"]
+    wr_c  = "#00ff88" if wr >= 0.5 else "#ff3366"
+    dd_c  = "#ff3366" if dd >= 0.10 else ("#ffd700" if dd >= 0.05 else "#00ff88")
+
+    def _card(label, val, color="#e6edf3"):
+        return html.Div([
+            html.Div(val,   style={"color": color,   "fontWeight": 700, "fontSize": "1.1rem"}),
+            html.Div(label, style={"color": "#8b949e","fontSize": "0.7rem", "marginTop": "2px"}),
+        ], style={"background": "#21262d", "borderRadius": "4px",
+                  "padding": "0.5rem 0.75rem", "textAlign": "center", "flex": "1"})
+
+    summary = html.Div([
+        _card("Signals", str(res["total_signals"]), "#38b6ff"),
+        _card("Trades",  str(res["total_trades"]),  "#e6edf3"),
+        _card("Win Rate",f"{wr:.0%}",               wr_c),
+        _card("Total P&L",f"${res['total_pnl']:+.2f}",
+              "#00ff88" if res["total_pnl"] >= 0 else "#ff3366"),
+        _card("Max DD",  f"{dd:.1%}",               dd_c),
+        _card("Final Bal",f"${res['final_balance']:.2f}", "#ffd700"),
+    ], style={"display": "flex", "gap": "0.4rem", "marginBottom": "1rem",
+               "flexWrap": "wrap"})
+
+    # ── Equity curve mini-chart ────────────────────────────────────────────────
+    import plotly.graph_objects as go
+    eq   = res.get("equity_curve", [])
+    fig  = go.Figure()
+    if eq:
+        fig.add_trace(go.Scatter(
+            y=[p["nav"] for p in eq],
+            name="NAV", line=dict(color="#38b6ff", width=1.5)
+        ))
+        fig.update_layout(
+            plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+            font=dict(color="#e6edf3", size=9),
+            margin=dict(l=8, r=8, t=4, b=4),
+            height=160,
+            showlegend=False,
+            xaxis=dict(showgrid=False, showticklabels=False),
+            yaxis=dict(gridcolor="#21262d", tickfont=dict(size=8)),
+        )
+    eq_chart = dcc.Graph(figure=fig, config={"displayModeBar": False},
+                         style={"borderRadius": "4px", "overflow": "hidden",
+                                "marginBottom": "0.75rem"}) if eq else html.Div()
+
+    # ── Last 20 trades ─────────────────────────────────────────────────────────
+    trade_rows = []
+    for t in res["trades"][-20:]:
+        pnl = t.get("realised_pnl", 0)
+        dec = 3 if "JPY" in pair else 5
+        trade_rows.append(html.Tr([
+            html.Td(t.get("close_reason","?").upper(),
+                    style={"padding":"0.2rem 0.4rem","fontSize":"0.72rem","color":"#8b949e"}),
+            html.Td(t.get("direction","?")[:1].upper(),
+                    style={"padding":"0.2rem 0.4rem","fontSize":"0.72rem",
+                           "color":"#00ff88" if t.get("direction")=="long" else "#ff3366"}),
+            html.Td(f"{t.get('entry',0):.{dec}f}",
+                    style={"padding":"0.2rem 0.4rem","fontSize":"0.7rem","color":"#8b949e"}),
+            html.Td(f"{t.get('exit_price',0):.{dec}f}",
+                    style={"padding":"0.2rem 0.4rem","fontSize":"0.7rem","color":"#8b949e"}),
+            html.Td(f"${pnl:+.2f}",
+                    style={"padding":"0.2rem 0.4rem","fontSize":"0.72rem","fontWeight":700,
+                           "color":"#00ff88" if pnl>=0 else "#ff3366"}),
+        ]))
+
+    trade_table = html.Table(
+        [html.Thead(html.Tr([
+            html.Th(h, style={"padding":"0.2rem 0.4rem","fontSize":"0.7rem",
+                               "color":"#8b949e","textAlign":"left",
+                               "borderBottom":"1px solid #21262d"})
+            for h in ["Reason","Dir","Entry","Exit","P&L"]
+        ])),
+         html.Tbody(trade_rows)],
+        style={"width":"100%","borderCollapse":"collapse"}
+    ) if trade_rows else html.Div("No trades generated.", style={"color":"#8b949e"})
+
+    status = (f"Backtest complete — {res['bars']} bars  "
+              f"({df_h1.index[0].date()} → {df_h1.index[-1].date()})")
+    return status, html.Div([summary, eq_chart, trade_table])
+
+
+@app.callback(
+    Output("signal-monitor",  "children"),
+    Input("interval-60s",     "n_intervals"),
+    Input("min-score-slider", "value"),
+)
+def update_signals(_, threshold):
+    if threshold is not None:
+        state.update(min_score=int(threshold))
+    return signal_monitor_panel(
+        state.get_key("signals", {}),
+        signal_details=state.get_key("signal_details", {}),
+    )
 
 
 # ── Open trades + account stats ───────────────────────────────────────────────
@@ -1487,10 +1925,31 @@ def update_signals(_):
 )
 def update_trades_and_account(_):
     s       = state.get()
-    trades  = s.get("open_trades",   [])
+    trades  = list(s.get("open_trades",   []))
     account = s.get("account",       {})
     closed  = s.get("closed_trades", [])
     mode    = s.get("mode",          "paper")
+
+    # ── Live P&L: update last_price for each open trade via 5s quote ─────────
+    current_prices = {}
+    if trades:
+        forex_conn  = s.get("forex_connector")
+        crypto_conn = s.get("crypto_connector")
+        for t in trades:
+            pair = t.get("pair", "")
+            if pair in current_prices:
+                continue
+            conn = forex_conn if "_" in pair else crypto_conn
+            if conn is None:
+                continue
+            try:
+                q = conn.get_current_quote(pair)
+                mid = q.get("mid") or 0
+                if mid:
+                    t["last_price"]  = mid          # update in-memory for P&L calc
+                    current_prices[pair] = mid
+            except Exception:
+                pass
 
     if closed:
         wins_all = sum(1 for t in closed if t.get("realised_pnl", 0) > 0)
@@ -1510,8 +1969,108 @@ def update_trades_and_account(_):
                     if isinstance(t.get("close_time"), _dt)
                     and t["close_time"].date() == today)
 
-    return (open_trades_panel(trades, mode),
+    return (open_trades_panel(trades, mode, current_prices=current_prices),
             account_stats_bar(account, daily_pnl, wr_all, wr_20, t_today, mode))
+
+
+# ── Edit trade: open form on EDIT button click ───────────────────────────────
+
+@app.callback(
+    Output("edit-trade-store",  "data"),
+    Output("edit-trade-panel",  "style"),
+    Output("edit-trade-title",  "children"),
+    Output("edit-sl-input",     "value"),
+    Output("edit-tp1-input",    "value"),
+    Output("edit-tp2-input",    "value"),
+    Output("edit-tp3-input",    "value"),
+    Input({"type": "edit-trade-btn", "index": ALL}, "n_clicks"),
+    Input("edit-cancel-btn",    "n_clicks"),
+    prevent_initial_call=True,
+)
+def open_edit_form(edit_clicks, cancel_n):
+    _hide  = {"display": "none"}
+    _show  = {"display": "block", "background": "#161b22", "borderRadius": "4px",
+               "padding": "0.75rem", "marginTop": "0.5rem",
+               "border": "1px solid #ffd700"}
+    _blank = (None, _hide, "", None, None, None, None)
+
+    ctx = callback_context
+    if not ctx.triggered or not ctx.triggered[0].get("value"):
+        return _blank
+
+    prop_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    try:
+        tid_data = json.loads(prop_id)
+    except (json.JSONDecodeError, AttributeError):
+        return _blank
+
+    if tid_data.get("type") == "edit-trade-btn":
+        tid    = tid_data.get("index", "")
+        trades = state.get_key("open_trades") or []
+        t      = next((x for x in trades if x.get("id") == tid), None)
+        if not t:
+            return _blank
+        pair  = t.get("pair", "")
+        dec   = 3 if "JPY" in pair else 5
+        title = f"Edit  {pair}  {t.get('direction','').upper()}"
+        return (
+            {"id": tid},
+            _show, title,
+            round(float(t.get("sl",  0)), dec),
+            round(float(t.get("tp1", 0)), dec),
+            round(float(t.get("tp2", 0)), dec),
+            round(float(t.get("tp3", 0)), dec),
+        )
+    return _blank
+
+
+@app.callback(
+    Output("edit-result", "children"),
+    Output("open-trades",  "children", allow_duplicate=True),
+    Input("edit-confirm-btn",   "n_clicks"),
+    Input("edit-breakeven-btn", "n_clicks"),
+    State("edit-trade-store",   "data"),
+    State("edit-sl-input",      "value"),
+    State("edit-tp1-input",     "value"),
+    State("edit-tp2-input",     "value"),
+    State("edit-tp3-input",     "value"),
+    prevent_initial_call=True,
+)
+def confirm_edit(confirm_n, be_n, store, sl, tp1, tp2, tp3):
+    ctx = callback_context
+    if not ctx.triggered or not store:
+        return no_update, no_update
+
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    tid       = store.get("id", "")
+    pt        = state.get_key("paper_trader")
+    if not pt:
+        return "✗ Paper trader unavailable", no_update
+
+    if triggered == "edit-breakeven-btn":
+        ok = pt.move_to_breakeven(tid)
+        state.update(open_trades=list(pt.open_trades),
+                     closed_trades=list(pt.closed_trades))
+        trades = state.get_key("open_trades") or []
+        return ("✓ SL moved to breakeven" if ok else "✗ Trade not found",
+                open_trades_panel(trades, state.get_key("mode", "paper")))
+
+    # Confirm edit
+    if triggered == "edit-confirm-btn":
+        ok = pt.modify_trade(
+            tid,
+            sl  = float(sl)  if sl  is not None else None,
+            tp1 = float(tp1) if tp1 is not None else None,
+            tp2 = float(tp2) if tp2 is not None else None,
+            tp3 = float(tp3) if tp3 is not None else None,
+        )
+        state.update(open_trades=list(pt.open_trades),
+                     closed_trades=list(pt.closed_trades))
+        trades = state.get_key("open_trades") or []
+        return ("✓ Trade updated" if ok else "✗ Trade not found",
+                open_trades_panel(trades, state.get_key("mode", "paper")))
+
+    return no_update, no_update
 
 
 @app.callback(
@@ -1623,24 +2182,35 @@ def toggle_drawer(open_clicks, close_clicks, visible):
     return new_vis, trade_log_drawer(
         s.get("closed_trades", []), s.get("suggestions", []),
         s.get("ml_stats", {}), visible=new_vis,
+        equity_curve=s.get("equity_curve", []),
     )
 
 
 @app.callback(
     Output("pair-select", "value"),
-    Input({"type": "signal-row", "index": ALL}, "n_clicks"),
+    Input({"type": "signal-row",    "index": ALL}, "n_clicks"),
+    Input({"type": "open-trade-row","index": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
-def select_pair_from_signal(n_clicks_list):
+def select_pair_from_panel(sig_clicks, trade_clicks):
     ctx = callback_context
-    if not ctx.triggered:
+    if not ctx.triggered or not ctx.triggered[0].get("value"):
         return no_update
-    # Guard: n_clicks = 0 or None means signal-monitor was re-rendered (not a real click)
-    if not ctx.triggered[0].get("value"):
-        return no_update
-    return json.loads(
-        ctx.triggered[0]["prop_id"].split(".")[0]
-    ).get("index", no_update)
+    triggered_id = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])
+    t_type = triggered_id.get("type")
+    idx    = triggered_id.get("index", "")
+
+    if t_type == "signal-row":
+        return idx  # index IS the pair
+
+    if t_type == "open-trade-row":
+        # index is the trade_id; look up the pair
+        trades = state.get_key("open_trades") or []
+        for t in trades:
+            if t.get("id") == idx or t.get("pair") == idx:
+                return t.get("pair", no_update)
+
+    return no_update
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

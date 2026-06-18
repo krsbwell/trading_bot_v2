@@ -12,3 +12,4 @@ pygame-ce       # pygame community edition — Python 3.12+ wheels available
 python-dotenv
 apscheduler
 pydub
+requests           # Telegram alerts HTTP client

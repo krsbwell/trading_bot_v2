@@ -27,6 +27,13 @@ from learning.data_collector import record_signal, record_close, record_skip, cl
 from learning.pattern_learner import PatternLearner
 from learning.feedback_loop import generate_suggestions, should_run as feedback_should_run
 from alerts.audio_alert import play_alert
+from alerts.telegram_alert import (
+    send_signal as tg_signal,
+    send_trade_opened as tg_trade_opened,
+    send_trade_closed as tg_trade_closed,
+    send_drawdown_halt as tg_halt,
+    is_configured as tg_enabled,
+)
 from dashboard import state
 
 logging.basicConfig(
@@ -73,12 +80,35 @@ def on_candle_close() -> None:
     if config.MODE == "paper" and _paper_trader:
         _tick_paper_trades()
 
-    # ── Signal scan ───────────────────────────────────────────────────────────
-    logger.info("  Scanning %d forex + %d crypto pairs …",
-                len(config.FOREX_PAIRS), len(config.CRYPTO_PAIRS))
+    # ── Signal scan — active pairs (trade + alert) ───────────────────────────
+    watch_pairs = getattr(config, "FOREX_WATCH", [])
+    logger.info(
+        "  Scanning %d trade pairs + %d watch pairs + %d crypto …",
+        len(config.FOREX_PAIRS), len(watch_pairs), len(config.CRYPTO_PAIRS),
+    )
 
     for pair in config.FOREX_PAIRS:
         _process_pair(pair, "forex", _forex_engine)
+
+    # Watch-only pairs: scan signals for dashboard display but never open trades
+    if _forex_engine:
+        for pair in watch_pairs:
+            try:
+                sig = _forex_engine.run(pair, "forex")
+                if sig is None:
+                    state.update_signal(pair, 0, "—")
+                elif sig.get("no_signal"):
+                    state.update_signal(pair, 0, "—",
+                                        timeframe=sig.get("timeframe", "H1"))
+                    state.update_signal_detail(pair, sig)
+                else:
+                    state.update_signal(pair, sig["score"], sig["direction"],
+                                        timeframe=sig.get("timeframe", "H1"))
+                    state.update_signal_detail(pair, sig)
+                    logger.info("  [WATCH] %-12s %5s  score=%d",
+                                pair, sig["direction"], sig["score"])
+            except Exception as exc:
+                logger.warning("Watch scan failed for %s: %s", pair, exc)
 
     for pair in config.CRYPTO_PAIRS:
         _process_pair(pair, "crypto", _crypto_engine)
@@ -129,8 +159,16 @@ def _process_pair(pair: str, market: str, engine) -> None:
         state.update_signal(pair, 0, "—")
         return
 
+    tf = signal.get("timeframe", config.TIMEFRAMES["primary"])
+
+    # Diagnostic signals (no_signal=True) keep dashboard diagnostics up to date
+    if signal.get("no_signal"):
+        state.update_signal(pair, 0, "—", timeframe=tf)
+        state.update_signal_detail(pair, signal)       # store for diagnostics panel
+        return
+
     score = signal["score"]
-    state.update_signal(pair, score, signal["direction"])
+    state.update_signal(pair, score, signal["direction"], timeframe=tf)
     state.update_signal_detail(pair, signal)           # store full signal for chart overlay
     state.cache_candles(pair, config.TIMEFRAMES["primary"], None)  # invalidate H1 cache
 
@@ -143,15 +181,42 @@ def _process_pair(pair: str, market: str, engine) -> None:
         f"{ml_prob:.2f}" if ml_prob is not None else "n/a",
     )
 
-    # Watching / scanning signal — show on dashboard but don't trade or record
-    if score < config.MIN_CONFLUENCE_SCORE:
-        if not signal.get("watching", False):
+    # Watching / scanning signal — threshold is adjustable from the dashboard slider
+    effective_min = state.get_key("min_score", config.MIN_CONFLUENCE_SCORE)
+    if score < effective_min:
+        if signal.get("watching"):
+            # Send Telegram notification for WATCHING signals too
+            try:
+                if tg_enabled():
+                    tg_signal(signal)
+            except Exception:
+                pass
+        else:
             record_skip(signal)
         return
 
-    # ≥ 70: fire alert + open trade
+    # ── Session filter: only open trades during London / NY overlap ──────────
+    now_utc = datetime.now(timezone.utc)
+    in_session = config.SESSION_START_UTC <= now_utc.hour < config.SESSION_END_UTC
+    if not in_session:
+        logger.info(
+            "Session filter: %s %s score=%d signal visible but NO TRADE (outside %02d:00–%02d:00 UTC)",
+            pair, signal["direction"], score,
+            config.SESSION_START_UTC, config.SESSION_END_UTC,
+        )
+        # Still show the signal on the dashboard — just don't open a trade
+        return
+
+    # ≥ threshold + in session: fire alert + open trade
     try:
         play_alert(signal["direction"])
+    except Exception:
+        pass
+
+    # Telegram: signal notification
+    try:
+        if tg_enabled():
+            tg_signal(signal)
     except Exception:
         pass
 
@@ -178,6 +243,14 @@ def _process_pair(pair: str, market: str, engine) -> None:
             size=size,
         )
         _sync_paper_state()
+        # Telegram: trade opened
+        try:
+            if tg_enabled() and actual_id:
+                t_opened = _paper_trader.get_open_trade(pair)
+                if t_opened:
+                    tg_trade_opened(t_opened)
+        except Exception:
+            pass
     else:
         manager   = _trade_manager_fx if market == "forex" else _trade_manager_cx
         if manager:
@@ -198,13 +271,22 @@ def _tick_paper_trades() -> None:
         if connector is None:
             continue
         try:
-            gran = config.TIMEFRAMES["primary"]
-            df   = connector.get_candles(pair, gran, 2)
+            gran    = config.TIMEFRAMES["primary"]
+            df      = connector.get_candles(pair, gran, 2)
             if df is None or len(df) < 1:
                 continue
-            last = df.iloc[-1]
+            last    = df.iloc[-1]
+            closed_before = {t["id"] for t in _paper_trader.closed_trades}
             _paper_trader.update(pair, last["high"], last["low"], last["close"])
             _sync_paper_state()
+            # Detect newly closed trades for Telegram notification
+            if tg_enabled():
+                for t in _paper_trader.closed_trades:
+                    if t["id"] not in closed_before:
+                        try:
+                            tg_trade_closed(t)
+                        except Exception:
+                            pass
         except Exception as exc:
             logger.error("Paper tick failed for %s: %s", pair, exc)
 
@@ -218,12 +300,14 @@ def _refresh_account() -> None:
             "unrealized_pnl":   acc.get("unrealized_pnl", 0),
             "open_trade_count": len(_paper_trader.open_trades),
         })
+        state.append_equity(acc["balance"], acc.get("nav", acc["balance"]))
         return
     # Live: fetch from broker
     if _oanda_connector:
         try:
             acc = _oanda_connector.get_account_summary()
             state.update(account=acc)
+            state.append_equity(acc.get("balance", 0), acc.get("nav", 0))
         except Exception as exc:
             logger.error("Account refresh failed: %s", exc)
 
@@ -235,6 +319,37 @@ def _sync_paper_state() -> None:
             closed_trades  = list(_paper_trader.closed_trades),
             pending_orders = list(_paper_trader.pending_orders),
         )
+
+
+def _reconcile_live_positions() -> None:
+    """
+    On live-mode startup, compare local TradeManager state with broker open trades.
+    Logs any discrepancies so the user can decide whether to close/ignore them.
+    Does NOT auto-create trades — avoids duplicate position risk.
+    """
+    if config.MODE != "live" or not _oanda_connector:
+        return
+    try:
+        broker_trades = _oanda_connector.get_open_trades()
+        if not broker_trades:
+            logger.info("Reconcile: broker has no open trades")
+            return
+
+        local_ids = set()
+        if _trade_manager_fx:
+            local_ids.update(_trade_manager_fx.open_trades.keys())
+
+        for bt in broker_trades:
+            if bt["id"] not in local_ids:
+                logger.warning(
+                    "RECONCILE — broker trade %s (%s, %d units @ %.5f) "
+                    "not in local state — manual review required",
+                    bt["id"], bt["instrument"], bt["units"], bt["price"],
+                )
+            else:
+                logger.info("Reconcile OK — trade %s found locally", bt["id"])
+    except Exception as exc:
+        logger.error("Reconcile failed: %s", exc)
 
 
 def _update_ml_stats() -> None:
@@ -340,6 +455,9 @@ def main() -> None:
 
     # ── Signal engines ────────────────────────────────────────────────────────
     _forex_engine, _crypto_engine = _init_engines(_oanda_connector, _alpaca_connector)
+
+    # ── Live-mode reconciliation — compare local state vs broker open trades ──
+    _reconcile_live_positions()
 
     # ── Generate sounds if missing ────────────────────────────────────────────
     import os

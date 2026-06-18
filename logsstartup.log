@@ -1,0 +1,72 @@
+16:00:04  INFO      \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+16:00:04  INFO        Trading Bot  |  Mode: PAPER
+16:00:04  INFO        Forex pairs : EUR_USD, GBP_USD
+16:00:04  INFO        Crypto pairs: BTC/USD, ETH/USD, SOL/USD
+16:00:04  INFO      \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+16:00:04  INFO      setting up API-client for environment practice
+16:00:04  INFO      OandaConnector ready — env=practice  account=101-001-9445956-001
+16:00:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles
+16:00:04  INFO      \u2713 Oanda  connected (practice)  last EUR_USD close=1.15253
+16:00:04  INFO      AlpacaConnector ready — mode=paper
+16:00:05  INFO      \u2713 Alpaca connected (paper=True)  last BTC/USD close=60277.07
+16:00:05  INFO      Paper trader: balance $500.00
+Dash is running on http://0.0.0.0:8050/
+
+16:00:05  INFO      Dash is running on http://0.0.0.0:8050/
+
+16:00:05  INFO      Dashboard: http://localhost:8050
+ * Serving Flask app 'dashboard.app'
+ * Debug mode: off
+16:00:05  INFO      Adding job tentatively -- it will be properly scheduled when the scheduler starts
+16:00:05  INFO      Scheduler ready — next trigger at the top of the hour
+16:00:05  INFO      Press Ctrl+C to stop.
+
+16:00:05  INFO      \u2500\u2500 Candle close 2026-06-05 20:00 UTC \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+16:00:05  INFO        Scanning 2 trade pairs + 3 watch pairs + 3 crypto …
+16:00:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles
+16:00:05  INFO      [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8050
+ * Running on http://10.0.0.19:8050
+16:00:05  INFO      [33mPress CTRL+C to quit[0m
+16:00:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles
+16:00:06  INFO      EMA fit EUR_USD H1 \u2192 short=20 mid=100 long=110  scores={20: 23, 100: 15, 110: 14}
+16:00:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles
+16:00:06  INFO      Signal EUR_USD forex dir=short score=36 (EMA=21 Struct=15 PA=0 H4=bear D=bear)
+16:00:06  INFO      Signal EUR_USD scored 36 — SCANNING (no trade)
+16:00:06  INFO        EUR_USD      short  score=36   EMA=21  Structure=15  PA=0  ML=n/a
+16:00:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+16:00:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+16:00:06  INFO      EMA fit GBP_USD H1 \u2192 short=20 mid=34 long=50  scores={20: 27, 34: 22, 50: 15}
+16:00:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+16:00:07  INFO      Signal GBP_USD forex dir=short score=21 (EMA=21 Struct=0 PA=0 H4=bear D=bear)
+16:00:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+16:00:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+16:00:07  INFO      EMA fit EUR_AUD H1 \u2192 short=20 mid=34 long=75  scores={20: 18, 34: 19, 75: 10}
+16:00:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+16:00:07  INFO      Signal EUR_AUD forex dir=long score=36 (EMA=21 Struct=15 PA=0 H4=bull D=bull)
+16:00:07  INFO      Signal EUR_AUD scored 36 — SCANNING (no trade)
+16:00:07  INFO        [WATCH] EUR_AUD       long  score=36
+16:00:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles
+16:00:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles
+16:00:08  INFO      EMA fit AUD_USD H1 \u2192 short=20 mid=34 long=50  scores={20: 28, 34: 21, 50: 20}
+16:00:08  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles
+16:00:08  INFO      Signal AUD_USD forex dir=short score=36 (EMA=21 Struct=15 PA=0 H4=bear D=bear)
+16:00:08  INFO      Signal AUD_USD scored 36 — SCANNING (no trade)
+16:00:08  INFO        [WATCH] AUD_USD      short  score=36
+16:00:08  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles
+16:00:08  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles
+16:00:09  INFO      EMA fit USD_JPY H1 \u2192 short=20 mid=34 long=100  scores={20: 16, 34: 13, 100: 9}
+16:00:09  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles
+16:00:09  INFO      Signal USD_JPY forex dir=long score=41 (EMA=21 Struct=0 PA=20 H4=bull D=bull)
+16:00:09  INFO      Signal USD_JPY scored 41 — SCANNING (no trade)
+16:00:09  INFO        [WATCH] USD_JPY       long  score=41
+16:00:14  INFO      EMA fit BTC/USD H1 \u2192 short=110 mid=125 long=150  scores={110: 18, 125: 19, 150: 18}
+16:00:14  INFO      Signal BTC/USD crypto dir=short score=27 (EMA=12 Struct=15 PA=0 H4=bull D=bear)
+16:00:16  INFO      EMA fit ETH/USD H1 \u2192 short=20 mid=34 long=50  scores={20: 24, 34: 23, 50: 22}
+16:00:16  INFO      Signal ETH/USD crypto dir=long score=17 (EMA=17 Struct=0 PA=0 H4=bear D=bear)
+16:00:19  INFO      EMA fit SOL/USD H1 \u2192 short=20 mid=34 long=50  scores={20: 26, 34: 24, 50: 19}
+16:00:20  INFO      Signal SOL/USD crypto dir=long score=21 (EMA=21 Struct=0 PA=0 H4=bull D=bear)
+16:00:20  INFO        Signals: EUR_USD short=36  EUR_AUD long=36  AUD_USD short=36  USD_JPY long=41
+16:00:20  INFO      Added job "on_candle_close" to job store "default"
+16:00:20  INFO      Scheduler started

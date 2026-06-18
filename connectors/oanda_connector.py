@@ -192,6 +192,57 @@ class OandaConnector:
         ask = float(p["asks"][0]["price"])
         return bid, ask, ask - bid
 
+    # ── Price formatting helper ───────────────────────────────────────────────
+
+    @staticmethod
+    def _fmt(instrument: str, price: float) -> str:
+        """
+        Format a price for OANDA API submission.
+        JPY pairs need 3 decimal places; all others need 5.
+        Using wrong precision causes PRICE_PRECISION_EXCEEDED rejections.
+        """
+        decimals = 3 if "JPY" in instrument else 5
+        return f"{price:.{decimals}f}"
+
+    # ── Open positions (for live reconciliation) ──────────────────────────────
+
+    def get_open_trades(self) -> list:
+        """
+        Return all open trades from the broker as a list of dicts with keys:
+            id, instrument, units, price (avg), unrealizedPL, stopLoss, takeProfit
+        """
+        import oandapyV20.endpoints.trades as _trades_ep
+        req  = _trades_ep.OpenTrades(accountID=self.account_id)
+        try:
+            resp = self.client.request(req)
+        except V20Error as exc:
+            logger.error("get_open_trades failed: %s", exc)
+            return []
+
+        result = []
+        for t in resp.get("trades", []):
+            sl = tp = None
+            if t.get("stopLossOrder"):
+                try:
+                    sl = float(t["stopLossOrder"]["price"])
+                except Exception:
+                    pass
+            if t.get("takeProfitOrder"):
+                try:
+                    tp = float(t["takeProfitOrder"]["price"])
+                except Exception:
+                    pass
+            result.append({
+                "id":          t["id"],
+                "instrument":  t["instrument"],
+                "units":       int(t["currentUnits"]),
+                "price":       float(t["price"]),
+                "unrealizedPL": float(t.get("unrealizedPL", 0)),
+                "stopLoss":    sl,
+                "takeProfit":  tp,
+            })
+        return result
+
     # ── Orders ────────────────────────────────────────────────────────────────
 
     def place_market_order(
@@ -218,7 +269,7 @@ class OandaConnector:
                 "instrument": instrument,
                 "units": str(units),
                 "stopLossOnFill": {
-                    "price": f"{sl_price:.5f}",
+                    "price": self._fmt(instrument, sl_price),
                     "timeInForce": "GTC",
                 },
                 "timeInForce": "FOK",    # Fill-or-Kill — standard for market orders
@@ -229,7 +280,7 @@ class OandaConnector:
         # Attach TP1 if provided
         if tp_prices:
             order_body["order"]["takeProfitOnFill"] = {
-                "price": f"{tp_prices[0]:.5f}",
+                "price": self._fmt(instrument, tp_prices[0]),
                 "timeInForce": "GTC",
             }
 
@@ -304,7 +355,8 @@ class OandaConnector:
         return resp
 
     def set_sl_tp(
-        self, trade_id: str, sl_price: float, tp_price: float = None
+        self, trade_id: str, sl_price: float,
+        tp_price: float = None, instrument: str = "",
     ) -> dict:
         """
         Update the stop-loss (and optionally take-profit) on an open trade.
@@ -316,13 +368,13 @@ class OandaConnector:
         """
         crcdo_data: dict = {
             "stopLoss": {
-                "price": f"{sl_price:.5f}",
+                "price": self._fmt(instrument, sl_price),
                 "timeInForce": "GTC",
             }
         }
         if tp_price is not None:
             crcdo_data["takeProfit"] = {
-                "price": f"{tp_price:.5f}",
+                "price": self._fmt(instrument, tp_price),
                 "timeInForce": "GTC",
             }
 

@@ -23,27 +23,95 @@ _sans = {"fontFamily": "'IBM Plex Sans', sans-serif"}
 # Panel 2 — Signal Monitor
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def signal_monitor_panel(signals: dict) -> html.Div:
+def _trend_dot(trend: str) -> html.Span:
+    """Small coloured dot for TF trend: bull=green, bear=red, neutral=grey."""
+    col = _BULL if trend == "bull" else (_BEAR if trend == "bear" else "#3d444d")
+    return html.Span("●", style={"color": col, "fontSize": "0.7rem"})
+
+
+def signal_monitor_panel(signals: dict, signal_details: dict = None) -> html.Div:
     """
-    signals: {pair: {"score": int, "direction": str, "status": str}}
+    signals        : {pair: {"score": int, "direction": str, "status": str}}
+    signal_details : {pair: full signal dict with sub-scores, h4_gate, trends}
     """
+    import config as _cfg
+    _watch = set(getattr(_cfg, "FOREX_WATCH", []))
+    details = signal_details or {}
     rows = []
+
     for pair, info in sorted(signals.items(), key=lambda x: x[1]["score"], reverse=True):
+        is_watch = pair in _watch
         score     = info.get("score", 0)
         direction = info.get("direction", "—")
         status    = info.get("status", "NEUTRAL")
+        # TF from signal_details takes priority (engine sets it); fallback to "H1"
+        tf        = (details.get(pair) or {}).get("timeframe", info.get("timeframe", "H1"))
 
         bar_color = _BULL if score >= 70 else (_GOLD if score >= 50 else "#3d444d")
         arrow     = "▲" if direction == "long" else ("▼" if direction == "short" else "—")
         arrow_col = _BULL if direction == "long" else (_BEAR if direction == "short" else _MUTED)
-        badge_col = (_BULL   if status == "SIGNAL"   else
-                     _GOLD   if status == "WATCHING" else
+        badge_col = (_BULL     if status == "SIGNAL"   else
+                     _GOLD     if status == "WATCHING" else
                      "#38b6ff" if status == "SCANNING" else _MUTED)
 
+        # ── Diagnostic row from stored signal detail ─────────────────────────
+        det       = details.get(pair, {})
+        ema_s     = det.get("ema_score",       0)
+        str_s     = det.get("structure_score", 0)
+        pa_s      = det.get("pa_score",        0)
+        h4_gate   = det.get("h4_gate",   {}) or {}
+        h4_passed = h4_gate.get("passed")
+        h4_trend  = det.get("h4_trend",  "neutral")
+        d_trend   = det.get("d_trend",   "neutral")
+
+        gate_col  = (_BULL if h4_passed is True  else
+                     _BEAR if h4_passed is False else _MUTED)
+        gate_lbl  = ("H4✓" if h4_passed is True  else
+                     "H4✗" if h4_passed is False else "H4?")
+
+        diag_row = html.Tr([
+            html.Td([
+                # Sub-scores
+                html.Span(f"EMA:{ema_s:.0f} ",
+                          style={"color": _GOLD if ema_s > 0 else _MUTED,
+                                 "fontSize": "0.65rem", **_mono}),
+                html.Span(f"STR:{str_s:.0f} ",
+                          style={"color": "#38b6ff" if str_s > 0 else _MUTED,
+                                 "fontSize": "0.65rem", **_mono}),
+                html.Span(f"PA:{pa_s:.0f}",
+                          style={"color": _BULL if pa_s > 0 else _MUTED,
+                                 "fontSize": "0.65rem", **_mono}),
+            ]),
+            html.Td([
+                # H4 gate + TF trend alignment dots
+                html.Span(gate_lbl + " ",
+                          style={"color": gate_col, "fontSize": "0.65rem",
+                                 "fontWeight": 700, "marginRight": "4px"}),
+                html.Span("D:", style={"color": _MUTED, "fontSize": "0.62rem"}),
+                _trend_dot(d_trend),
+                html.Span(" 4H:", style={"color": _MUTED, "fontSize": "0.62rem"}),
+                _trend_dot(h4_trend),
+                html.Span(" H1:", style={"color": _MUTED, "fontSize": "0.62rem"}),
+                _trend_dot("bull" if direction == "long" else
+                           "bear" if direction == "short" else "neutral"),
+            ]),
+            html.Td(), html.Td(),
+        ], style={"background": "#0d1117", "borderBottom": "1px solid #21262d"})
+
+        pair_color  = _MUTED if is_watch else _TEXT
+        pair_label  = pair.replace("_", "/")          # EUR_USD → EUR/USD for display
         rows.append(html.Tr([
-            html.Td(pair, style={"color": _TEXT, "padding": "0.4rem 0.5rem",
-                                  "fontSize": "0.85rem", "cursor": "pointer",
-                                  **_mono}),
+            html.Td([
+                html.Div([
+                    html.Span(pair_label,
+                              style={"color": pair_color, "fontSize": "0.85rem", **_mono}),
+                    html.Span(" W", style={"color": "#8b949e", "fontSize": "0.65rem",
+                                           "fontWeight": 700,
+                                           "display": "inline" if is_watch else "none"}),
+                ]),
+                html.Span(tf, style={"color": "#38b6ff", "fontSize": "0.65rem",
+                                     "fontWeight": 700, "letterSpacing": "0.05em"}),
+            ], style={"padding": "0.4rem 0.5rem", "cursor": "pointer"}),
             html.Td([
                 html.Div(style={"background": bar_color, "height": "6px",
                                  "borderRadius": "3px",
@@ -51,20 +119,18 @@ def signal_monitor_panel(signals: dict) -> html.Div:
                                  "minWidth": "4px"}),
                 html.Span(f" {score}", style={"color": _MUTED, "fontSize": "0.75rem",
                                                "marginLeft": "4px", **_mono}),
-            ], style={"padding": "0.4rem 0.5rem", "width": "140px"}),
+            ], style={"padding": "0.4rem 0.5rem", "width": "130px"}),
             html.Td(arrow, style={"color": arrow_col, "fontSize": "1.1rem",
                                    "padding": "0.4rem 0.5rem", "textAlign": "center"}),
-            html.Td(html.Span(status, style={"color": badge_col,
-                                              "fontSize": "0.7rem",
+            html.Td(html.Span(status, style={"color": badge_col, "fontSize": "0.7rem",
                                               "fontWeight": 700}),
                     style={"padding": "0.4rem 0.5rem"}),
         ], id={"type": "signal-row", "index": pair},
-            style={"cursor": "pointer",
-                   "borderBottom": "1px solid #21262d"}))
+            style={"cursor": "pointer", "borderBottom": "1px solid #161b22"}))
+        rows.append(diag_row)
 
     return html.Div([
-        html.H4("Signal Monitor", style={"color": _TEXT, "margin": "0 0 0.75rem",
-                                          **_sans}),
+        html.H4("Signal Monitor", style={"color": _TEXT, "margin": "0 0 0.75rem", **_sans}),
         html.Table(rows, style={"width": "100%", "borderCollapse": "collapse"}),
     ], style=_panel_style())
 
@@ -88,7 +154,13 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
         pair      = t.get("pair", "—")
         direction = t.get("direction", "long")
         entry     = t.get("entry", 0)
-        pnl       = t.get("realised_pnl", 0) + t.get("unrealised", 0)
+        # Compute live floating P&L from current market price (updated every 5s)
+        realised  = t.get("realised_pnl", 0)
+        cur_price = current_prices.get(pair) or t.get("last_price", entry)
+        units_rem = t.get("size", 0) * t.get("remaining", 1.0)
+        diff = (cur_price - entry) if direction == "long" else (entry - cur_price)
+        floating  = round(diff * units_rem, 4)
+        pnl       = realised + floating
         tp1       = t.get("tp1", entry)
         tp3       = t.get("tp3", entry)
         remaining = t.get("remaining", 1.0)
@@ -102,25 +174,64 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
         else:
             progress = max(0, min(100, (entry - price) / max(entry - tp3, 1e-8) * 100))
 
-        cards.append(html.Div([
-            html.Div([
-                html.Span(pair, style={"color": _TEXT, "fontWeight": 600, **_mono}),
-                html.Span(f"  {direction.upper()}",
-                          style={"color": dir_col, "fontSize": "0.8rem", "marginLeft": "6px"}),
-                html.Span(f"  Entry: {entry:.5f}",
-                          style={"color": _MUTED, "fontSize": "0.8rem", "marginLeft": "8px",
-                                 **_mono}),
-                html.Span(f"  {remaining*100:.0f}% open",
-                          style={"color": _MUTED, "fontSize": "0.75rem", "marginLeft": "8px"}),
-            ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.4rem"}),
+        sl         = t.get("sl",  0)
+        tp1        = t.get("tp1", 0)
+        size       = t.get("size", 0)
+        tid        = t.get("id", pair)
+        dec        = 3 if "JPY" in pair else 5
+        pair_label = pair.replace("_", "/")   # EUR_USD → EUR/USD
 
+        # Duration
+        open_time = t.get("open_time")
+        if open_time and hasattr(open_time, "timestamp"):
+            from datetime import datetime as _dt2, timezone as _tz
+            dur_s = int((_dt2.now(_tz.utc) - open_time.replace(tzinfo=_tz.utc)
+                         if open_time.tzinfo is None else
+                         _dt2.now(_tz.utc) - open_time).total_seconds())
+            dur_h, dur_m = divmod(dur_s // 60, 60)
+            dur_label = f"{dur_h}h {dur_m}m" if dur_h else f"{dur_m}m"
+        else:
+            dur_label = "—"
+
+        cards.append(html.Div([
+            # Header row: pair (clickable) + direction + duration
             html.Div([
-                html.Span(f"P&L: {pnl:+.2f}", style={"color": pnl_col, "fontWeight": 700,
-                                                        **_mono}),
+                html.Button(
+                    pair_label,
+                    id={"type": "open-trade-row", "index": tid},
+                    n_clicks=0,
+                    title="Click to load this pair in the chart",
+                    style={"background": "transparent", "border": "none", "padding": 0,
+                           "color": dir_col, "fontWeight": 700, "fontSize": "0.88rem",
+                           "cursor": "pointer", **_mono},
+                ),
+                html.Span(f" {direction.upper()}",
+                          style={"color": dir_col, "fontSize": "0.78rem", "marginLeft": "6px"}),
+                html.Span(f"  {remaining*100:.0f}% open",
+                          style={"color": _MUTED, "fontSize": "0.72rem", "marginLeft": "8px"}),
+                html.Span(f"  ⏱ {dur_label}",
+                          style={"color": _MUTED, "fontSize": "0.7rem", "marginLeft": "6px"}),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.3rem"}),
+
+            # Details: entry / SL / TP1 / size
+            html.Div([
+                html.Span(f"Entry {entry:.{dec}f}",
+                          style={"color": "#38b6ff", "fontSize": "0.75rem", **_mono}),
+                html.Span(f"  SL {sl:.{dec}f}",
+                          style={"color": _BEAR, "fontSize": "0.75rem", **_mono}),
+                html.Span(f"  TP1 {tp1:.{dec}f}",
+                          style={"color": _BULL, "fontSize": "0.75rem", **_mono}),
+                html.Span(f"  Lot {size}",
+                          style={"color": _MUTED, "fontSize": "0.72rem", "marginLeft": "6px"}),
+            ], style={"marginBottom": "0.3rem"}),
+
+            # P&L bar + close button
+            html.Div([
+                html.Span(f"P&L {pnl:+.2f}", style={"color": pnl_col, "fontWeight": 700,
+                                                        "fontSize": "0.82rem", **_mono}),
                 html.Div(style={
-                    "flex": 1, "height": "6px", "background": "#3d444d",
-                    "borderRadius": "3px", "margin": "0 0.75rem",
-                    "overflow": "hidden",
+                    "flex": 1, "height": "5px", "background": "#3d444d",
+                    "borderRadius": "3px", "margin": "0 0.6rem", "overflow": "hidden",
                 }, children=[
                     html.Div(style={
                         "width": f"{progress:.1f}%", "height": "100%",
@@ -128,15 +239,21 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
                         "transition": "width 0.5s ease",
                     })
                 ]),
-                html.Button("CLOSE", id={"type": "close-trade-btn", "index": t.get("id", "")},
+                html.Button("EDIT", id={"type": "edit-trade-btn", "index": tid},
+                            n_clicks=0,
+                            style={"background": "#21262d", "color": "#ffd700",
+                                   "border": "1px solid #ffd700", "borderRadius": "3px",
+                                   "padding": "0.2rem 0.5rem", "cursor": "pointer",
+                                   "fontSize": "0.72rem", "marginRight": "4px"}),
+                html.Button("CLOSE", id={"type": "close-trade-btn", "index": tid},
                             style={"background": _BEAR, "color": "#fff",
                                    "border": "none", "borderRadius": "3px",
-                                   "padding": "0.2rem 0.6rem", "cursor": "pointer",
-                                   "fontSize": "0.75rem"}),
+                                   "padding": "0.2rem 0.5rem", "cursor": "pointer",
+                                   "fontSize": "0.72rem"}),
             ], style={"display": "flex", "alignItems": "center"}),
 
         ], style={"background": _CARD, "borderRadius": "4px",
-                  "padding": "0.6rem 0.75rem", "marginBottom": "0.4rem"}))
+                  "padding": "0.55rem 0.7rem", "marginBottom": "0.4rem"}))
 
     if not cards:
         cards = [html.Div("No open trades", style={"color": _MUTED, "textAlign": "center",
@@ -217,15 +334,97 @@ def account_stats_bar(account: dict, daily_pnl: float, win_rate_all: float,
 # Panel 5 — Trade Log Drawer
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def equity_curve_chart(equity_curve: list) -> html.Div:
+    """Plotly equity curve from state['equity_curve'] snapshots."""
+    import plotly.graph_objects as go
+    if not equity_curve:
+        return html.Div("No equity data yet — starts after the first hourly tick.",
+                        style={"color": _MUTED, "fontSize": "0.8rem",
+                               "padding": "0.5rem 0"})
+    from datetime import datetime
+    times   = [datetime.fromtimestamp(p["t"]).strftime("%m/%d %H:%M")
+               for p in equity_curve]
+    balance = [p["balance"] for p in equity_curve]
+    nav     = [p.get("nav", p["balance"]) for p in equity_curve]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=times, y=nav,    name="NAV",
+                             line=dict(color="#38b6ff", width=1.5)))
+    fig.add_trace(go.Scatter(x=times, y=balance, name="Balance",
+                             line=dict(color="#ffd700", width=1, dash="dot")))
+    fig.update_layout(
+        plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+        font=dict(color="#e6edf3", size=10),
+        margin=dict(l=8, r=8, t=8, b=8),
+        height=180,
+        legend=dict(orientation="h", x=0, y=1.15,
+                    font=dict(size=9), bgcolor="rgba(0,0,0,0)"),
+        xaxis=dict(showgrid=False, tickfont=dict(size=8)),
+        yaxis=dict(gridcolor="#21262d", tickfont=dict(size=8)),
+    )
+    return dcc.Graph(figure=fig, config={"displayModeBar": False},
+                     style={"borderRadius": "4px", "overflow": "hidden"})
+
+
+def analytics_block(closed_trades: list) -> html.Div:
+    """Per-pair win rate and average R:R from closed trades."""
+    if not closed_trades:
+        return html.Div()
+    from collections import defaultdict
+    stats = defaultdict(lambda: {"wins": 0, "total": 0, "rr_sum": 0.0})
+    for t in closed_trades:
+        pair = t.get("pair", "?")
+        pnl  = t.get("realised_pnl", 0)
+        stats[pair]["total"] += 1
+        if pnl > 0:
+            stats[pair]["wins"] += 1
+        # Approximate RR: pnl vs initial risk (size × |entry − sl|)
+        size = t.get("size", 1)
+        entry = t.get("entry", 0)
+        sl    = t.get("sl", entry)
+        risk  = abs(entry - sl) * size
+        if risk > 0:
+            stats[pair]["rr_sum"] += pnl / risk
+
+    rows = []
+    for pair, s in sorted(stats.items()):
+        wr  = s["wins"] / s["total"] if s["total"] else 0
+        avg_rr = s["rr_sum"] / s["total"] if s["total"] else 0
+        wr_col = _BULL if wr >= 0.5 else _BEAR
+        rows.append(html.Tr([
+            html.Td(pair,                style={"padding":"0.2rem 0.4rem","fontSize":"0.78rem",**_mono}),
+            html.Td(f"{s['total']}",     style={"padding":"0.2rem 0.4rem","fontSize":"0.75rem","color":_MUTED}),
+            html.Td(f"{wr:.0%}",         style={"padding":"0.2rem 0.4rem","fontSize":"0.75rem","color":wr_col}),
+            html.Td(f"{avg_rr:+.2f}R",  style={"padding":"0.2rem 0.4rem","fontSize":"0.75rem",
+                                                 "color":_BULL if avg_rr>0 else _BEAR}),
+        ]))
+
+    return html.Div([
+        html.H6("Per-Pair Analytics", style={"color": _MUTED, "margin": "0 0 0.4rem",
+                                              "fontSize": "0.75rem", **_sans}),
+        html.Table([
+            html.Thead(html.Tr([
+                html.Th(h, style={"color":_MUTED,"padding":"0.2rem 0.4rem","fontSize":"0.7rem",
+                                   "textAlign":"left","borderBottom":"1px solid #21262d"})
+                for h in ["Pair", "Trades", "Win%", "Avg R"]
+            ])),
+            html.Tbody(rows),
+        ], style={"width":"100%","borderCollapse":"collapse"}),
+    ])
+
+
 def trade_log_drawer(
     closed_trades: list,
     suggestions: list,
     ml_stats: dict,
     visible: bool = False,
+    equity_curve: list = None,
 ) -> html.Div:
-    trades_content = _trade_table(closed_trades)
+    trades_content   = _trade_table(closed_trades)
     suggestion_cards = _suggestion_cards(suggestions)
-    ml_content = _ml_block(ml_stats)
+    ml_content       = _ml_block(ml_stats)
+    eq_chart         = equity_curve_chart(equity_curve or [])
+    analytics        = analytics_block(closed_trades)
 
     return html.Div([
         html.Div([
@@ -238,12 +437,22 @@ def trade_log_drawer(
                   "marginBottom": "1rem", "borderBottom": "1px solid #21262d",
                   "paddingBottom": "0.5rem"}),
 
+        # Equity curve
+        html.Div([
+            html.H6("Equity Curve", style={"color": _MUTED, "margin": "0 0 0.4rem",
+                                            "fontSize": "0.75rem", **_sans}),
+            eq_chart,
+        ], style={"marginBottom": "1.5rem"}),
+
+        # Per-pair analytics
+        html.Div([analytics], style={"marginBottom": "1.5rem"}),
+
         html.Div([trades_content], style={"marginBottom": "1.5rem"}),
         html.Div([ml_content],    style={"marginBottom": "1.5rem"}),
         html.Div(suggestion_cards),
     ], style={
         "position": "fixed", "top": 0, "right": 0, "bottom": 0,
-        "width": "420px", "background": _PANEL,
+        "width": "460px", "background": _PANEL,
         "boxShadow": "-4px 0 20px rgba(0,0,0,0.5)",
         "padding": "1.5rem", "overflowY": "auto",
         "zIndex": 1000, "transform": "translateX(0)" if visible else "translateX(100%)",

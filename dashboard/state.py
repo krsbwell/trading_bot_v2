@@ -36,7 +36,9 @@ _state: dict = {
     # ── Signals ───────────────────────────────────────────────────────────────
     # pair → {"score": int, "direction": str, "status": "SIGNAL"|"WATCHING"|"NEUTRAL"}
     "signals": {p: {"score": 0, "direction": "—", "status": "NEUTRAL"}
-                for p in (config.FOREX_PAIRS + config.CRYPTO_PAIRS)},
+                for p in (config.FOREX_PAIRS
+                          + getattr(config, "FOREX_WATCH", [])
+                          + config.CRYPTO_PAIRS)},
 
     # ── Pre-trade alert ───────────────────────────────────────────────────────
     "pending_alert":    None,   # signal dict when alert is showing
@@ -54,6 +56,12 @@ _state: dict = {
     # ── Connectors (set by main.py so callbacks can fetch fresh data) ─────────
     "forex_connector":  None,
     "crypto_connector": None,
+
+    # ── Adjustable signal threshold (slider in dashboard) ────────────────────
+    "min_score": config.MIN_CONFLUENCE_SCORE,   # user can override at runtime
+
+    # ── Equity curve (list of {t, balance, nav}, appended each hourly tick) ──
+    "equity_curve": [],
 
     # ── Signal details (full signal dict per pair, for chart overlays) ────────
     "signal_details": {},   # pair → {entry, stop_loss, tp_levels, direction, …}
@@ -86,7 +94,8 @@ def update(**kwargs) -> None:
         _state.update(kwargs)
 
 
-def update_signal(pair: str, score: int, direction: str) -> None:
+def update_signal(pair: str, score: int, direction: str,
+                  timeframe: str = "H1") -> None:
     status = ("SIGNAL"   if score >= config.MIN_CONFLUENCE_SCORE else
               "WATCHING" if score >= 50 else
               "SCANNING" if score >= 35 else "NEUTRAL")
@@ -95,6 +104,7 @@ def update_signal(pair: str, score: int, direction: str) -> None:
             "score":     score,
             "direction": direction,
             "status":    status,
+            "timeframe": timeframe,
         }
 
 
@@ -118,6 +128,17 @@ def tick_countdown() -> int:
         new = max(0, _state.get("alert_countdown", 0) - 1)
         _state["alert_countdown"] = new
         return new
+
+
+def append_equity(balance: float, nav: float) -> None:
+    """Append a timestamped equity snapshot (called after every hourly tick)."""
+    import time as _time
+    with _lock:
+        curve = _state["equity_curve"]
+        curve.append({"t": int(_time.time()), "balance": balance, "nav": nav})
+        # Keep at most 10 000 points (~14 months of hourly ticks)
+        if len(curve) > 10_000:
+            _state["equity_curve"] = curve[-10_000:]
 
 
 def update_signal_detail(pair: str, detail: dict) -> None:

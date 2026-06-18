@@ -4,7 +4,15 @@ load_dotenv()
 
 MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 
-FOREX_PAIRS  = ["EUR_USD", "GBP_USD", "EUR_AUD", "AUD_USD", "USD_JPY"]
+# Backtested pairs — only include pairs with positive Calmar ratio
+# GBP_USD: Calmar 2.21  EUR_USD: Calmar 1.26  (both tested, 6-month backtest)
+FOREX_PAIRS  = ["EUR_USD", "GBP_USD"]
+
+# Pairs under monitoring — signals shown but NO trades opened
+# EUR_AUD: marginal (+$11, 15% DD, needs more data)
+# AUD_USD: negative (-$37, 19.6% DD)
+# USD_JPY: losing (EMA-bounce doesn't suit JPY momentum character)
+FOREX_WATCH  = ["EUR_AUD", "AUD_USD", "USD_JPY"]
 CRYPTO_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD"]   # Alpaca format
 
 TIMEFRAMES = {
@@ -16,8 +24,15 @@ TIMEFRAMES = {
 RISK_PER_TRADE       = 0.01    # 1% of account balance — hard rule
 MAX_OPEN_TRADES      = 3
 MAX_DAILY_DRAWDOWN   = 0.03    # 3% — halt new signals if breached
-MIN_CONFLUENCE_SCORE = 65      # Minimum score to trigger a trade (0-100)
+MIN_CONFLUENCE_SCORE = 52      # Minimum score to trigger a trade (slider-adjustable 40–90)
 ALERT_DELAY_SECONDS  = 10      # Countdown before order executes
+TRAILING_STOP_PIPS   = 0      # Trail SL N pips (0 = disabled — TP1/2/3 structure handles management)
+
+# Session filter — backtest showed EMA-bounce strategy performs better 24/7
+# (mean-reversion thrives in Asian-session ranging conditions).
+# Keep as config option but default to 24h.  Set 7/21 to restrict to London/NY.
+SESSION_START_UTC = 0    # 0 = disabled (24/7 trading)
+SESSION_END_UTC   = 24   # 24 = disabled
 
 EMA_TEST_PERIODS          = [20, 34, 50, 60, 75, 100, 110, 125, 150, 200, 250]
 EMA_REFIT_EVERY_N_CANDLES = 50
@@ -39,3 +54,7 @@ ALPACA_BASE_URL = (
     "https://api.alpaca.markets" if MODE == "live"
     else "https://paper-api.alpaca.markets"
 )
+
+# Telegram notifications (leave blank to disable)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")

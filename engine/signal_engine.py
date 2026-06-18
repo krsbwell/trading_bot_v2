@@ -62,13 +62,52 @@ class SignalEngine:
             logger.warning("Insufficient data for %s (%d H1, %d H4)", pair, len(df_h1), len(df_h4))
             return None
 
+        # ── H4 / D trend for multi-TF display (non-blocking diagnostic) ─────────
+        h4_trend = d_trend = "neutral"
+        h4_gate_info = {"passed": None, "close": None, "ema": None}
+        try:
+            from engine.indicators import ema as _ema_fn
+            short_p, _, _ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
+            h4_ema_val = float(_ema_fn(df_h4["close"], short_p).iloc[-1])
+            h4_close   = float(df_h4["close"].iloc[-1])
+            h4_bull    = h4_close > h4_ema_val
+            h4_trend   = "bull" if h4_bull else "bear"
+            h4_gate_info = {"passed": h4_bull, "close": h4_close, "ema": h4_ema_val}
+        except Exception:
+            pass
+
+        try:
+            gran_d = "D" if "_" in pair else "1Day"
+            df_d   = self._get_candles(pair, gran_d, 30)
+            if df_d is not None and len(df_d) >= 20:
+                from engine.indicators import ema as _ema_fn
+                d_ema_val = float(_ema_fn(df_d["close"], 20).iloc[-1])
+                d_close   = float(df_d["close"].iloc[-1])
+                d_trend   = "bull" if d_close > d_ema_val else "bear"
+        except Exception:
+            pass
+
         # ── EMA + CCI + MACD ──────────────────────────────────────────────────
         buy_score  = check_buy_signal(pair, df_h1, df_h4)
         sell_score = check_sell_signal(pair, df_h1, df_h4)
 
         if buy_score == sell_score == 0:
-            logger.info("No signal for %s — both BUY and SELL scored 0 (H4 gate or EMA invalid)", pair)
-            return None
+            # Return a minimal diagnostic signal so the dashboard can show why
+            return {
+                "pair":          pair,
+                "market":        market,
+                "direction":     "—",
+                "score":         0,
+                "ema_score":     0,
+                "structure_score": 0,
+                "pa_score":      0,
+                "timeframe":     config.TIMEFRAMES["primary"],
+                "h4_gate":       h4_gate_info,
+                "h4_trend":      h4_trend,
+                "d_trend":       d_trend,
+                "no_signal":     True,
+                "watching":      False,
+            }
 
         if buy_score >= sell_score:
             direction  = "long"
@@ -97,8 +136,9 @@ class SignalEngine:
         final_score = score_signal(ema_score, struct_score, pa_score, ml_win_prob)
 
         logger.info(
-            "Signal %s %s dir=%s score=%d (EMA=%.0f Struct=%.0f PA=%.0f)",
-            pair, market, direction, final_score, ema_score, struct_score, pa_score,
+            "Signal %s %s dir=%s score=%d (EMA=%.0f Struct=%.0f PA=%.0f H4=%s D=%s)",
+            pair, market, direction, final_score,
+            ema_score, struct_score, pa_score, h4_trend, d_trend,
         )
 
         if final_score < 35:
@@ -112,6 +152,7 @@ class SignalEngine:
                 "pair":             pair,
                 "market":           market,
                 "direction":        direction,
+                "timeframe":        config.TIMEFRAMES["primary"],
                 "score":            final_score,
                 "ema_score":        ema_score,
                 "structure_score":  struct_score,
@@ -122,6 +163,9 @@ class SignalEngine:
                 "patterns":         patterns,
                 "market_structure": structure,
                 "bos_confirmed":    bos_ok,
+                "h4_gate":          h4_gate_info,
+                "h4_trend":         h4_trend,
+                "d_trend":          d_trend,
                 "watching":         True,
             }
 
@@ -143,6 +187,10 @@ class SignalEngine:
             "pair":                pair,
             "market":              market,
             "direction":           direction,
+            "timeframe":           config.TIMEFRAMES["primary"],
+            "h4_gate":             h4_gate_info,
+            "h4_trend":            h4_trend,
+            "d_trend":             d_trend,
             "entry":               entry,
             "stop_loss":           stop_loss,
             "tp_levels":           tp_levels,

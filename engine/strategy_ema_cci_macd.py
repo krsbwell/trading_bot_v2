@@ -129,7 +129,16 @@ def _find_touch(
 def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> float:
     """
     6-condition buy check. Returns 0–25 (proportional to conditions met).
-    H4 confirmation is a hard gate — returns 0 immediately if it fails.
+
+    Conditions:
+      c1 — H1 close above short EMA (price in upward momentum zone)
+      c2 — H4 close above short EMA (higher-TF alignment, NOT a hard gate)
+      c3 — Recent EMA touch / bounce within lookback window
+      c4 — CCI was oversold (< -60) at or near the touch
+      c5 — CCI has recovered (> -30) — momentum turning
+      c6 — MACD histogram positive in the last 3 bars
+
+    All 6 are scored proportionally — H4 misalignment costs ~4 points, not all 25.
     """
     if len(df_h1) < 50 or len(df_h4) < 50:
         return 0.0
@@ -145,39 +154,30 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> flo
     close_h1 = df_h1["close"].iloc[-1]
     close_h4 = df_h4["close"].iloc[-1]
 
-    # Hard gate: H4 must confirm uptrend
-    c2 = close_h4 > short_ema_h4.iloc[-1]
-    if not c2:
-        logger.info("BUY gate BLOCKED %s — H4 close %.5f below EMA%d %.5f",
-                    pair, close_h4, short, short_ema_h4.iloc[-1])
-        return 0.0
-
     c1 = close_h1 > short_ema_h1.iloc[-1]
-    c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "long")
+    c2 = close_h4 > short_ema_h4.iloc[-1]   # H4 alignment — scored, NOT a hard gate
+    c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "long", lookback=20)
     c3 = c3_idx is not None
 
     c4 = c5 = c6 = False
     if c3:
-        # c4: CCI reached oversold (< -80) in a 3-candle window around the touch
         cci_win = cci_h1.iloc[max(0, c3_idx - 1):c3_idx + 2]
-        c4 = float(cci_win.min()) < -80
-
-        # c5: CCI has recovered from oversold (> -30 now, not stuck negative)
+        c4 = float(cci_win.min()) < -60          # widened from -80
         c5 = cci_h1.iloc[-1] > -30
-
-        # c6: MACD histogram is currently positive (momentum confirmed bullish)
-        c6 = bool(macd_hist.iloc[-1] > 0)
+        # MACD: positive in any of last 3 bars (tolerates brief dips)
+        c6 = bool(macd_hist.iloc[-3:].max() > 0) if len(macd_hist) >= 3 else bool(macd_hist.iloc[-1] > 0)
 
     passed = sum([c1, c2, c3, c4, c5, c6])
     score  = round(25 * passed / 6)
-    logger.debug("BUY %s  c1=%s c2=%s c3=%s c4=%s c5=%s c6=%s → %d", pair, c1, c2, c3, c4, c5, c6, score)
+    logger.debug("BUY %s  c1=%s c2(H4)=%s c3=%s c4=%s c5=%s c6=%s → %d",
+                 pair, c1, c2, c3, c4, c5, c6, score)
     return float(score)
 
 
 def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> float:
     """
-    6-condition sell check. Returns 0–25. Mirror of buy.
-    H4 confirmation is a hard gate.
+    6-condition sell check. Returns 0–25. Mirror of check_buy_signal.
+    H4 is scored, NOT a hard gate.
     """
     if len(df_h1) < 50 or len(df_h4) < 50:
         return 0.0
@@ -193,43 +193,59 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> fl
     close_h1 = df_h1["close"].iloc[-1]
     close_h4 = df_h4["close"].iloc[-1]
 
-    # Hard gate: H4 must confirm downtrend
-    c2 = close_h4 < short_ema_h4.iloc[-1]
-    if not c2:
-        logger.info("SELL gate BLOCKED %s — H4 close %.5f above EMA%d %.5f",
-                    pair, close_h4, short, short_ema_h4.iloc[-1])
-        return 0.0
-
     c1 = close_h1 < short_ema_h1.iloc[-1]
-    c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "short")
+    c2 = close_h4 < short_ema_h4.iloc[-1]   # H4 alignment — scored, NOT a hard gate
+    c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "short", lookback=20)
     c3 = c3_idx is not None
 
     c4 = c5 = c6 = False
     if c3:
-        # c4: CCI reached overbought (> +80) in a 3-candle window around the touch
         cci_win = cci_h1.iloc[max(0, c3_idx - 1):c3_idx + 2]
-        c4 = float(cci_win.max()) > 80
-
-        # c5: CCI has pulled back from overbought (< +30 now)
+        c4 = float(cci_win.max()) > 60           # widened from +80
         c5 = cci_h1.iloc[-1] < 30
-
-        # c6: MACD histogram is currently negative (momentum confirmed bearish)
-        c6 = bool(macd_hist.iloc[-1] < 0)
+        c6 = bool(macd_hist.iloc[-3:].min() < 0) if len(macd_hist) >= 3 else bool(macd_hist.iloc[-1] < 0)
 
     passed = sum([c1, c2, c3, c4, c5, c6])
     score  = round(25 * passed / 6)
-    logger.debug("SELL %s  c1=%s c2=%s c3=%s c4=%s c5=%s c6=%s → %d", pair, c1, c2, c3, c4, c5, c6, score)
+    logger.debug("SELL %s  c1=%s c2(H4)=%s c3=%s c4=%s c5=%s c6=%s → %d",
+                 pair, c1, c2, c3, c4, c5, c6, score)
     return float(score)
 
 
 # ── Stop loss ─────────────────────────────────────────────────────────────────
 
 def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
-    """1 pip below mid_ema (long) or 1 pip above mid_ema (short)."""
+    """
+    Place SL just beyond the mid EMA (the dynamic support/resistance level).
+
+    Rules applied in order:
+      1. Primary: SL = mid_ema ± 1pip
+      2. Validation: SL MUST be on the loss side of entry.
+         If the mid EMA is on the wrong side (inverted), fall back to 1.5×ATR14.
+      3. Minimum distance: at least 20 pips from entry to avoid noise-stop-outs.
+    """
     _, mid, _ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
-    mid_val = ema(df_h1["close"], mid).iloc[-1]
-    pip = _get_pip(pair)
-    return round(mid_val - pip if direction == "long" else mid_val + pip, 5)
+    mid_val   = float(ema(df_h1["close"], mid).iloc[-1])
+    entry     = float(df_h1["close"].iloc[-1])
+    pip       = _get_pip(pair)
+    min_pips  = 20                     # minimum SL distance in pips
+    min_dist  = pip * min_pips
+
+    if direction == "long":
+        sl = mid_val - pip             # just below the EMA (support)
+        if sl >= entry:                # EMA above entry → inverted, use ATR fallback
+            atr_val = float(atr(df_h1["high"], df_h1["low"], df_h1["close"], 14).iloc[-1])
+            sl = entry - max(atr_val * 1.5, min_dist)
+        sl = min(sl, entry - min_dist) # enforce minimum distance
+    else:
+        sl = mid_val + pip             # just above the EMA (resistance)
+        if sl <= entry:                # EMA below entry → inverted, use ATR fallback
+            atr_val = float(atr(df_h1["high"], df_h1["low"], df_h1["close"], 14).iloc[-1])
+            sl = entry + max(atr_val * 1.5, min_dist)
+        sl = max(sl, entry + min_dist) # enforce minimum distance
+
+    decimals = 3 if "JPY" in pair.upper() else 5
+    return round(sl, decimals)
 
 
 def clear_cache() -> None:

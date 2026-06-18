@@ -152,16 +152,18 @@
         return Math.round(ts.refT + (x - ts.refX) / ts.pps);
     }
 
-    /* Storage key helpers — keyed per pair + timeframe */
-    function _hlKey()     { return 'apex_hlines_'    + _currentPair + '_' + (_currentTf||''); }
-    function _trendKey()  { return 'apex_trendlines_' + _currentPair + '_' + (_currentTf||''); }
-    function _boxKey()    { return 'apex_boxes_'      + _currentPair + '_' + (_currentTf||''); }
-    function _posKey()    { return 'apex_pos_'        + _currentPair + '_' + (_currentTf||''); }
+    /* Storage key helpers — keyed per PAIR ONLY (no timeframe).
+       Drawings use absolute timestamp+price anchors so they are valid on any TF.
+       This means trendlines drawn on Daily are visible on 4H and 1H automatically. */
+    function _hlKey()     { return 'apex_hlines_'    + _currentPair; }
+    function _trendKey()  { return 'apex_trendlines_' + _currentPair; }
+    function _boxKey()    { return 'apex_boxes_'      + _currentPair; }
+    function _posKey()    { return 'apex_pos_'        + _currentPair; }
 
-    /* Legacy keys (pair-only) for migration */
-    function _legacyDrawKey() { return 'apex_drawings_' + _currentPair; }
-    function _legacyBoxKey()  { return 'apex_boxes_'    + _currentPair; }
-    function _legacyPosKey()  { return 'apex_pos_'      + _currentPair; }
+    /* Legacy aliases — same as primary keys now (for smooth migration) */
+    function _legacyDrawKey() { return _hlKey();    }
+    function _legacyBoxKey()  { return _boxKey();   }
+    function _legacyPosKey()  { return _posKey();   }
 
     function _svgDash(style) {
         if (style === 'dashed') return '8 4';
@@ -510,6 +512,9 @@
     /* Global mouse handlers for trendline resize + move */
     document.addEventListener('mousemove', function(e) {
         if (!trendResize && !trendMove) return;
+        /* Claim the event immediately — MUST be before any early returns so that
+           null-coordinate frames never fall through to TVLC's pan handler. */
+        e.preventDefault();
         var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
         var r  = chartEl.getBoundingClientRect();
         var cX = e.clientX - r.left, cY = e.clientY - r.top;
@@ -531,7 +536,6 @@
             t2.t2 = tm.origT2 + dt; t2.p2 = tm.origP2 + dp;
             updateTrendline(t2);
         }
-        e.preventDefault();
     });
 
     document.addEventListener('mouseup', function() {
@@ -908,15 +912,12 @@
     /* Box global handlers */
     document.addEventListener('mousemove', function(e) {
         if (!boxDraw && !boxResize && !boxMove) return;
+        e.preventDefault();   // claimed before any early-return so TVLC never pans
         var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
         var r  = chartEl.getBoundingClientRect();
         var cX = e.clientX - r.left, cY = e.clientY - r.top;
 
-        if (boxDraw) {
-            _updateBoxPreview(cX, cY);
-            e.preventDefault();
-            return;
-        }
+        if (boxDraw) { _updateBoxPreview(cX, cY); return; }
         if (boxResize) {
             var br = boxResize, b = boxes[br.idx]; if (!b) return;
             var h = br.handle;
@@ -937,7 +938,6 @@
             b2.p2 = bm.origP2 + (cp2 - bm.startPrice);
             updateBox(b2);
         }
-        e.preventDefault();
     });
 
     document.addEventListener('mouseup', function(e) {
@@ -1256,6 +1256,7 @@
     /* Position drag globals */
     document.addEventListener('mousemove', function(e) {
         if (!posDrag || !chart || !S.candle) return;
+        e.preventDefault();   // claimed before any early-return so TVLC never pans
         var el = document.getElementById('tvlw-chart'); if (!el) return;
         var r  = el.getBoundingClientRect();
         var cX = e.clientX - r.left, cY = e.clientY - r.top;
@@ -1284,7 +1285,6 @@
             pos.t2   = Math.max(pos.t1 + 5*iv, Math.min(pos.t1 + 100*iv, ct2));
         }
         updatePos(pos);
-        e.preventDefault();
     });
 
     document.addEventListener('mouseup', function() {
@@ -1851,9 +1851,25 @@
         requestAnimationFrame(function(){ updateAllTrendlines(); updateAllPos(); updateAllBoxes(); });
 
         if (fitIt) {
-            var now = Math.floor(Date.now()/1000), from = now - TEN_DAYS;
-            try { chart.timeScale().setVisibleRange({ from, to:now+3600 }); }
-            catch(e) { try { chart.timeScale().fitContent(); } catch(e2) {} }
+            /* Use ACTUAL candle timestamps so zoom is consistent for every asset.
+               Wall-clock time fails for crypto (24/7) when the last bar is old.
+               Show ~240 bars (≈ 10 days of H1 / 60 days of 4H / 240 days of D). */
+            if (_candleData.length > 0) {
+                var interval = _candleInterval();           // avg seconds per bar
+                var nShow    = Math.min(_candleData.length, 240);
+                var firstVis = _candleData[Math.max(0, _candleData.length - nShow)];
+                var lastBar  = _candleData[_candleData.length - 1];
+                try {
+                    chart.timeScale().setVisibleRange({
+                        from: firstVis.time - interval * 2,   // tiny left margin
+                        to:   lastBar.time  + interval * 10,  // right breathing room
+                    });
+                } catch(e) {
+                    try { chart.timeScale().fitContent(); } catch(e2) {}
+                }
+            } else {
+                try { chart.timeScale().fitContent(); } catch(e) {}
+            }
         }
     }
 
