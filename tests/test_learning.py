@@ -72,7 +72,8 @@ def _synthetic_log(n_win=40, n_loss=20, pattern="bullish_pin_bar", pair="EUR_USD
             "candle_body_ratio": 0.45, "upper_wick_ratio": 0.20, "lower_wick_ratio": 0.35,
             "cci_at_signal": -120.5, "macd_hist_at_signal": 0.00012,
             "ema_short_period": 34, "ema_mid_period": 100,
-            "market_structure": "bullish", "was_at_sr_zone": 1, "bos_confirmed": 1,
+            "atr_pips": 12.5, "h4_trend": "bull", "d_trend": "bull",
+            "market_structure": "uptrend", "was_at_sr_zone": 1, "bos_confirmed": 1,
             "ml_win_prob_at_entry": "",
             "outcome": "win", "pnl_pips": 20, "pnl_dollar": 100,
             "hold_hours": 4, "session": "london",
@@ -80,7 +81,8 @@ def _synthetic_log(n_win=40, n_loss=20, pattern="bullish_pin_bar", pair="EUR_USD
     for i in range(n_loss):
         row = rows[0].copy()
         row.update({"outcome": "loss", "pnl_pips": -20, "pnl_dollar": -100,
-                    "cci_at_signal": -85, "session": "asian"})
+                    "cci_at_signal": -85, "session": "asian",
+                    "h4_trend": "bear", "atr_pips": 8.0})
         rows.append(row)
     return rows
 
@@ -237,7 +239,8 @@ class TestPatternLearner:
         learner = PatternLearner()
         report  = learner.train(log_path=log, model_path=model)
         assert isinstance(report, str)
-        assert "precision" in report.lower() or "accuracy" in report.lower()
+        # XGBoost trainer returns an AUC summary, not a sklearn classification_report
+        assert "auc" in report.lower() or "xgboost" in report.lower()
 
     def test_train_saves_model_file(self, tmp_path):
         log   = str(tmp_path / "signal_log.csv")
@@ -287,7 +290,9 @@ class TestPatternLearner:
         learner.train(log_path=log, model_path=model)
         importance = learner.get_feature_importance(model_path=model)
         assert isinstance(importance, dict)
-        assert set(importance.keys()) == set(FEATURES)
+        assert len(importance) > 0
+        # Model trains only on columns present in the CSV — keys must be a subset of FEATURES
+        assert set(importance.keys()).issubset(set(FEATURES))
         assert all(v >= 0 for v in importance.values())
 
     def test_top_features_returns_n_names(self, tmp_path):

@@ -13,3 +13,4 @@ python-dotenv
 apscheduler
 pydub
 requests           # Telegram alerts HTTP client
+xgboost            # gradient-boosted ML classifier for PatternLearner

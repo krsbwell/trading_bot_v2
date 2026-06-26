@@ -1013,4 +1013,178 @@ def walk_forward_results(wf: dict) -> html.Div:
         html.Tbody(rows),
     ], style={"width": "100%", "borderCollapse": "collapse"})
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Panel 6 — Learning Status (Adaptive / WFO / XGBoost)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def learning_panel(
+    adaptive_summary: dict,
+    wfo_summary: dict,
+    ml_stats: dict | None,
+    importance: dict | None,
+    calibration_rows: list | None = None,
+    sample_count: int = 0,
+) -> html.Div:
+    """Shows current state of all three learning systems: Adaptive, WFO, XGBoost."""
+
+    _td = {"padding": "0.3rem 0.5rem", "fontSize": "0.78rem"}
+    _th = {**_td, "color": _MUTED, "textAlign": "left",
+           "borderBottom": "1px solid #30363d", "fontWeight": 600}
+    sections = []
+
+    # ── Adaptive Parameters ───────────────────────────────────────────────────
+    sections.append(html.H5("Adaptive Parameters",
+                             style={"color": _GOLD, "margin": "0 0 0.5rem 0"}))
+    if adaptive_summary:
+        rows = []
+        for pair, s in sorted(adaptive_summary.items()):
+            wr = s.get("win_rate_pct", 0)
+            if   wr >= 60: tier_col, tier_lbl = _BULL, "LOOSE"
+            elif wr >= 40: tier_col, tier_lbl = _MUTED, "BASE"
+            elif wr >= 30: tier_col, tier_lbl = _GOLD, "TIGHT"
+            else:           tier_col, tier_lbl = _BEAR, "STRICT"
+            rows.append(html.Tr([
+                html.Td(pair.replace("_", "/"), style={**_td, "color": _TEXT, **_mono}),
+                html.Td(f"{wr:.0f}%",           style={**_td, "color": tier_col, "fontWeight": 700}),
+                html.Td(tier_lbl,                style={**_td, "color": tier_col}),
+                html.Td(f"±{s['cci_threshold']}",        style={**_td, "color": "#38b6ff"}),
+                html.Td(f"{s['touch_band_mult']:.2f}×ATR", style={**_td, "color": _TEXT}),
+                html.Td(f"{s['macd_bars_needed']}/3",    style={**_td, "color": _TEXT}),
+            ]))
+        sections.append(html.Table([
+            html.Thead(html.Tr([html.Th(h, style=_th) for h in
+                                ["Pair", "Win%", "Tier", "CCI", "Band", "MACD"]])),
+            html.Tbody(rows),
+        ], style={"width": "100%", "borderCollapse": "collapse", "marginBottom": "1.5rem"}))
+    else:
+        sections.append(html.P(
+            "No adaptive data yet — accumulates after 5 closed trades per pair.",
+            style={"color": _MUTED, "fontSize": "0.8rem", "marginBottom": "1.5rem"},
+        ))
+
+    # ── WFO Best Params ───────────────────────────────────────────────────────
+    sections.append(html.H5("Walk-Forward Optimizer",
+                             style={"color": "#38b6ff", "margin": "0 0 0.5rem 0"}))
+    if wfo_summary:
+        from datetime import datetime as _dt
+        rows = []
+        for pair, s in sorted(wfo_summary.items()):
+            fitted_str = s.get("fitted_at", "—")
+            try:
+                fitted_str = _dt.fromisoformat(fitted_str).strftime("%m/%d %H:%M")
+            except Exception:
+                pass
+            wr_col = _BULL if s.get("win_rate_pct", 0) >= 50 else _BEAR
+            rows.append(html.Tr([
+                html.Td(pair.replace("_", "/"),         style={**_td, "color": _TEXT, **_mono}),
+                html.Td(fitted_str,                      style={**_td, "color": _MUTED, "fontSize": "0.7rem"}),
+                html.Td(str(s.get("CCI_PERIOD", "—")),  style={**_td, "color": "#38b6ff"}),
+                html.Td(s.get("MACD", "—"),              style={**_td, "color": "#38b6ff"}),
+                html.Td(str(s.get("min_score", "—")),   style={**_td, "color": _GOLD, "fontWeight": 700}),
+                html.Td(f"{s.get('win_rate_pct', 0):.0f}%", style={**_td, "color": wr_col}),
+                html.Td(str(s.get("total_trades", 0)),  style={**_td, "color": _TEXT}),
+            ]))
+        sections.append(html.Table([
+            html.Thead(html.Tr([html.Th(h, style=_th) for h in
+                                ["Pair", "Last Fit", "CCI", "MACD F/S/Sig",
+                                 "Min Score", "Win%", "Trades"]])),
+            html.Tbody(rows),
+        ], style={"width": "100%", "borderCollapse": "collapse", "marginBottom": "1.5rem"}))
+    else:
+        sections.append(html.P(
+            "Not yet fitted — runs automatically every Sunday 02:00 UTC.",
+            style={"color": _MUTED, "fontSize": "0.8rem", "marginBottom": "1.5rem"},
+        ))
+
+    # ── XGBoost ML Model ──────────────────────────────────────────────────────
+    sections.append(html.H5("XGBoost ML Model",
+                             style={"color": _BULL, "margin": "0 0 0.5rem 0"}))
+    n_samples = (ml_stats or {}).get("n_samples", 0)
+    top_feats = (ml_stats or {}).get("top_features", [])
+    sections.append(html.Div([
+        html.Span("Training samples: ", style={"color": _MUTED, "fontSize": "0.8rem"}),
+        html.Span(str(n_samples),        style={"color": _TEXT, "fontWeight": 700,
+                                                 "fontSize": "0.8rem", **_mono}),
+        html.Span(" / 50 min",           style={"color": _MUTED, "fontSize": "0.75rem"}),
+    ], style={"marginBottom": "0.5rem"}))
+
+    if importance:
+        items = list(importance.items())[:12]
+        max_v = max(v for _, v in items) if items else 1.0
+        bars  = []
+        for name, val in items:
+            pct = (val / max_v) * 100 if max_v > 0 else 0
+            col = _BULL if name in top_feats[:3] else "#38b6ff"
+            bars.append(html.Div([
+                html.Span(name, style={"color": _MUTED, "fontSize": "0.72rem",
+                                       "minWidth": "170px", "display": "inline-block",
+                                       **_mono}),
+                html.Div(
+                    html.Div(style={"width": f"{pct:.0f}%", "height": "100%",
+                                    "background": col, "borderRadius": "4px"}),
+                    style={"display": "inline-block", "verticalAlign": "middle",
+                           "width": "180px", "background": "#21262d",
+                           "height": "8px", "borderRadius": "4px"},
+                ),
+                html.Span(f"  {val:.4f}", style={"color": _MUTED, "fontSize": "0.68rem",
+                                                   **_mono}),
+            ], style={"display": "flex", "alignItems": "center",
+                      "gap": "0.4rem", "marginBottom": "3px"}))
+        sections.append(html.Div(bars))
+    elif n_samples >= 50:
+        sections.append(html.P("Model trained — importance not loaded.",
+                                style={"color": _MUTED, "fontSize": "0.8rem"}))
+    else:
+        remaining = max(0, 50 - sample_count) if sample_count else max(0, 50 - n_samples)
+        sections.append(html.P(
+            f"Model not trained yet — {remaining} more closed trades needed "
+            f"(or use Seed from Backtest to bootstrap immediately).",
+            style={"color": _MUTED, "fontSize": "0.8rem"},
+        ))
+
+    # ── Calibration strip ─────────────────────────────────────────────────────
+    sections.append(html.H5("Model Calibration (last 20 signals)",
+                             style={"color": _MUTED, "margin": "1.5rem 0 0.5rem 0",
+                                    "fontSize": "0.85rem"}))
+    if calibration_rows:
+        cal_rows = []
+        for r in calibration_rows:
+            prob    = r.get("predicted_prob")
+            actual  = r.get("actual", "")
+            is_win  = actual == "win"
+            dir_col = _BULL if r.get("direction") == "long" else _BEAR
+            if prob is None:
+                prob_cell = html.Td("—", style={**_td, "color": _MUTED})
+            else:
+                prob_pct = prob * 100
+                prob_col = _BULL if prob_pct >= 60 else (_GOLD if prob_pct >= 45 else _BEAR)
+                prob_cell = html.Td(f"{prob_pct:.0f}%",
+                                    style={**_td, "color": prob_col, "fontWeight": 700, **_mono})
+            outcome_dot = "●" if is_win else "○"
+            outcome_col = _BULL if is_win else _BEAR
+            cal_rows.append(html.Tr([
+                html.Td(r.get("pair", "").replace("_", "/"),
+                        style={**_td, "color": _TEXT, **_mono}),
+                html.Td(r.get("direction", ""),
+                        style={**_td, "color": dir_col}),
+                html.Td(str(r.get("score", "")),
+                        style={**_td, "color": _MUTED, **_mono}),
+                prob_cell,
+                html.Td(outcome_dot,
+                        style={**_td, "color": outcome_col, "fontSize": "1rem"}),
+            ]))
+        sections.append(html.Table([
+            html.Thead(html.Tr([html.Th(h, style=_th) for h in
+                                ["Pair", "Dir", "Score", "Pred%", "Win?"]])),
+            html.Tbody(cal_rows),
+        ], style={"width": "100%", "borderCollapse": "collapse"}))
+    else:
+        sections.append(html.P(
+            "No calibration data yet — open the panel after trades have closed.",
+            style={"color": _MUTED, "fontSize": "0.78rem"},
+        ))
+
+    return html.Div(sections)
+
     return html.Div([summary, chart, table])

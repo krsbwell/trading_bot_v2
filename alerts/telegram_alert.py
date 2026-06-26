@@ -126,3 +126,26 @@ def send_drawdown_halt() -> bool:
         "Daily drawdown limit (3%) has been breached.\n"
         "No new trades will be opened until midnight UTC."
     )
+
+
+def send_wfo_started(pairs: list) -> bool:
+    """Notify that a Walk-Forward Optimisation run has started."""
+    return _send(
+        f"⚙️ <b>WFO STARTED</b>\n"
+        f"Optimising {len(pairs)} pair(s): {', '.join(pairs)}\n"
+        f"This runs in the background — results will follow."
+    )
+
+
+def send_wfo_complete(summary: dict) -> bool:
+    """Notify when the Walk-Forward Optimisation run finishes."""
+    lines = ["📊 <b>WFO COMPLETE</b>"]
+    for pair, s in sorted(summary.items()):
+        lines.append(
+            f"  {pair.replace('_','/')}  "
+            f"CCI={s.get('CCI_PERIOD','?')}  "
+            f"MACD={s.get('MACD','?')}  "
+            f"MinScore={s.get('min_score','?')}  "
+            f"WR={s.get('win_rate_pct',0):.0f}%"
+        )
+    return _send("\n".join(lines))

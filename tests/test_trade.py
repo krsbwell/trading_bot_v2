@@ -15,6 +15,7 @@ import pytest
 from trade.paper_trader import PaperTrader
 from trade.trade_manager import TradeManager
 import risk.risk_manager as rm
+import config
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -132,6 +133,12 @@ class TestPaperTraderSL:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestPaperTraderTP:
+    @pytest.fixture(autouse=True)
+    def _patch_trade_config(self, monkeypatch):
+        monkeypatch.setattr(config, "BREAKEVEN_ENABLED", True)
+        monkeypatch.setattr(config, "TRAILING_STOP_PIPS", 0)
+        monkeypatch.setattr(config, "BREAKEVEN_BUFFER_PIPS", 0)
+
     def _setup(self, balance=10_000, entry=1.0800, sl=1.0780, size=10_000, direction="long"):
         pt = PaperTrader(balance)
         tp = _tp(entry, sl, direction)

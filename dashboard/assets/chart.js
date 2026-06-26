@@ -212,6 +212,30 @@
     }
 
     /* ── Measure stats calculator ─────────────────────────────────────────── */
+    function _tfSeconds(tf) {
+        var m = { '1m':60,'5m':300,'15m':900,'30m':1800,
+                  'H1':3600,'1H':3600,'H4':14400,'4H':14400,
+                  'D':86400,'1D':86400,'W':604800,'1W':604800 };
+        return m[tf] || m[(tf||'').toUpperCase()] || 3600;
+    }
+
+    /* Count actual candles between two timestamps using loaded chart data.
+       Avoids overcounting due to forex weekend gaps in raw timestamp differences. */
+    function _countBars(t1, t2) {
+        var candles = _lastChartData && _lastChartData.candlestick;
+        if (!candles || candles.length === 0) {
+            return Math.round(Math.abs((t2||0)-(t1||0)) / _tfSeconds(_currentRawTf || _currentTf));
+        }
+        var tMin = Math.min(t1||0, t2||0);
+        var tMax = Math.max(t1||0, t2||0);
+        var count = 0;
+        for (var i = 0; i < candles.length; i++) {
+            var ct = candles[i].time;
+            if (ct >= tMin && ct <= tMax) count++;
+        }
+        return count;
+    }
+
     function _measureStats(box) {
         var startPrice = box.t1 <= box.t2 ? box.p1 : box.p2;
         var endPrice   = box.t1 <= box.t2 ? box.p2 : box.p1;
@@ -221,8 +245,11 @@
         var col   = isUp ? '#00ff88' : '#ff3366';
         var sign  = isUp ? '+' : '';
         var dec   = isJPY(_currentPair) ? 3 : 5;
+        var pip   = pipSize(_currentPair);
+        var pips  = Math.round(Math.abs(priceDiff) / pip);
+        var bars  = _countBars(box.t1, box.t2);
         var label = sign + priceDiff.toFixed(dec) + ' (' + sign + pct.toFixed(2) + '%)';
-        return { label: label, color: col, isUp: isUp, priceDiff: priceDiff };
+        return { label: label, color: col, isUp: isUp, priceDiff: priceDiff, pips: pips, bars: bars, sign: sign };
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
@@ -672,9 +699,9 @@
         var stats = document.createElement('div');
         stats.className = 'apex-box-stats';
         stats.style.cssText =
-            'position:absolute;top:4px;right:4px;z-index:12;pointer-events:none;' +
-            'font-family:monospace;font-size:9px;text-align:right;line-height:1.5;' +
-            'background:rgba(13,17,23,0.72);padding:2px 5px;border-radius:2px;';
+            'position:absolute;bottom:100%;right:0;margin-bottom:3px;z-index:20;pointer-events:none;' +
+            'font-family:monospace;font-weight:600;text-align:right;line-height:1.4;white-space:nowrap;' +
+            'background:none;padding:3px 8px;';
 
         var hw = document.createElement('div');
         hw.style.cssText = 'position:absolute;inset:0;z-index:15;pointer-events:none;';
@@ -709,6 +736,7 @@
             'cursor:pointer;pointer-events:auto;background:rgba(13,17,23,0.88);' +
             'width:16px;height:16px;line-height:16px;text-align:center;' +
             'border-radius:50%;border:1px solid #555;';
+        delBtn.addEventListener('mousedown', function(e) { e.stopPropagation(); });
         delBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             var idx = boxes.findIndex(function(b) { return String(b.id)===String(delBtn.dataset.boxId); });
@@ -725,6 +753,7 @@
             'cursor:pointer;pointer-events:auto;background:rgba(13,17,23,0.88);' +
             'width:16px;height:16px;line-height:16px;text-align:center;' +
             'border-radius:50%;border:1px solid #555;';
+        dupBtn.addEventListener('mousedown', function(e) { e.stopPropagation(); });
         dupBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             var idx = boxes.findIndex(function(b) { return String(b.id)===String(dupBtn.dataset.boxId); });
@@ -744,24 +773,34 @@
         wrap.appendChild(hw); wrap.appendChild(delBtn); wrap.appendChild(dupBtn);
         box.el = wrap; box.bgEl = bg; box.statsEl = stats;
         box.measureStatsEl = mStats; box.handleWrap = hw;
+        box.delBtn = delBtn; box.dupBtn = dupBtn;
     }
 
     function updateBox(box) {
         if (!box.el || !chart || !S.candle) return;
         var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
 
-        var x1 = _timeToXExtrap(box.t1), x2 = _timeToXExtrap(box.t2);
-        var y1 = _priceToY(box.p1),      y2 = _priceToY(box.p2);
-        if (x1 == null || x2 == null || y1 == null || y2 == null) {
+        var x1r = _timeToXExtrap(box.t1), x2r = _timeToXExtrap(box.t2);
+        var y1  = _priceToY(box.p1),     y2  = _priceToY(box.p2);
+        if (x1r == null || x2r == null || y1 == null || y2 == null) {
             box.el.style.display = 'none'; return;
         }
 
         var chartW = chartEl.clientWidth - psWidth();
+
+        /* If both anchors are fully off the same side, hide the box entirely */
+        if ((x1r < 0 && x2r < 0) || (x1r > chartW && x2r > chartW)) {
+            box.el.style.display = 'none'; return;
+        }
+
+        /* Clamp to chart bounds so the box never stretches off-screen */
+        var x1 = Math.max(0, Math.min(chartW, x1r));
+        var x2 = Math.max(0, Math.min(chartW, x2r));
+
         var left = Math.min(x1,x2), right = Math.max(x1,x2);
         var top  = Math.min(y1,y2), bottom= Math.max(y1,y2);
         var w = right-left, h = bottom-top;
 
-        /* Only hide if entirely below/above the price pane (x is CSS-clipped by overflow:hidden) */
         if (w < 2 || h < 2 || bottom < 0 || top > MAIN_H) {
             box.el.style.display = 'none'; return;
         }
@@ -771,6 +810,8 @@
 
         var isSel = (selectedBox === boxes.indexOf(box));
         box.handleWrap.style.display = isSel ? 'block' : 'none';
+        if (box.delBtn) box.delBtn.style.display = isSel ? '' : 'none';
+        if (box.dupBtn) box.dupBtn.style.display = isSel ? '' : 'none';
 
         box.el.querySelectorAll('.apex-box-handle').forEach(function(hEl) {
             var hp = HANDLE_POS[hEl.dataset.handle];
@@ -788,13 +829,14 @@
             box.statsEl.textContent = '';
             if (box.measureStatsEl) {
                 box.measureStatsEl.style.display    = 'block';
-                box.measureStatsEl.style.color      = lblCol;
-                box.measureStatsEl.style.background = 'rgba(13,17,23,0.88)';
-                box.measureStatsEl.style.border     = '1px solid ' + _hexToRgba(lblCol, 0.35);
+                box.measureStatsEl.style.color      = '#000';
+                box.measureStatsEl.style.background = '#ffd700';
+                box.measureStatsEl.style.border     = '1px solid #b8960a';
                 box.measureStatsEl.style.left       = '50%';
                 box.measureStatsEl.style.bottom     = '';
                 box.measureStatsEl.innerHTML =
-                    '<span style="font-size:12px;font-weight:700">' + ms.label + '</span>';
+                    '<span style="font-size:11px;font-weight:700;display:block">' + ms.pips + ' pips &nbsp;|&nbsp; ' + ms.bars + ' bars</span>' +
+                    '<span style="font-size:10px">' + ms.label + '</span>';
                 /* Auto-position: use transform so the label stays inside the chart viewport.
                    top<34 → label below the box; otherwise label above the box.
                    transform handles both centering (X) and vertical offset (Y).        */
@@ -807,7 +849,7 @@
                 }
             }
         } else {
-            /* ── Regular rect/square box — no bar-count overlay ── */
+            /* ── Regular rect/square box — pip span label in upper-right ── */
             var bw  = box.borderWidth || 1;
             var col = box.color || drawColor;
             var fill = _hexToRgba(col, box.fillOpacity != null ? box.fillOpacity : 0.10);
@@ -815,7 +857,23 @@
             box.el.style.border       = (isSel ? bw+1 : bw) + 'px ' + borderStyle + ' ' + col;
             box.bgEl.style.background = fill;
             if (box.measureStatsEl) box.measureStatsEl.style.display = 'none';
-            box.statsEl.textContent = '';
+            /* Pip+bar label — floats above the box, flips below if box is near chart top */
+            var pipSpan = Math.round(Math.abs(box.p2 - box.p1) / pipSize(_currentPair));
+            var barSpan = _countBars(box.t1, box.t2);
+            var minDim  = Math.min(w, h);
+            var fSize   = Math.max(11, Math.min(18, Math.floor(minDim / 5)));
+            box.statsEl.style.color    = col;
+            box.statsEl.style.fontSize = fSize + 'px';
+            box.statsEl.style.display  = (w > 60) ? '' : 'none';
+            box.statsEl.textContent    = pipSpan + ' pips  |  ' + barSpan + ' bars';
+            /* Flip below the box when near the chart top so the label stays on-screen */
+            if (top < 28) {
+                box.statsEl.style.bottom = ''; box.statsEl.style.top = '100%';
+                box.statsEl.style.marginBottom = ''; box.statsEl.style.marginTop = '3px';
+            } else {
+                box.statsEl.style.bottom = '100%'; box.statsEl.style.top = '';
+                box.statsEl.style.marginTop = ''; box.statsEl.style.marginBottom = '3px';
+            }
         }
     }
 
@@ -899,10 +957,10 @@
                     prev.style.borderColor  = ms.color;
                     prev.style.background   = _hexToRgba(drawColor, 0.05);
                     sl.style.display    = 'block';
-                    sl.style.color      = ms.color;
-                    sl.style.background = 'rgba(13,17,23,0.88)';
-                    sl.style.border     = '1px solid ' + _hexToRgba(ms.color, 0.35);
-                    sl.innerHTML = '<span style="font-weight:700">' + ms.label + '</span>';
+                    sl.style.color      = '#000';
+                    sl.style.background = '#ffd700';
+                    sl.style.border     = '1px solid #b8960a';
+                    sl.innerHTML = '<span style="font-size:11px;font-weight:700;display:block">' + ms.pips + ' pips &nbsp;|&nbsp; ' + ms.bars + ' bars</span><span style="font-size:10px">' + ms.label + '</span>';
                 } else {
                     sl.style.display = 'none';
                 }
@@ -1205,11 +1263,16 @@
     function updatePos(pos) {
         if (!pos.el || !chart || !S.candle) return;
 
-        var x1 = _timeToXExtrap(pos.t1), x2 = _timeToXExtrap(pos.t2);
+        var x1r = _timeToXExtrap(pos.t1), x2r = _timeToXExtrap(pos.t2);
         var chartEl = document.getElementById('tvlw-chart');
         var chartW  = chartEl ? chartEl.clientWidth - psWidth() : 700;
 
-        if (x1 == null || x2 == null) { pos.el.style.display = 'none'; return; }
+        if (x1r == null || x2r == null) { pos.el.style.display = 'none'; return; }
+        if ((x1r < 0 && x2r < 0) || (x1r > chartW && x2r > chartW)) {
+            pos.el.style.display = 'none'; return;
+        }
+        var x1 = Math.max(0, Math.min(chartW, x1r));
+        var x2 = Math.max(0, Math.min(chartW, x2r));
 
         var posLeft  = Math.min(x1, x2);
         var posWidth = Math.max(Math.abs(x2 - x1), 10);
@@ -2466,6 +2529,7 @@
         h1.addEventListener('mousedown', function(e) { _fibMousedown('p1', e); });
         h2.addEventListener('mousedown', function(e) { _fibMousedown('p2', e); });
 
+        delBtn.addEventListener('mousedown', function(e) { e.stopPropagation(); });
         delBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             var idx = _getIdx(); if (idx >= 0) delFib(idx);
@@ -2488,10 +2552,16 @@
         var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
         var chartW  = chartEl.clientWidth - psWidth();
 
-        var x1 = _timeToXExtrap(fib.t1);
-        var x2 = _timeToXExtrap(fib.t2);
-        if (x1 == null) x1 = 0;
-        if (x2 == null) x2 = chartW;
+        var x1r = _timeToXExtrap(fib.t1);
+        var x2r = _timeToXExtrap(fib.t2);
+        if (x1r == null || x2r == null) { fib.el.style.display = 'none'; return; }
+
+        /* Hide if both anchors are off the same side; clamp if only one is off-screen */
+        if ((x1r < 0 && x2r < 0) || (x1r > chartW && x2r > chartW)) {
+            fib.el.style.display = 'none'; return;
+        }
+        var x1 = Math.max(0, Math.min(chartW, x1r));
+        var x2 = Math.max(0, Math.min(chartW, x2r));
 
         var xLeft  = Math.min(x1, x2);
         var xRight = Math.max(x1, x2);
@@ -3285,6 +3355,7 @@
             _sigLine(sig.tp3, '#009944', 'TP3');
         }
 
+        _rebuildDetachedOverlays();
         requestAnimationFrame(function(){ updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines(); });
 
         /* Apply saved indicator visual settings after data loads */
@@ -3467,7 +3538,24 @@
         _hideDrawingSettings();
         if (!drawMode) { deselectDrawing(); }
         var el = document.getElementById('tvlw-chart');
-        if (el) el.style.cursor = drawMode ? 'crosshair' : 'default';
+        if (el) {
+            el.style.cursor = drawMode ? 'crosshair' : 'default';
+            el.classList.toggle('apex-draw-active', !!drawMode);
+        }
+        /* Inject once: while a new drawing is being placed, all existing drawing
+           hit-areas become transparent so mouse events reach the canvas cleanly. */
+        if (!document.getElementById('apex-draw-mode-style')) {
+            var s = document.createElement('style');
+            s.id = 'apex-draw-mode-style';
+            s.textContent =
+                '#tvlw-chart.apex-draw-active .apex-box-drag,' +
+                '#tvlw-chart.apex-draw-active .apex-box-drag > *,' +
+                '#tvlw-chart.apex-draw-active .apex-box-handle,' +
+                '#tvlw-chart.apex-draw-active .apex-box { cursor:crosshair !important; }' +
+                '#tvlw-chart.apex-draw-active .apex-box-drag,' +
+                '#tvlw-chart.apex-draw-active .apex-box-handle { pointer-events:none !important; }';
+            document.head.appendChild(s);
+        }
     };
 
     window._apexSetDrawColor = function(c) { drawColor = c || '#ffd700'; };
@@ -3561,18 +3649,69 @@
         circles = []; selectedCircle = -1; saveCircles();
     };
 
+    /* Re-attach any SVG/div overlay elements that were orphaned by a Dash DOM update.
+       Called before every updateAll* pass so drawings reappear without a full reload. */
+    function _rebuildDetachedOverlays() {
+        /* Trendlines + circles share the same SVG overlay */
+        if (trendlines.length > 0 || circles.length > 0) {
+            var svg = ensureTrendOverlay();
+            if (svg) {
+                trendlines.forEach(function(t) {
+                    if (!t.el || !t.el.parentNode) { buildTrendEl(t); }
+                });
+                circles.forEach(function(c) {
+                    if (!c.el || !c.el.parentNode) { buildCircleEl(c); }
+                });
+            }
+        }
+        /* Boxes */
+        if (boxes.length > 0) {
+            var bov = ensureBoxOverlay();
+            if (bov) {
+                boxes.forEach(function(b) {
+                    if (!b.el || !b.el.parentNode) { buildBoxEl(b); bov.appendChild(b.el); }
+                });
+            }
+        }
+        /* Positions */
+        if (positions.length > 0) {
+            var pov = ensurePosOverlay();
+            if (pov) {
+                positions.forEach(function(p) {
+                    if (!p.el || !p.el.parentNode) { buildPosEl(p); pov.appendChild(p.el); }
+                });
+            }
+        }
+        /* Fibs */
+        if (fibs.length > 0) {
+            var fov = ensureFibOverlay();
+            if (fov) {
+                fibs.forEach(function(f) {
+                    if (!f.el || !f.el.parentNode) { buildFibEl(f); }
+                });
+            }
+        }
+    }
+
     window._apexUpdateChart = function(data) {
         if (!data) return;
-        _currentPair   = data.pair   || '';
-        _currentTf     = data.tf     || '';
-        _currentRawTf  = data.raw_tf || data.tf || '';   /* raw TF for storage keys (matches Python) */
-        var pairTf   = _currentPair + '|' + _currentTf;
+        var newPair  = data.pair   || '';
+        var newTf    = data.tf     || '';
+        var newRawTf = data.raw_tf || data.tf || '';
+        var pairTf   = newPair + '|' + newTf;
         if (data.accountBalance) window._apexAccountBalance = data.accountBalance;
 
         if (chart && _lastPairTf !== null && pairTf !== _lastPairTf) {
+            /* Save using the OLD _currentPair key before switching — prevents drawings
+               from the previous pair contaminating the new pair's localStorage slot. */
             saveDrawings(); saveTrendlines(); saveBoxes(); savePos(); saveFibs(); saveCircles();
             destroy();
         }
+
+        /* Update state AFTER the conditional save so saves always use the correct old key. */
+        _currentPair  = newPair;
+        _currentTf    = newTf;
+        _currentRawTf = newRawTf;
 
         if (!chart) {
             if (!init()) {

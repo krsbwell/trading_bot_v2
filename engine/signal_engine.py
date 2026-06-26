@@ -8,6 +8,8 @@ from engine.indicators import ema, atr as calc_atr, cci, macd_histogram
 from engine.strategy_ema_cci_macd import (
     check_buy_signal, check_sell_signal, get_best_emas, get_stop_loss,
 )
+from engine.adaptive_params import adaptive_params
+from engine.wfo_optimizer import wfo_optimizer
 from engine.strategy_market_structure import (
     detect_pivots, classify_structure, detect_bos_choch, get_sr_zones, score_structure,
 )
@@ -94,8 +96,13 @@ class SignalEngine:
             pass
 
         # ── EMA + CCI + MACD ──────────────────────────────────────────────────
-        buy_score  = check_buy_signal(pair, df_h1, df_h4)
-        sell_score = check_sell_signal(pair, df_h1, df_h4)
+        # Merge WFO indicator periods (outer layer) with adaptive thresholds (inner layer).
+        # Adaptive keys win on any overlap, WFO provides CCI_PERIOD / MACD_* / min_score.
+        _wfo       = wfo_optimizer.get_params(pair)
+        _ap        = adaptive_params.get(pair)
+        _combined  = {**_wfo, **_ap}
+        buy_score  = check_buy_signal(pair, df_h1, df_h4, adaptive=_combined)
+        sell_score = check_sell_signal(pair, df_h1, df_h4, adaptive=_combined)
 
         if buy_score == sell_score == 0:
             # Diagnose why: check which direction H4 aligned with, then why that direction scored 0
@@ -193,7 +200,9 @@ class SignalEngine:
             _watch_sl = round(entry + _sl_dir * config.MIN_SL_PIPS * _pip_size, 5)
         _watch_tp = get_tp_levels(entry, _watch_sl, direction)
 
-        if final_score < config.MIN_CONFLUENCE_SCORE:
+        # Use WFO per-pair min_score when available, else fall back to global config
+        _min_score = _wfo.get("min_score", config.MIN_CONFLUENCE_SCORE)
+        if final_score < _min_score:
             status = "WATCHING" if final_score >= 50 else "SCANNING"
             logger.info("Signal %s scored %d — %s (no trade)", pair, final_score, status)
             _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],

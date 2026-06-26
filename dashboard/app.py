@@ -19,7 +19,7 @@ import config
 from dashboard import state
 from dashboard.panels import (
     signal_monitor_panel, open_trades_panel,
-    account_stats_bar, trade_log_drawer,
+    account_stats_bar, trade_log_drawer, learning_panel,
 )
 from dashboard.chart_builder_twlc import build_chart_data
 
@@ -268,6 +268,10 @@ app.layout = html.Div(
                                    "padding": "0.35rem 0.75rem", "cursor": "pointer"}),
                 html.Button("Signals", id="sig-quality-btn", n_clicks=0,
                             style={"background": "#21262d", "color": "#ffd700",
+                                   "border": "1px solid #30363d", "borderRadius": "4px",
+                                   "padding": "0.35rem 0.75rem", "cursor": "pointer"}),
+                html.Button("Learning", id="learning-btn", n_clicks=0,
+                            style={"background": "#21262d", "color": "#00ff88",
                                    "border": "1px solid #30363d", "borderRadius": "4px",
                                    "padding": "0.35rem 0.75rem", "cursor": "pointer"}),
                 html.Button("Trade Log", id="drawer-toggle-btn",
@@ -942,6 +946,54 @@ app.layout = html.Div(
             ],
         ),
         html.Div(id="sig-quality-backdrop", n_clicks=0,
+                 style={"display": "none", "position": "fixed", "top": 0, "left": 0,
+                        "width": "100%", "height": "100%",
+                        "background": "rgba(0,0,0,0.45)", "zIndex": 1999}),
+
+        # ── Learning panel (Adaptive / WFO / XGBoost) ────────────────────────
+        html.Div(
+            id="learning-panel",
+            style={"display": "none", "position": "fixed", "top": "60px",
+                   "left": "50%", "transform": "translateX(-50%)",
+                   "width": "750px", "maxHeight": "82vh", "overflowY": "auto",
+                   "background": "#161b22", "border": "1px solid #30363d",
+                   "borderRadius": "8px", "padding": "1.5rem", "zIndex": 2000,
+                   "boxShadow": "0 8px 32px rgba(0,0,0,0.6)"},
+            children=[
+                html.Div([
+                    html.H4("Learning Status", style={"color": "#00ff88", "margin": 0}),
+                    html.Button("×", id="learning-close-btn", n_clicks=0,
+                                style={"background": "transparent", "border": "none",
+                                       "color": "#8b949e", "cursor": "pointer",
+                                       "fontSize": "1.3rem", "marginLeft": "auto",
+                                       "padding": "0"}),
+                ], style={"display": "flex", "alignItems": "center",
+                           "marginBottom": "1rem"}),
+                dcc.Loading(type="circle", color="#00ff88",
+                            children=html.Div(id="learning-content")),
+                # Action buttons — static so their IDs exist at startup
+                html.Div([
+                    html.Button("Retrain Now", id="ml-retrain-btn", n_clicks=0,
+                                style={"background": "#003d1f", "color": "#00ff88",
+                                       "border": "1px solid #00ff88", "borderRadius": "4px",
+                                       "padding": "0.3rem 0.8rem", "cursor": "pointer",
+                                       "fontSize": "0.8rem", "fontWeight": 600}),
+                    html.Button("Seed from Backtest + Retrain", id="ml-seed-btn", n_clicks=0,
+                                style={"background": "#1a1000", "color": "#d4a017",
+                                       "border": "1px solid #d4a017", "borderRadius": "4px",
+                                       "padding": "0.3rem 0.8rem", "cursor": "pointer",
+                                       "fontSize": "0.8rem", "fontWeight": 600}),
+                    html.Button("Run WFO Now", id="ml-wfo-btn", n_clicks=0,
+                                style={"background": "#001a2e", "color": "#38b6ff",
+                                       "border": "1px solid #38b6ff", "borderRadius": "4px",
+                                       "padding": "0.3rem 0.8rem", "cursor": "pointer",
+                                       "fontSize": "0.8rem", "fontWeight": 600}),
+                ], style={"display": "flex", "gap": "0.5rem", "marginTop": "1rem"}),
+                html.Div(id="ml-action-status",
+                         style={"color": "#8b949e", "fontSize": "0.78rem", "marginTop": "0.4rem"}),
+            ],
+        ),
+        html.Div(id="learning-backdrop", n_clicks=0,
                  style={"display": "none", "position": "fixed", "top": 0, "left": 0,
                         "width": "100%", "height": "100%",
                         "background": "rgba(0,0,0,0.45)", "zIndex": 1999}),
@@ -2728,6 +2780,100 @@ def toggle_sig_quality_panel(open_n, close_n, backdrop_n, current_style):
     return _show, signal_quality_panel(analysis), {**_BACK_SHOW, "zIndex": 1999}
 
 
+# ── Learning panel show / hide + data load ───────────────────────────────────
+
+@app.callback(
+    Output("learning-panel",    "style"),
+    Output("learning-content",  "children"),
+    Output("learning-backdrop", "style"),
+    Input("learning-btn",          "n_clicks"),
+    Input("learning-close-btn",    "n_clicks"),
+    Input("learning-backdrop",     "n_clicks"),
+    State("learning-panel",        "style"),
+    prevent_initial_call=True,
+)
+def toggle_learning_panel(open_n, close_n, backdrop_n, current_style):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update, no_update, no_update
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    _show = {**(current_style or {}), "display": "block"}
+    _hide = {**(current_style or {}), "display": "none"}
+    if triggered != "learning-btn":
+        return _hide, no_update, {**_BACK_HIDE, "zIndex": 1999}
+    from engine.adaptive_params import adaptive_params
+    from engine.wfo_optimizer import wfo_optimizer
+    from learning.pattern_learner import PatternLearner
+    learner      = PatternLearner()
+    adaptive_sum = adaptive_params.summary()
+    wfo_sum      = wfo_optimizer.summary()
+    ml_stats_val = state.get_key("ml_stats")
+    importance   = learner.get_feature_importance()
+    calib_rows   = learner.calibration_data(n=20)
+    from learning.pattern_learner import _load_closed as _lc, LOG_PATH as _LP
+    _df          = _lc(_LP)
+    sample_count = len(_df) if _df is not None else 0
+    return _show, learning_panel(adaptive_sum, wfo_sum, ml_stats_val, importance,
+                                 calibration_rows=calib_rows, sample_count=sample_count), \
+           {**_BACK_SHOW, "zIndex": 1999}
+
+
+# ── Learning action buttons — Retrain Now / Seed from Backtest ────────────────
+
+@app.callback(
+    Output("ml-action-status", "children"),
+    Input("ml-retrain-btn",    "n_clicks"),
+    Input("ml-seed-btn",       "n_clicks"),
+    Input("ml-wfo-btn",        "n_clicks"),
+    prevent_initial_call=True,
+)
+def ml_action(retrain_n, seed_n, wfo_n):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    from learning.pattern_learner import PatternLearner
+    learner = PatternLearner()
+
+    if triggered == "ml-retrain-btn":
+        result = learner.force_train()
+        return result or "Retrain complete."
+
+    connector = state.get_key("forex_connector")
+    if connector is None:
+        return "Error: forex connector not available — start the bot first."
+
+    pairs = config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", [])
+
+    def _candles_fn(pair, gran, count):
+        return connector.get_candles(pair, gran, count)
+
+    if triggered == "ml-wfo-btn":
+        import threading
+        from engine.wfo_optimizer import wfo_optimizer
+        from alerts.telegram_alert import send_wfo_started, send_wfo_complete
+
+        send_wfo_started(pairs)
+
+        def _run_wfo():
+            wfo_optimizer.run_all_pairs(_candles_fn, pairs, market="forex")
+            send_wfo_complete(wfo_optimizer.summary())
+
+        threading.Thread(target=_run_wfo, daemon=True).start()
+        return f"WFO started for {len(pairs)} pair(s) — running in background. Telegram notification will follow when done."
+
+    # Seed from Backtest + Retrain
+    summary = learner.seed_from_backtest(pairs, _candles_fn, bars=2000, market="forex")
+    errs    = summary.get("errors", [])
+    msg     = (f"Seeded {summary['total_seeded']} trades from "
+               f"{summary['pairs_done']}/{len(pairs)} pairs. "
+               f"{summary['train_result']}")
+    if errs:
+        msg += f"  Errors: {'; '.join(errs[:3])}"
+    return msg
+
+
 # ── Backtest panel show / hide ────────────────────────────────────────────────
 
 _BACK_SHOW = {"display": "block", "position": "fixed", "top": 0, "left": 0,
@@ -3230,10 +3376,30 @@ def toggle_drawer(open_clicks, close_clicks, backdrop_n, visible):
     s = state.get()
     from engine.signal_audit import signal_frequency_by_week, watching_signal_stats
     back_style = {**_BACK_SHOW, "zIndex": 999} if new_vis else {**_BACK_HIDE, "zIndex": 999}
+
+    # If equity curve is empty (e.g. fresh restart), rebuild from closed trades on the fly
+    eq_curve = s.get("equity_curve", [])
+    if not eq_curve:
+        pt = s.get("paper_trader")
+        start_bal = getattr(pt, "_start_balance", 500.0) if pt else 500.0
+        closed = sorted(
+            [t for t in s.get("closed_trades", []) if t.get("close_time")],
+            key=lambda t: t["close_time"],
+        )
+        running = start_bal
+        for t in closed:
+            running = round(running + t.get("realised_pnl", 0), 2)
+            ct = t["close_time"]
+            try:
+                unix_ts = int(ct.timestamp()) if hasattr(ct, "timestamp") else int(ct)
+                eq_curve.append({"t": unix_ts, "balance": running, "nav": running})
+            except Exception:
+                pass
+
     return new_vis, trade_log_drawer(
         s.get("closed_trades", []), s.get("suggestions", []),
         s.get("ml_stats", {}), visible=new_vis,
-        equity_curve=s.get("equity_curve", []),
+        equity_curve=eq_curve,
         signal_freq=signal_frequency_by_week(),
         watching_counts=watching_signal_stats(),
     ), back_style

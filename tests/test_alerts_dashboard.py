@@ -168,7 +168,8 @@ class TestDashboardState:
 
     def test_update_signal_watching(self):
         from dashboard import state
-        state.update_signal("GBP_USD", 60, "short")
+        # Score 52: below MIN_CONFLUENCE_SCORE (55) but >= 50 → WATCHING
+        state.update_signal("GBP_USD", 52, "short")
         sig = state.get_key("signals", {}).get("GBP_USD", {})
         assert sig["status"] == "WATCHING"
 

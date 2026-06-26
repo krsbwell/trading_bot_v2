@@ -20,6 +20,8 @@ from connectors.alpaca_connector import AlpacaConnector
 from connectors.news_connector import is_news_blackout
 from connectors.forexfactory_connector import is_news_blackout as ff_is_news_blackout
 from engine.signal_engine import SignalEngine
+from engine.adaptive_params import adaptive_params
+from engine.wfo_optimizer import wfo_optimizer
 from trade.paper_trader import PaperTrader
 from trade.trade_manager import TradeManager
 from risk.risk_manager import (
@@ -178,7 +180,10 @@ def _process_pair(pair: str, market: str, engine) -> None:
     if signal and not signal.get("no_signal") and _pattern_learner:
         try:
             from learning.pattern_learner import FEATURES
+            from learning.data_collector import _get_session
             features = {f: (signal.get(f) or 0) for f in FEATURES}
+            # session is not in the signal dict — derive from current UTC hour
+            features["session"] = _get_session(datetime.now(timezone.utc))
             ml_prob = _pattern_learner.predict_win_prob(features)
             if ml_prob is not None:
                 signal["ml_win_prob"] = ml_prob
@@ -438,6 +443,7 @@ def _tick_paper_trades() -> None:
                         "Cooldown started for %s (trade %s closed, %dh cooldown)",
                         t["pair"], t["id"], config.TRADE_COOLDOWN_HOURS,
                     )
+                    adaptive_params.update(t["pair"], _paper_trader.closed_trades)
                 state.update(trade_cooldowns=cooldowns)
             if tg_enabled():
                 for t in newly_closed:
@@ -447,6 +453,35 @@ def _tick_paper_trades() -> None:
                         pass
         except Exception as exc:
             logger.error("Paper tick failed for %s: %s", pair, exc)
+
+
+def _backfill_equity_curve() -> None:
+    """Reconstruct equity history from closed trades on startup.
+    Called once before _refresh_account() so the full trade history is visible
+    in the dashboard immediately after restart rather than starting blank.
+    """
+    if not _paper_trader or not _paper_trader.closed_trades:
+        return
+    trades = sorted(
+        [t for t in _paper_trader.closed_trades if t.get("close_time")],
+        key=lambda t: t["close_time"],
+    )
+    if not trades:
+        return
+    balance = _paper_trader._start_balance
+    points = []
+    for t in trades:
+        balance = round(balance + t.get("realised_pnl", 0), 2)
+        ct = t["close_time"]
+        try:
+            unix_ts = int(ct.timestamp()) if hasattr(ct, "timestamp") else int(ct)
+        except Exception:
+            continue
+        points.append({"t": unix_ts, "balance": balance, "nav": balance})
+    if points:
+        state.update(equity_curve=points)
+        logger.info("Equity curve backfilled: %d historical points (%.2f → %.2f)",
+                    len(points), _paper_trader._start_balance, balance)
 
 
 def _refresh_account() -> None:
@@ -630,8 +665,9 @@ def main() -> None:
     if config.MODE == "paper":
         _paper_trader = PaperTrader(starting_balance=500.0)
         state.update(paper_trader=_paper_trader)   # expose to dashboard quick-trade
-        _sync_paper_state()   # push loaded trades into state["open_trades"] immediately
-        _refresh_account()    # push correct balance into state["account"] immediately
+        _sync_paper_state()        # push loaded trades into state["open_trades"] immediately
+        _backfill_equity_curve()   # reconstruct historical equity from closed trades
+        _refresh_account()         # push current balance + append latest equity point
         logger.info("Paper trader: balance $%.2f  open_trades=%d  closed=%d",
                     _paper_trader.balance, len(_paper_trader.open_trades),
                     len(_paper_trader.closed_trades))
@@ -713,6 +749,18 @@ def main() -> None:
     scheduler.add_job(on_candle_close, CronTrigger(minute=0), id="h1_close")
     # Between-close diagnostic scans — update dashboard state only, no trades
     scheduler.add_job(_diagnostic_scan, CronTrigger(minute="15,30,45"), id="diag_scan")
+    # Weekly WFO re-fit — Sunday 02:00 UTC, runs in background thread (non-blocking)
+    if getattr(config, "WFO_ENABLED", True) and _oanda_connector:
+        def _wfo_job():
+            threading.Thread(
+                target=wfo_optimizer.run_all_pairs,
+                args=(_oanda_connector.get_candles, config.FOREX_PAIRS),
+                kwargs={"market": "forex"},
+                daemon=True,
+                name="wfo-refit",
+            ).start()
+        scheduler.add_job(_wfo_job, CronTrigger(day_of_week="sun", hour=2, minute=0), id="wfo_refit")
+        logger.info("WFO weekly re-fit scheduled — Sundays 02:00 UTC")
     state.update(last_scan_time=datetime.now(timezone.utc))
     logger.info("Scheduler ready — H1 close on :00, diagnostics at :15/:30/:45")
     logger.info("Press Ctrl+C to stop.\n")

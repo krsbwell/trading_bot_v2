@@ -27,8 +27,82 @@ from engine.strategy_market_structure import (
 )
 from engine.strategy_price_action import detect_patterns, score_price_action
 from engine.confluence_scorer import score_signal
+from engine.indicators import cci as _cci_fn, macd_histogram as _macd_h_fn, atr as _atr_fn, ema as _ema_fn
 from risk.risk_manager import get_tp_levels, calculate_position_size
 from trade.paper_trader import PaperTrader
+
+
+_STRUCT_MAP = {"bullish": "uptrend", "bearish": "downtrend", "ranging": "ranging"}
+
+
+def _bt_session(dt) -> str:
+    h = dt.hour if hasattr(dt, "hour") else 12
+    if 13 <= h < 16: return "london_ny"
+    if  8 <= h < 13: return "london"
+    if 16 <= h < 21: return "new_york"
+    return "asian"
+
+
+def _bt_sig_features(
+    pair: str, direction: str, bar_time,
+    slice_h1: pd.DataFrame, slice_h4: pd.DataFrame,
+    ema_score: float, struct_score: float, pa_score: float, final_score: float,
+    structure: str, sr_zones: list, bos_ok: bool, patterns: list, entry: float,
+) -> dict:
+    """Compute the full ML feature set at signal time for seeding PatternLearner."""
+    try:
+        _cci   = float(_cci_fn(slice_h1["high"], slice_h1["low"], slice_h1["close"]).iloc[-1])
+    except Exception:
+        _cci = 0.0
+    try:
+        _macd  = float(_macd_h_fn(slice_h1["close"]).iloc[-1])
+    except Exception:
+        _macd = 0.0
+    try:
+        _atr_v = float(_atr_fn(slice_h1["high"], slice_h1["low"], slice_h1["close"]).iloc[-1])
+        _pip   = 0.01 if "JPY" in pair else 0.0001
+        _atr_p = _atr_v / _pip
+    except Exception:
+        _atr_p = 0.0
+
+    _last  = slice_h1.iloc[-1]
+    _rng   = _last["high"] - _last["low"]
+    _body  = abs(_last["close"] - _last["open"])
+    _cbr   = _body / _rng if _rng > 0 else 0.0
+    _uw    = (_last["high"] - max(_last["open"], _last["close"])) / _rng if _rng > 0 else 0.0
+    _lw    = (min(_last["open"], _last["close"]) - _last["low"]) / _rng if _rng > 0 else 0.0
+
+    try:
+        _h4_ema   = float(_ema_fn(slice_h4["close"], 20).iloc[-1])
+        _h4_close = float(slice_h4["close"].iloc[-1])
+        _h4_trend = "bull" if _h4_close > _h4_ema else "bear"
+    except Exception:
+        _h4_trend = "neutral"
+
+    _was_sr = any(z.get("low", 0) <= entry <= z.get("high", 0) for z in (sr_zones or []))
+
+    return {
+        "pair":                pair,
+        "direction":           direction,
+        "bar_time":            bar_time.isoformat() if hasattr(bar_time, "isoformat") else str(bar_time),
+        "confluence_score":    final_score,
+        "ema_score":           ema_score,
+        "structure_score":     struct_score,
+        "pa_score":            pa_score,
+        "cci_at_signal":       round(_cci,  4),
+        "macd_hist_at_signal": round(_macd, 6),
+        "atr_pips":            round(_atr_p, 2),
+        "candle_body_ratio":   round(_cbr, 4),
+        "upper_wick_ratio":    round(_uw,  4),
+        "lower_wick_ratio":    round(_lw,  4),
+        "h4_trend":            _h4_trend,
+        "d_trend":             "neutral",
+        "market_structure":    _STRUCT_MAP.get(structure, "ranging"),
+        "was_at_sr_zone":      int(_was_sr),
+        "bos_confirmed":       int(bos_ok),
+        "session":             _bt_session(bar_time),
+        "pattern_name":        "|".join(patterns),
+    }
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +117,7 @@ def run_backtest(
     starting_balance: float = 500.0,
     min_score: int = config.MIN_CONFLUENCE_SCORE,
     market: str = "forex",
+    adaptive: dict | None = None,
 ) -> dict:
     """
     Run a full backtest for one pair.
@@ -89,8 +164,8 @@ def run_backtest(
         if pt.get_open_trade(pair):
             continue
 
-        buy_score  = check_buy_signal(pair, slice_h1, slice_h4)
-        sell_score = check_sell_signal(pair, slice_h1, slice_h4)
+        buy_score  = check_buy_signal(pair, slice_h1, slice_h4, adaptive=adaptive)
+        sell_score = check_sell_signal(pair, slice_h1, slice_h4, adaptive=adaptive)
 
         if buy_score == sell_score == 0:
             continue
@@ -129,8 +204,15 @@ def run_backtest(
         if size <= 0:
             continue
 
+        sig_feat = _bt_sig_features(
+            pair, direction, bar_time,
+            slice_h1, slice_h4,
+            ema_score, struct_score, pa_score, final_score,
+            structure, sr_zones, bos_ok, patterns, entry,
+        )
         pt.open_trade(pair=pair, direction=direction, entry_price=entry,
-                      sl=stop_loss, tp_levels=tp_levels, size=size)
+                      sl=stop_loss, tp_levels=tp_levels, size=size,
+                      extra={"_sig": sig_feat})
 
         signal_log.append({
             "bar_idx":  i,
@@ -167,6 +249,18 @@ def run_backtest(
     except Exception:
         pass
 
+    # Build seed rows: closed trade signal features + outcome for PatternLearner seeding
+    seed_rows = []
+    for t in closed:
+        sig = t.get("_sig")
+        if not sig:
+            continue
+        seed_rows.append({
+            **sig,
+            "outcome":      "win" if t.get("realised_pnl", 0) > 0 else "loss",
+            "realised_pnl": round(t.get("realised_pnl", 0), 4),
+        })
+
     return {
         "pair":           pair,
         "bars":           len(df_h1),
@@ -180,6 +274,7 @@ def run_backtest(
         "trades":         closed,
         "equity_curve":   equity,
         "signal_log":     signal_log,
+        "seed_rows":      seed_rows,
     }
 
 

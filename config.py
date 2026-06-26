@@ -4,12 +4,12 @@ load_dotenv()
 
 MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 
-# Active trading pairs — 4500-bar backtest (2025-09-25 → 2026-06-18), BE disabled
-# USD_CAD: 56% win rate  $+100  — best performer, cleanest equity curve, 4.7% DD
-# AUD_USD: 38% win rate  $+44   — strong R:R, 8.4% DD
-# EUR_USD: 35% win rate  $+38   — consistent, low DD
-# GBP_USD: 38% win rate  $+14   — marginal but positive, 5.2% DD
-FOREX_PAIRS  = ["EUR_USD", "GBP_USD", "AUD_USD", "USD_CAD"]
+# Active trading pairs — signal_log live analysis (2026-06-25)
+# USD_CAD: 52% win rate  — best performer, confirmed by backtest and live data
+# GBP_USD: 33% win rate  — acceptable with R:R
+# EUR_USD: 27% win rate  — marginal, kept under review
+# AUD_USD: 12% win rate  — removed; unacceptable live performance
+FOREX_PAIRS  = ["EUR_USD", "GBP_USD", "USD_CAD"]
 
 # Pairs under monitoring — signals shown, NO trades opened
 # EUR_AUD: 37% win rate  $+34   — profitable but volatile equity curve, 6.5% DD
@@ -37,10 +37,10 @@ ALLOW_MULTIPLE_PER_PAIR    = False  # Allow multiple open positions for the same
 TRADE_COOLDOWN_HOURS       = 4      # Min hours after a pair's trade closes before re-entry
 LIMIT_ORDER_EXPIRY_CANDLES = 4      # Cancel unfilled limit orders after N candle closes (4 = 4h on H1)
 
-# Session filter — restrict signals to London + NY sessions (07:00–20:00 UTC)
-# Avoids low-liquidity Asian-session ranging conditions for momentum strategies.
+# Session filter — London + London/NY overlap only (07:00–16:00 UTC)
+# NY solo (16:00–21:00) and Asian (21:00–07:00) both show 23% WR — excluded.
 SESSION_START_UTC = 7    # 07:00 UTC — London open
-SESSION_END_UTC   = 20   # 20:00 UTC — NY close
+SESSION_END_UTC   = 16   # 16:00 UTC — end of London/NY overlap
 
 # ── Volatility gates ──────────────────────────────────────────────────────────
 ATR_MIN_PIPS = 5     # Skip signals when market is too quiet (ATR < 5 pips)
@@ -65,6 +65,20 @@ FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")   # Leave blank to disable
 
 EMA_TEST_PERIODS          = [20, 34, 50, 60, 75, 100, 110, 125, 150, 200, 250]
 EMA_REFIT_EVERY_N_CANDLES = 50
+
+# ── Walk-Forward Optimization ────────────────────────────────────────────────
+# Weekly grid-search over CCI period, MACD settings, and min_score using the
+# last WFO_TRAIN_BARS of live candle data. Runs in a background thread.
+WFO_ENABLED    = True   # Set False to disable the weekly re-fit entirely
+WFO_TRAIN_BARS = 720    # H1 bars used for fitting (~30 days of data)
+WFO_REFIT_DAYS = 7      # Days between re-fits per pair
+
+# ── Adaptive parameter tuning ─────────────────────────────────────────────────
+# Adjusts CCI threshold, EMA touch band, and MACD bar count per pair based on
+# recent win rate. See engine/adaptive_params.py for tier definitions.
+ADAPTIVE_PARAMS_ENABLED  = True   # Set False to lock all pairs at base thresholds
+ADAPTIVE_LOOKBACK_TRADES = 20     # How many recent closed trades to measure win rate from
+ADAPTIVE_REFIT_EVERY_N   = 5      # Minimum new trades before recalculating thresholds
 
 CCI_PERIOD  = 20
 MACD_FAST   = 12

@@ -117,8 +117,11 @@ class TestConfluenceScorer:
         boosted = score_signal(25, 35, 20, ml_win_prob=0.70)
         assert boosted >= base
 
-    def test_ml_suppress_returns_zero(self):
-        assert score_signal(25, 35, 20, ml_win_prob=0.35) == 0
+    def test_ml_suppress_reduces_score(self):
+        # Suppression is now a soft 0.70× penalty (not hard zero) for ml_win_prob < 0.35
+        base       = score_signal(25, 35, 20)
+        suppressed = score_signal(25, 35, 20, ml_win_prob=0.20)
+        assert suppressed < base
 
     def test_ml_boost_capped_at_100(self):
         assert score_signal(25, 45, 30, ml_win_prob=0.80) == 100

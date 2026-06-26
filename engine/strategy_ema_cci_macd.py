@@ -111,11 +111,12 @@ def _find_touch(
     atr_s: pd.Series,
     direction: str,
     lookback: int = 20,
+    band_mult: float = 0.25,
 ) -> Optional[int]:
     """
     Scan the last `lookback` candles for an EMA touch.
-    direction "long"  → look for low touching EMA from above (within 0.25×ATR)
-    direction "short" → look for high touching EMA from below (within 0.25×ATR)
+    direction "long"  → look for low touching EMA from above (within band_mult×ATR)
+    direction "short" → look for high touching EMA from below (within band_mult×ATR)
     Returns the index position in df (absolute), or None.
     """
     n = len(df)
@@ -128,7 +129,7 @@ def _find_touch(
         i = n - 1 - offset
         if i < 0 or np.isnan(ema_a[i]) or np.isnan(atr_a[i]):
             continue
-        band = 0.25 * atr_a[i]
+        band = band_mult * atr_a[i]
         if direction == "long"  and abs(lows[i]  - ema_a[i]) <= band:
             return i
         if direction == "short" and abs(highs[i] - ema_a[i]) <= band:
@@ -138,7 +139,8 @@ def _find_touch(
 
 # ── Signal checks ─────────────────────────────────────────────────────────────
 
-def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> float:
+def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
+                     adaptive: dict | None = None) -> float:
     """
     7-condition buy check. Returns 0–25 (proportional to conditions met).
 
@@ -146,15 +148,26 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> flo
       c1 — H1 close above short EMA (price in upward momentum zone)
       c2 — H4 close above short EMA (higher-TF alignment, NOT a hard gate)
       c3 — Recent EMA touch / bounce within lookback window (20 bars)
-      c4 — CCI was oversold at or near the touch (standard: < -60; trend-cont: < -20)
+      c4 — CCI was oversold at or near the touch (standard: < -60; trend-cont: < -threshold)
       c5 — CCI has recovered (> -30) — momentum turning
-      c6 — MACD histogram majority positive (≥2 of last 3 bars)
+      c6 — MACD histogram majority positive (≥macd_bars_needed of last 3 bars)
       c7 — MACD histogram is RISING (momentum building, not fading)
 
     All 7 are scored proportionally.
+    adaptive: dict from AdaptiveParams.get(pair) — adjusts cci_threshold,
+              touch_band_mult, and macd_bars_needed based on recent win rate.
     """
     if len(df_h1) < 50 or len(df_h4) < 50:
         return 0.0
+
+    ap               = adaptive or {}
+    cci_threshold    = ap.get("cci_threshold",    20)
+    touch_band_mult  = ap.get("touch_band_mult",  0.25)
+    macd_bars_needed = ap.get("macd_bars_needed", 1)
+    cci_period       = ap.get("CCI_PERIOD",       config.CCI_PERIOD)
+    macd_fast        = ap.get("MACD_FAST",        config.MACD_FAST)
+    macd_slow        = ap.get("MACD_SLOW",        config.MACD_SLOW)
+    macd_signal_p    = ap.get("MACD_SIGNAL",      config.MACD_SIGNAL)
 
     short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
     short_h4, _, _   = get_best_emas(pair, config.TIMEFRAMES["confirm"],  df_h4)
@@ -162,8 +175,8 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> flo
     short_ema_h1  = ema(df_h1["close"], short)
     short_ema_h4  = ema(df_h4["close"], short_h4)
     atr_h1        = atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
-    cci_h1        = cci(df_h1["high"], df_h1["low"], df_h1["close"], config.CCI_PERIOD)
-    _, _, macd_hist = macd_full(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
+    cci_h1        = cci(df_h1["high"], df_h1["low"], df_h1["close"], cci_period)
+    _, _, macd_hist = macd_full(df_h1["close"], macd_fast, macd_slow, macd_signal_p)
 
     close_h1 = df_h1["close"].iloc[-1]
     close_h4 = df_h4["close"].iloc[-1]
@@ -178,7 +191,8 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> flo
                                macd_hist_val=float(macd_hist.iloc[-1]))
         return 0.0   # H4 counter-trend — skip entirely
 
-    c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "long", lookback=20)
+    c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "long",
+                         lookback=20, band_mult=touch_band_mult)
     c3 = c3_idx is not None
 
     c4 = c5 = c6 = c7 = False
@@ -186,13 +200,13 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> flo
     if c3:
         cci_win = cci_h1.iloc[max(0, c3_idx - 1):c3_idx + 2]
         cci_at_touch_val = float(cci_win.min())
-        # CCI must be below -20 at touch (trend-continuation threshold)
-        c4 = cci_at_touch_val < -20
+        # CCI must be below -cci_threshold at touch (adaptive: tighter when win rate is low)
+        c4 = cci_at_touch_val < -cci_threshold
         c5 = cci_h1.iloc[-1] > -30
-        # MACD: any 1 of last 3 bars positive (loosened from majority 2-of-3)
+        # MACD: require macd_bars_needed of last 3 bars positive
         if len(macd_hist) >= 3:
             last3 = macd_hist.iloc[-3:]
-            c6 = bool((last3 > 0).sum() >= 1)
+            c6 = bool((last3 > 0).sum() >= macd_bars_needed)
         else:
             c6 = bool(macd_hist.iloc[-1] > 0)
         # MACD momentum: histogram is rising (not just positive but building)
@@ -201,8 +215,12 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> flo
     # c2 is a hard gate (already returned 0 if False) — score remaining 6 conditions
     passed = sum([c1, c3, c4, c5, c6, c7])
     score  = round(25 * passed / 6)
-    logger.debug("BUY %s  c1=%s c2(H4gate)=True c3=%s c4=%s(cci_touch=%.1f) c5=%s c6=%s c7=%s → %d",
-                 pair, c1, c3, c4, cci_at_touch_val or 0, c5, c6, c7, score)
+    logger.debug(
+        "BUY %s  c1=%s c2(H4gate)=True c3=%s c4=%s(cci_touch=%.1f,thr=-%d) "
+        "c5=%s c6=%s(macd≥%d) c7=%s → %d",
+        pair, c1, c3, c4, cci_at_touch_val or 0, cci_threshold,
+        c5, c6, macd_bars_needed, c7, score,
+    )
 
     # Attach diagnostic payload for the audit system (consumed by signal_engine)
     _buy_diag[pair] = dict(
@@ -214,7 +232,8 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> flo
     return float(score)
 
 
-def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> float:
+def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
+                      adaptive: dict | None = None) -> float:
     """
     7-condition sell check. Returns 0–25. Mirror of check_buy_signal.
     H4 is a HARD GATE — returns 0.0 immediately if H4 is counter-trend (bull).
@@ -223,13 +242,24 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> fl
       c1 — H1 close below short EMA
       c2 — H4 close below short EMA (HARD GATE — must pass or signal discarded)
       c3 — Recent EMA touch from below within 20 bars
-      c4 — CCI overbought at touch (> +20)
+      c4 — CCI overbought at touch (> +cci_threshold)
       c5 — CCI has fallen back (< +30)
-      c6 — MACD histogram majority negative (≥2 of last 3 bars)
+      c6 — MACD histogram majority negative (≥macd_bars_needed of last 3 bars)
       c7 — MACD histogram is FALLING (momentum building to downside)
+    adaptive: dict from AdaptiveParams.get(pair) — adjusts cci_threshold,
+              touch_band_mult, and macd_bars_needed based on recent win rate.
     """
     if len(df_h1) < 50 or len(df_h4) < 50:
         return 0.0
+
+    ap               = adaptive or {}
+    cci_threshold    = ap.get("cci_threshold",    20)
+    touch_band_mult  = ap.get("touch_band_mult",  0.25)
+    macd_bars_needed = ap.get("macd_bars_needed", 1)
+    cci_period       = ap.get("CCI_PERIOD",       config.CCI_PERIOD)
+    macd_fast        = ap.get("MACD_FAST",        config.MACD_FAST)
+    macd_slow        = ap.get("MACD_SLOW",        config.MACD_SLOW)
+    macd_signal_p    = ap.get("MACD_SIGNAL",      config.MACD_SIGNAL)
 
     short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
     short_h4, _, _   = get_best_emas(pair, config.TIMEFRAMES["confirm"],  df_h4)
@@ -237,8 +267,8 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> fl
     short_ema_h1  = ema(df_h1["close"], short)
     short_ema_h4  = ema(df_h4["close"], short_h4)
     atr_h1        = atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
-    cci_h1        = cci(df_h1["high"], df_h1["low"], df_h1["close"], config.CCI_PERIOD)
-    _, _, macd_hist = macd_full(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
+    cci_h1        = cci(df_h1["high"], df_h1["low"], df_h1["close"], cci_period)
+    _, _, macd_hist = macd_full(df_h1["close"], macd_fast, macd_slow, macd_signal_p)
 
     close_h1 = df_h1["close"].iloc[-1]
     close_h4 = df_h4["close"].iloc[-1]
@@ -253,7 +283,8 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> fl
                                 macd_hist_val=float(macd_hist.iloc[-1]))
         return 0.0   # H4 counter-trend — skip entirely
 
-    c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "short", lookback=20)
+    c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "short",
+                         lookback=20, band_mult=touch_band_mult)
     c3 = c3_idx is not None
 
     c4 = c5 = c6 = c7 = False
@@ -261,13 +292,13 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> fl
     if c3:
         cci_win = cci_h1.iloc[max(0, c3_idx - 1):c3_idx + 2]
         cci_at_touch_val = float(cci_win.max())
-        # CCI must be above +20 at touch (trend-continuation threshold)
-        c4 = cci_at_touch_val > 20
+        # CCI must be above +cci_threshold at touch (adaptive: tighter when win rate is low)
+        c4 = cci_at_touch_val > cci_threshold
         c5 = cci_h1.iloc[-1] < 30
-        # MACD: any 1 of last 3 bars negative (loosened from majority 2-of-3)
+        # MACD: require macd_bars_needed of last 3 bars negative
         if len(macd_hist) >= 3:
             last3 = macd_hist.iloc[-3:]
-            c6 = bool((last3 < 0).sum() >= 1)
+            c6 = bool((last3 < 0).sum() >= macd_bars_needed)
         else:
             c6 = bool(macd_hist.iloc[-1] < 0)
         # MACD momentum: histogram is falling (building bearish momentum)
@@ -276,8 +307,12 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> fl
     # c2 is a hard gate (already returned 0 if False) — score remaining 6 conditions
     passed = sum([c1, c3, c4, c5, c6, c7])
     score  = round(25 * passed / 6)
-    logger.debug("SELL %s  c1=%s c2(H4gate)=True c3=%s c4=%s(cci_touch=%.1f) c5=%s c6=%s c7=%s → %d",
-                 pair, c1, c3, c4, cci_at_touch_val or 0, c5, c6, c7, score)
+    logger.debug(
+        "SELL %s  c1=%s c2(H4gate)=True c3=%s c4=%s(cci_touch=%.1f,thr=+%d) "
+        "c5=%s c6=%s(macd≥%d) c7=%s → %d",
+        pair, c1, c3, c4, cci_at_touch_val or 0, cci_threshold,
+        c5, c6, macd_bars_needed, c7, score,
+    )
 
     _sell_diag[pair] = dict(
         c1=c1, c2=True, c3=c3, c4=c4, c5=c5, c6=c6, c7=c7,
