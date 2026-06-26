@@ -69,6 +69,38 @@ class OandaConnector:
             logger.debug("get_current_quote %s: %s", instrument, exc)
             return {"bid": 0.0, "ask": 0.0, "mid": 0.0, "spread_pips": 0.0}
 
+    # ── Real-time price stream ────────────────────────────────────────────────
+
+    def stream_prices(self, instruments: list[str], callback) -> None:
+        """
+        Stream real-time bid/ask ticks from OANDA for the given instruments.
+
+        Calls ``callback(instrument, bid, ask)`` for every PRICE message.
+        HEARTBEAT messages are silently skipped.
+
+        This method **blocks** — run it in a daemon thread.
+        Raises on connection error so the caller can reconnect.
+
+        instruments : list of OANDA format strings, e.g. ["EUR_USD", "GBP_USD"]
+        callback    : callable(instrument: str, bid: float, ask: float)
+        """
+        params = {"instruments": ",".join(instruments), "snapshot": "True"}
+        req = oanda_pricing.PricingStream(accountID=self.account_id, params=params)
+        for msg in self.client.request(req):
+            if msg.get("type") != "PRICE":
+                continue
+            instrument = msg.get("instrument", "")
+            asks = msg.get("asks", [])
+            bids = msg.get("bids", [])
+            if not asks or not bids:
+                continue
+            try:
+                ask = float(asks[0]["price"])
+                bid = float(bids[0]["price"])
+                callback(instrument, bid, ask)
+            except (KeyError, ValueError, TypeError):
+                continue
+
     # ── Candles ───────────────────────────────────────────────────────────────
 
     def get_candles(self, instrument: str, granularity: str, count: int) -> pd.DataFrame:

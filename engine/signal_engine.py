@@ -13,6 +13,8 @@ from engine.strategy_market_structure import (
 )
 from engine.strategy_price_action import detect_patterns, score_price_action
 from engine.confluence_scorer import score_signal
+from engine.signal_audit import log_signal as _audit
+from engine.strategy_ema_cci_macd import get_last_diag
 from risk.risk_manager import get_tp_levels
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ class SignalEngine:
         pair: str,
         market: str,
         ml_win_prob: Optional[float] = None,
+        no_audit: bool = False,
     ) -> Optional[dict]:
         """
         Run the full signal pipeline for one pair.
@@ -49,6 +52,9 @@ class SignalEngine:
         Returns a signal dict when score >= MIN_CONFLUENCE_SCORE, else None.
         Signals scoring 50–69 are logged but return None (no trade fired).
         """
+        # Suppress audit writes for diagnostic-only calls (e.g. _diagnostic_scan in main.py)
+        _do_audit = (lambda **kw: None) if no_audit else _audit
+
         # Fetch primary (H1) and confirmation (H4) candles
         # 250 candles gives the EMA auto-fit 200 candles + extra buffer
         try:
@@ -92,7 +98,20 @@ class SignalEngine:
         sell_score = check_sell_signal(pair, df_h1, df_h4)
 
         if buy_score == sell_score == 0:
-            # Return a minimal diagnostic signal so the dashboard can show why
+            # Diagnose why: check which direction H4 aligned with, then why that direction scored 0
+            _buy_d  = get_last_diag(pair, "long")
+            _sell_d = get_last_diag(pair, "short")
+            if h4_trend == "bull":
+                _reject = "NO_TOUCH" if not _buy_d.get("c3") else "CONDITIONS_WEAK"
+            elif h4_trend == "bear":
+                _reject = "NO_TOUCH" if not _sell_d.get("c3") else "CONDITIONS_WEAK"
+            else:
+                _reject = "H4_NEUTRAL"
+            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+                   direction="—", ema_score=0, structure_score=0,
+                   pa_score=0, confluence_score=0,
+                   h4_trend=h4_trend, d_trend=d_trend,
+                   result="NO_SIGNAL", reject_reason=_reject)
             return {
                 "pair":          pair,
                 "market":        market,
@@ -107,6 +126,7 @@ class SignalEngine:
                 "d_trend":       d_trend,
                 "no_signal":     True,
                 "watching":      False,
+                "reject_reason": _reject,
             }
 
         if buy_score >= sell_score:
@@ -135,19 +155,61 @@ class SignalEngine:
         # ── Confluence ────────────────────────────────────────────────────────
         final_score = score_signal(ema_score, struct_score, pa_score, ml_win_prob)
 
+        # ── Early ATR computation (needed for volatility gate) ────────────────
+        _atr_series = calc_atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
+        _atr_val    = float(_atr_series.iloc[-1])
+        _pip_size   = 0.01 if "JPY" in pair.upper() else 0.0001
+        _atr_pips   = _atr_val / _pip_size
+
         logger.info(
-            "Signal %s %s dir=%s score=%d (EMA=%.0f Struct=%.0f PA=%.0f H4=%s D=%s)",
+            "Signal %s %s dir=%s score=%d (EMA=%.0f Struct=%.0f PA=%.0f H4=%s D=%s ATR=%.1f pips)",
             pair, market, direction, final_score,
-            ema_score, struct_score, pa_score, h4_trend, d_trend,
+            ema_score, struct_score, pa_score, h4_trend, d_trend, _atr_pips,
         )
 
+        # Fetch condition diagnostics set by check_buy/sell_signal
+        _diag = get_last_diag(pair, direction)
+
         if final_score < 35:
+            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+                   direction=direction,
+                   ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
+                   confluence_score=final_score,
+                   c1=_diag.get("c1"), c2_h4=_diag.get("c2"), c3_touch=_diag.get("c3"),
+                   c4_cci_at_touch=_diag.get("c4"), c5_cci_recovery=_diag.get("c5"),
+                   c6_macd=_diag.get("c6"), c7_macd_momentum=_diag.get("c7"),
+                   cci_at_touch_val=_diag.get("cci_at_touch_val"),
+                   cci_current=_diag.get("cci_current"),
+                   macd_hist_val=_diag.get("macd_hist_val"),
+                   h4_trend=h4_trend, d_trend=d_trend,
+                   result="NO_SIGNAL", reject_reason=f"Score {final_score} < 35 discard threshold")
             return None
+
+        # ── Compute SL/TP early — needed for chart overlay on WATCHING signals too ─
+        _watch_sl = get_stop_loss(pair, df_h1, direction)
+        _watch_sl_pips = abs(entry - _watch_sl) / _pip_size
+        if _watch_sl_pips < config.MIN_SL_PIPS:
+            _sl_dir  = -1 if direction == "long" else 1
+            _watch_sl = round(entry + _sl_dir * config.MIN_SL_PIPS * _pip_size, 5)
+        _watch_tp = get_tp_levels(entry, _watch_sl, direction)
 
         if final_score < config.MIN_CONFLUENCE_SCORE:
             status = "WATCHING" if final_score >= 50 else "SCANNING"
             logger.info("Signal %s scored %d — %s (no trade)", pair, final_score, status)
-            # Return a partial signal so the dashboard shows score + direction
+            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+                   direction=direction,
+                   ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
+                   confluence_score=final_score,
+                   c1=_diag.get("c1"), c2_h4=_diag.get("c2"), c3_touch=_diag.get("c3"),
+                   c4_cci_at_touch=_diag.get("c4"), c5_cci_recovery=_diag.get("c5"),
+                   c6_macd=_diag.get("c6"), c7_macd_momentum=_diag.get("c7"),
+                   cci_at_touch_val=_diag.get("cci_at_touch_val"),
+                   cci_current=_diag.get("cci_current"),
+                   macd_hist_val=_diag.get("macd_hist_val"),
+                   h4_trend=h4_trend, d_trend=d_trend,
+                   result=status,
+                   reject_reason=f"Score {final_score} < MIN_CONFLUENCE_SCORE {config.MIN_CONFLUENCE_SCORE}")
+            # Return partial signal — SL/TP included so chart overlay shows full setup
             return {
                 "pair":             pair,
                 "market":           market,
@@ -158,8 +220,8 @@ class SignalEngine:
                 "structure_score":  struct_score,
                 "pa_score":         pa_score,
                 "entry":            float(df_h1["close"].iloc[-1]),
-                "stop_loss":        None,
-                "tp_levels":        None,
+                "stop_loss":        _watch_sl,
+                "tp_levels":        _watch_tp,
                 "patterns":         patterns,
                 "market_structure": structure,
                 "bos_confirmed":    bos_ok,
@@ -169,14 +231,69 @@ class SignalEngine:
                 "watching":         True,
             }
 
+        # ── ATR volatility gates ──────────────────────────────────────────────
+        if _atr_pips < config.ATR_MIN_PIPS:
+            reason = f"ATR_TOO_LOW: {_atr_pips:.1f} pips < min {config.ATR_MIN_PIPS}"
+            logger.info("ATR gate blocked %s %s — %s", pair, direction, reason)
+            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+                   direction=direction,
+                   ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
+                   confluence_score=final_score,
+                   h4_trend=h4_trend, d_trend=d_trend,
+                   result="BLOCKED", reject_reason=reason)
+            return {
+                "pair": pair, "market": market, "direction": direction,
+                "timeframe": config.TIMEFRAMES["primary"],
+                "score": final_score, "ema_score": ema_score,
+                "structure_score": struct_score, "pa_score": pa_score,
+                "entry": float(df_h1["close"].iloc[-1]),
+                "stop_loss": None, "tp_levels": None, "patterns": [],
+                "h4_gate": h4_gate_info, "h4_trend": h4_trend, "d_trend": d_trend,
+                "watching": True, "gate_blocked": "ATR_TOO_LOW",
+            }
+
+        if _atr_pips > config.ATR_MAX_PIPS:
+            reason = f"ATR_TOO_HIGH: {_atr_pips:.1f} pips > max {config.ATR_MAX_PIPS}"
+            logger.info("ATR gate blocked %s %s — %s", pair, direction, reason)
+            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+                   direction=direction,
+                   ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
+                   confluence_score=final_score,
+                   h4_trend=h4_trend, d_trend=d_trend,
+                   result="BLOCKED", reject_reason=reason)
+            return {
+                "pair": pair, "market": market, "direction": direction,
+                "timeframe": config.TIMEFRAMES["primary"],
+                "score": final_score, "ema_score": ema_score,
+                "structure_score": struct_score, "pa_score": pa_score,
+                "entry": float(df_h1["close"].iloc[-1]),
+                "stop_loss": None, "tp_levels": None, "patterns": [],
+                "h4_gate": h4_gate_info, "h4_trend": h4_trend, "d_trend": d_trend,
+                "watching": True, "gate_blocked": "ATR_TOO_HIGH",
+            }
+
+        # ── Audit: triggered signal ───────────────────────────────────────────
+        _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+               direction=direction,
+               ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
+               confluence_score=final_score,
+               c1=_diag.get("c1"), c2_h4=_diag.get("c2"), c3_touch=_diag.get("c3"),
+               c4_cci_at_touch=_diag.get("c4"), c5_cci_recovery=_diag.get("c5"),
+               c6_macd=_diag.get("c6"),
+               cci_at_touch_val=_diag.get("cci_at_touch_val"),
+               cci_current=_diag.get("cci_current"),
+               macd_hist_val=_diag.get("macd_hist_val"),
+               h4_trend=h4_trend, d_trend=d_trend,
+               result="TRIGGERED")
+
         # ── Build full signal dict ────────────────────────────────────────────
-        stop_loss = get_stop_loss(pair, df_h1, direction)
-        tp_levels = get_tp_levels(entry, stop_loss, direction)
+        # SL/TP already computed above (shared with WATCHING path)
+        stop_loss = _watch_sl
+        tp_levels = _watch_tp
 
         # Indicator values for the learning engine log
         cci_s    = cci(df_h1["high"], df_h1["low"], df_h1["close"], config.CCI_PERIOD)
         mhist    = macd_histogram(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
-        atr_s    = calc_atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
         c        = df_h1.iloc[-1]
         cr       = c["high"] - c["low"]
 
@@ -209,6 +326,7 @@ class SignalEngine:
             "candle_body_ratio":   abs(c["close"] - c["open"]) / cr if cr > 0 else 0,
             "upper_wick_ratio":    (c["high"] - max(c["open"], c["close"])) / cr if cr > 0 else 0,
             "lower_wick_ratio":    (min(c["open"], c["close"]) - c["low"]) / cr if cr > 0 else 0,
-            "atr":                 float(atr_s.iloc[-1]),
+            "atr":                 _atr_val,
+            "atr_pips":            _atr_pips,
             "sr_zones":            sr_zones,
         }

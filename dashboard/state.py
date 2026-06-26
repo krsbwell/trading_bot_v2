@@ -5,6 +5,7 @@ The bot writes to this store via update() / set_pending_alert().
 The dashboard reads from it inside every callback.
 """
 import threading
+from datetime import datetime, timezone
 from typing import Any
 
 import config
@@ -45,6 +46,7 @@ _state: dict = {
     "alert_countdown":  0,
     "alert_confirmed":  False,
     "alert_cancelled":  False,
+    "missed_signals":   [],     # signals that expired without user interaction
 
     # ── Chart ─────────────────────────────────────────────────────────────────
     "chart_pair": config.FOREX_PAIRS[0],
@@ -68,6 +70,9 @@ _state: dict = {
 
     # ── Paper trader reference (for dashboard order placement) ───────────────
     "paper_trader": None,
+
+    # ── Cooldown tracking: pair → datetime of last trade close ───────────────
+    "trade_cooldowns": {},
 
     # ── Learning ──────────────────────────────────────────────────────────────
     "suggestions": [],
@@ -96,9 +101,10 @@ def update(**kwargs) -> None:
 
 def update_signal(pair: str, score: int, direction: str,
                   timeframe: str = "H1") -> None:
-    status = ("SIGNAL"   if score >= config.MIN_CONFLUENCE_SCORE else
-              "WATCHING" if score >= 50 else
-              "SCANNING" if score >= 35 else "NEUTRAL")
+    _threshold = get_key("min_score", config.MIN_CONFLUENCE_SCORE)
+    status = ("SIGNAL"   if score >= _threshold else
+              "WATCHING" if score >= 50          else
+              "SCANNING" if score >= 35          else "NEUTRAL")
     with _lock:
         _state["signals"][pair] = {
             "score":     score,
@@ -116,8 +122,14 @@ def set_pending_alert(signal: dict) -> None:
         _state["alert_cancelled"] = False
 
 
-def clear_alert() -> None:
+def clear_alert(expired: bool = False) -> None:
+    """Clear the active alert. If expired=True, save it to missed_signals."""
     with _lock:
+        if expired and _state.get("pending_alert"):
+            missed = _state.setdefault("missed_signals", [])
+            import time as _t
+            missed.append({**_state["pending_alert"], "_missed_at": int(_t.time())})
+            _state["missed_signals"] = missed[-10:]   # keep last 10 only
         _state["pending_alert"]   = None
         _state["alert_countdown"] = 0
 
@@ -144,6 +156,7 @@ def append_equity(balance: float, nav: float) -> None:
 def update_signal_detail(pair: str, detail: dict) -> None:
     """Store the full signal dict for a pair (used for chart overlays)."""
     with _lock:
+        detail["_stored_at"] = datetime.now(timezone.utc)
         _state["signal_details"][pair] = detail
 
 

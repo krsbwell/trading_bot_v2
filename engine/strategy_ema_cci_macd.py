@@ -5,12 +5,24 @@ import numpy as np
 import pandas as pd
 
 import config
-from engine.indicators import ema, atr, cci, macd_histogram
+from engine.indicators import ema, atr, cci, macd_full
 
 logger = logging.getLogger(__name__)
 
 # _cache[pair][timeframe] = (short_period, mid_period, long_period, last_fit_candle_count)
 _cache: dict = {}
+
+# Latest per-pair condition diagnostics — written by check_buy/sell_signal,
+# read by signal_engine to pass to the audit logger.
+_buy_diag:  dict = {}
+_sell_diag: dict = {}
+
+
+def get_last_diag(pair: str, direction: str) -> dict:
+    """Return the diagnostic payload from the last buy or sell evaluation for pair."""
+    if direction == "long":
+        return dict(_buy_diag.get(pair, {}))
+    return dict(_sell_diag.get(pair, {}))
 
 def _get_pip(pair: str) -> float:
     """1 pip = 0.01 for JPY pairs, 0.0001 for all others."""
@@ -98,12 +110,12 @@ def _find_touch(
     ema_s: pd.Series,
     atr_s: pd.Series,
     direction: str,
-    lookback: int = 12,
+    lookback: int = 20,
 ) -> Optional[int]:
     """
     Scan the last `lookback` candles for an EMA touch.
-    direction "long"  → look for low touching EMA from above (within 0.2×ATR)
-    direction "short" → look for high touching EMA from below (within 0.2×ATR)
+    direction "long"  → look for low touching EMA from above (within 0.25×ATR)
+    direction "short" → look for high touching EMA from below (within 0.25×ATR)
     Returns the index position in df (absolute), or None.
     """
     n = len(df)
@@ -116,7 +128,7 @@ def _find_touch(
         i = n - 1 - offset
         if i < 0 or np.isnan(ema_a[i]) or np.isnan(atr_a[i]):
             continue
-        band = 0.2 * atr_a[i]
+        band = 0.25 * atr_a[i]
         if direction == "long"  and abs(lows[i]  - ema_a[i]) <= band:
             return i
         if direction == "short" and abs(highs[i] - ema_a[i]) <= band:
@@ -128,87 +140,151 @@ def _find_touch(
 
 def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> float:
     """
-    6-condition buy check. Returns 0–25 (proportional to conditions met).
+    7-condition buy check. Returns 0–25 (proportional to conditions met).
 
     Conditions:
       c1 — H1 close above short EMA (price in upward momentum zone)
       c2 — H4 close above short EMA (higher-TF alignment, NOT a hard gate)
-      c3 — Recent EMA touch / bounce within lookback window
-      c4 — CCI was oversold (< -60) at or near the touch
+      c3 — Recent EMA touch / bounce within lookback window (20 bars)
+      c4 — CCI was oversold at or near the touch (standard: < -60; trend-cont: < -20)
       c5 — CCI has recovered (> -30) — momentum turning
-      c6 — MACD histogram positive in the last 3 bars
+      c6 — MACD histogram majority positive (≥2 of last 3 bars)
+      c7 — MACD histogram is RISING (momentum building, not fading)
 
-    All 6 are scored proportionally — H4 misalignment costs ~4 points, not all 25.
+    All 7 are scored proportionally.
     """
     if len(df_h1) < 50 or len(df_h4) < 50:
         return 0.0
 
     short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
+    short_h4, _, _   = get_best_emas(pair, config.TIMEFRAMES["confirm"],  df_h4)
 
-    short_ema_h1 = ema(df_h1["close"], short)
-    short_ema_h4 = ema(df_h4["close"], short)
-    atr_h1       = atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
-    cci_h1       = cci(df_h1["high"], df_h1["low"], df_h1["close"], config.CCI_PERIOD)
-    macd_hist    = macd_histogram(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
+    short_ema_h1  = ema(df_h1["close"], short)
+    short_ema_h4  = ema(df_h4["close"], short_h4)
+    atr_h1        = atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
+    cci_h1        = cci(df_h1["high"], df_h1["low"], df_h1["close"], config.CCI_PERIOD)
+    _, _, macd_hist = macd_full(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
 
     close_h1 = df_h1["close"].iloc[-1]
     close_h4 = df_h4["close"].iloc[-1]
 
     c1 = close_h1 > short_ema_h1.iloc[-1]
-    c2 = close_h4 > short_ema_h4.iloc[-1]   # H4 alignment — scored, NOT a hard gate
+    c2 = close_h4 > short_ema_h4.iloc[-1]   # H4 trend alignment
+    # ── H4 gate: hard-block when H4_GATE_BLOCKING=True, soft-score when False ─
+    if not c2 and config.H4_GATE_BLOCKING:
+        _buy_diag[pair] = dict(c1=c1, c2=False, c3=False, c4=False, c5=False,
+                               c6=False, c7=False, cci_at_touch_val=None,
+                               cci_current=float(cci_h1.iloc[-1]),
+                               macd_hist_val=float(macd_hist.iloc[-1]))
+        return 0.0   # H4 counter-trend — skip entirely
+
     c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "long", lookback=20)
     c3 = c3_idx is not None
 
-    c4 = c5 = c6 = False
+    c4 = c5 = c6 = c7 = False
+    cci_at_touch_val = None
     if c3:
         cci_win = cci_h1.iloc[max(0, c3_idx - 1):c3_idx + 2]
-        c4 = float(cci_win.min()) < -60          # widened from -80
+        cci_at_touch_val = float(cci_win.min())
+        # CCI must be below -20 at touch (trend-continuation threshold)
+        c4 = cci_at_touch_val < -20
         c5 = cci_h1.iloc[-1] > -30
-        # MACD: positive in any of last 3 bars (tolerates brief dips)
-        c6 = bool(macd_hist.iloc[-3:].max() > 0) if len(macd_hist) >= 3 else bool(macd_hist.iloc[-1] > 0)
+        # MACD: any 1 of last 3 bars positive (loosened from majority 2-of-3)
+        if len(macd_hist) >= 3:
+            last3 = macd_hist.iloc[-3:]
+            c6 = bool((last3 > 0).sum() >= 1)
+        else:
+            c6 = bool(macd_hist.iloc[-1] > 0)
+        # MACD momentum: histogram is rising (not just positive but building)
+        c7 = len(macd_hist) >= 2 and float(macd_hist.iloc[-1]) > float(macd_hist.iloc[-2])
 
-    passed = sum([c1, c2, c3, c4, c5, c6])
+    # c2 is a hard gate (already returned 0 if False) — score remaining 6 conditions
+    passed = sum([c1, c3, c4, c5, c6, c7])
     score  = round(25 * passed / 6)
-    logger.debug("BUY %s  c1=%s c2(H4)=%s c3=%s c4=%s c5=%s c6=%s → %d",
-                 pair, c1, c2, c3, c4, c5, c6, score)
+    logger.debug("BUY %s  c1=%s c2(H4gate)=True c3=%s c4=%s(cci_touch=%.1f) c5=%s c6=%s c7=%s → %d",
+                 pair, c1, c3, c4, cci_at_touch_val or 0, c5, c6, c7, score)
+
+    # Attach diagnostic payload for the audit system (consumed by signal_engine)
+    _buy_diag[pair] = dict(
+        c1=c1, c2=c2, c3=c3, c4=c4, c5=c5, c6=c6, c7=c7,
+        cci_at_touch_val=cci_at_touch_val,
+        cci_current=float(cci_h1.iloc[-1]),
+        macd_hist_val=float(macd_hist.iloc[-1]),
+    )
     return float(score)
 
 
 def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame) -> float:
     """
-    6-condition sell check. Returns 0–25. Mirror of check_buy_signal.
-    H4 is scored, NOT a hard gate.
+    7-condition sell check. Returns 0–25. Mirror of check_buy_signal.
+    H4 is a HARD GATE — returns 0.0 immediately if H4 is counter-trend (bull).
+
+    Conditions:
+      c1 — H1 close below short EMA
+      c2 — H4 close below short EMA (HARD GATE — must pass or signal discarded)
+      c3 — Recent EMA touch from below within 20 bars
+      c4 — CCI overbought at touch (> +20)
+      c5 — CCI has fallen back (< +30)
+      c6 — MACD histogram majority negative (≥2 of last 3 bars)
+      c7 — MACD histogram is FALLING (momentum building to downside)
     """
     if len(df_h1) < 50 or len(df_h4) < 50:
         return 0.0
 
     short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
+    short_h4, _, _   = get_best_emas(pair, config.TIMEFRAMES["confirm"],  df_h4)
 
-    short_ema_h1 = ema(df_h1["close"], short)
-    short_ema_h4 = ema(df_h4["close"], short)
-    atr_h1       = atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
-    cci_h1       = cci(df_h1["high"], df_h1["low"], df_h1["close"], config.CCI_PERIOD)
-    macd_hist    = macd_histogram(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
+    short_ema_h1  = ema(df_h1["close"], short)
+    short_ema_h4  = ema(df_h4["close"], short_h4)
+    atr_h1        = atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
+    cci_h1        = cci(df_h1["high"], df_h1["low"], df_h1["close"], config.CCI_PERIOD)
+    _, _, macd_hist = macd_full(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
 
     close_h1 = df_h1["close"].iloc[-1]
     close_h4 = df_h4["close"].iloc[-1]
 
     c1 = close_h1 < short_ema_h1.iloc[-1]
-    c2 = close_h4 < short_ema_h4.iloc[-1]   # H4 alignment — scored, NOT a hard gate
+    c2 = close_h4 < short_ema_h4.iloc[-1]   # H4 trend alignment
+    # ── H4 gate: hard-block when H4_GATE_BLOCKING=True, soft-score when False ─
+    if not c2 and config.H4_GATE_BLOCKING:
+        _sell_diag[pair] = dict(c1=c1, c2=False, c3=False, c4=False, c5=False,
+                                c6=False, c7=False, cci_at_touch_val=None,
+                                cci_current=float(cci_h1.iloc[-1]),
+                                macd_hist_val=float(macd_hist.iloc[-1]))
+        return 0.0   # H4 counter-trend — skip entirely
+
     c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "short", lookback=20)
     c3 = c3_idx is not None
 
-    c4 = c5 = c6 = False
+    c4 = c5 = c6 = c7 = False
+    cci_at_touch_val = None
     if c3:
         cci_win = cci_h1.iloc[max(0, c3_idx - 1):c3_idx + 2]
-        c4 = float(cci_win.max()) > 60           # widened from +80
+        cci_at_touch_val = float(cci_win.max())
+        # CCI must be above +20 at touch (trend-continuation threshold)
+        c4 = cci_at_touch_val > 20
         c5 = cci_h1.iloc[-1] < 30
-        c6 = bool(macd_hist.iloc[-3:].min() < 0) if len(macd_hist) >= 3 else bool(macd_hist.iloc[-1] < 0)
+        # MACD: any 1 of last 3 bars negative (loosened from majority 2-of-3)
+        if len(macd_hist) >= 3:
+            last3 = macd_hist.iloc[-3:]
+            c6 = bool((last3 < 0).sum() >= 1)
+        else:
+            c6 = bool(macd_hist.iloc[-1] < 0)
+        # MACD momentum: histogram is falling (building bearish momentum)
+        c7 = len(macd_hist) >= 2 and float(macd_hist.iloc[-1]) < float(macd_hist.iloc[-2])
 
-    passed = sum([c1, c2, c3, c4, c5, c6])
+    # c2 is a hard gate (already returned 0 if False) — score remaining 6 conditions
+    passed = sum([c1, c3, c4, c5, c6, c7])
     score  = round(25 * passed / 6)
-    logger.debug("SELL %s  c1=%s c2(H4)=%s c3=%s c4=%s c5=%s c6=%s → %d",
-                 pair, c1, c2, c3, c4, c5, c6, score)
+    logger.debug("SELL %s  c1=%s c2(H4gate)=True c3=%s c4=%s(cci_touch=%.1f) c5=%s c6=%s c7=%s → %d",
+                 pair, c1, c3, c4, cci_at_touch_val or 0, c5, c6, c7, score)
+
+    _sell_diag[pair] = dict(
+        c1=c1, c2=True, c3=c3, c4=c4, c5=c5, c6=c6, c7=c7,
+        cci_at_touch_val=cci_at_touch_val,
+        cci_current=float(cci_h1.iloc[-1]),
+        macd_hist_val=float(macd_hist.iloc[-1]),
+    )
     return float(score)
 
 
@@ -222,13 +298,14 @@ def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
       1. Primary: SL = mid_ema ± 1pip
       2. Validation: SL MUST be on the loss side of entry.
          If the mid EMA is on the wrong side (inverted), fall back to 1.5×ATR14.
-      3. Minimum distance: at least 20 pips from entry to avoid noise-stop-outs.
+      3. Minimum distance: at least 25 pips from entry to filter noise stop-outs.
+         (Raised from 20 — backtest showed 20-pip SL is inside H1 candle noise on EURUSD)
     """
     _, mid, _ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
     mid_val   = float(ema(df_h1["close"], mid).iloc[-1])
     entry     = float(df_h1["close"].iloc[-1])
     pip       = _get_pip(pair)
-    min_pips  = 20                     # minimum SL distance in pips
+    min_pips  = 25                     # minimum SL distance in pips (raised from 20)
     min_dist  = pip * min_pips
 
     if direction == "long":
@@ -249,5 +326,7 @@ def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
 
 
 def clear_cache() -> None:
-    """Reset EMA cache — used in tests."""
+    """Reset EMA cache and diagnostics — used in tests and Scan Now."""
     _cache.clear()
+    _buy_diag.clear()
+    _sell_diag.clear()

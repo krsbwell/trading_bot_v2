@@ -82,17 +82,25 @@ class AlpacaConnector:
                 f"Valid: {list(_TIMEFRAME_MAP.keys())}"
             )
 
-        # Hours per bar — used to calculate a start date far enough back.
-        # Without an explicit start, Alpaca may return far fewer bars than `limit`.
+        # Fetch the most recent `limit` bars anchored to NOW.
+        #
+        # KEY FIX: When both `start` and `limit` are passed to Alpaca, it returns
+        # the FIRST `limit` bars from `start` — NOT the most recent ones.
+        # With a large lookback that means bars from months ago (e.g. SOL at $141).
+        #
+        # Solution: set `end = now` and compute `start` as a tight window that
+        # guarantees at least `limit` bars exist, then slice the tail after fetching.
+        # Crypto trades 24/7 so a 10% buffer is plenty.
         _hours = {"15Min": 0.25, "1Hour": 1.0, "4Hour": 4.0, "1Day": 24.0}
-        lookback_hours = _hours.get(timeframe, 1.0) * limit * 2  # 2× buffer
-        start = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        lookback_hours = _hours.get(timeframe, 1.0) * limit * 1.10  # 10% buffer
+        now   = datetime.now(timezone.utc)
+        start = now - timedelta(hours=lookback_hours)
 
         request = CryptoBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=tf,
             start=start,
-            limit=limit,
+            end=now,
         )
 
         try:
@@ -120,6 +128,10 @@ class AlpacaConnector:
 
         # Keep only OHLCV — drop vwap, trade_count etc.
         df = df[["open", "high", "low", "close", "volume"]].copy()
+
+        # Always keep only the MOST RECENT `limit` bars so we never show stale history.
+        if len(df) > limit:
+            df = df.tail(limit).copy()
 
         # Strip timezone — consistent with OandaConnector and pandas-ta compatibility
         if df.index.tz is not None:

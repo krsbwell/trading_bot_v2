@@ -12,9 +12,11 @@
 
     /* ── chart state ─────────────────────────────────────────────────────── */
     let chart = null, S = {}, wm = null;
-    let _lastPairTf = null, _currentPair = '', _currentTf = '';
+    let _lastPairTf = null, _currentPair = '', _currentTf = '', _currentRawTf = '';
     let _candleData = [];
     let _autoSaveTimer = null;
+    var _lastChartData = null;
+    let _paneResizeActive = false;  // prevents ResizeObserver from overriding managed heights
 
     const WM_COLOR = 'rgba(100,110,120,0.22)';
     const WM_FONT  = "'IBM Plex Sans',sans-serif";
@@ -33,15 +35,41 @@
     let _trendPreviewEl = null; // live preview line in SVG
     let trendResize = null;     // { idx, handle:'p1'|'p2' }
     let trendMove = null;       // { idx, startTime, startPrice, origT1, origP1, origT2, origP2 }
+    let _trendMoveStart = null; // pending: wait for drag threshold before committing to a move
 
     /* ── position tools ──────────────────────────────────────────────────── */
     let positions = [], posIdCtr = 0, posOverlay = null;
     let posDrag = null;
-    let _tradePriceLines = []; // TWLC price lines for open broker trades
+    let selectedPos = -1;
+    let _tradePriceLines = []; // TWLC price lines for open broker trades (entry only)
+    let _tradeSvgLines  = []; // SVG drag handles for SL/TP of live trades
+    let _liveTradeData  = []; // current live trade snapshot (for updateAll)
+    let tradeDrag       = null; // { tsl, snapshot }
+
+    /* ── circle drawing tool ──────────────────────────────────────────────── */
+    let circles = [], circleIdCtr = 0, selectedCircle = -1;
+    let circleDraw = null;   // { cx_time, cy_price, startX, startY } — while drawing
+    let circleDrag = null;   // { type:'move'|'resize', idx, ... } — while editing
+    let _circlePreviewEl = null;
 
     /* ── box / consolidation tools ───────────────────────────────────────── */
     let boxes = [], boxIdCtr = 0, boxOverlay = null;
     let boxDraw = null, boxResize = null, boxMove = null, selectedBox = -1;
+
+    /* ── fibonacci retracement tool ──────────────────────────────────────── */
+    let fibs = [], fibIdCtr = 0, fibOverlay = null;
+    let fibDraw = null;   // { startX, startY, startTime, startPrice } — used while drawing
+    let fibDrag = null;   // { type:'move'|'p1'|'p2', idx, startX, startY, origP1,origP2,origT1,origT2 }
+    let selectedFib = -1;
+    const FIB_LEVELS = [
+        { pct: 0,     col: '#00ff88', lbl: '0%'    },
+        { pct: 0.236, col: '#ffd700', lbl: '23.6%' },
+        { pct: 0.382, col: '#ff9900', lbl: '38.2%' },
+        { pct: 0.500, col: '#38b6ff', lbl: '50%'   },
+        { pct: 0.618, col: '#ff9900', lbl: '61.8%' },
+        { pct: 0.786, col: '#ffd700', lbl: '78.6%' },
+        { pct: 1.0,   col: '#ff3366', lbl: '100%'  },
+    ];
 
     /* ═══════════════════════════════════════════════════════════════════════
        HELPERS
@@ -62,11 +90,7 @@
         try { sref.createPriceLine({ price, color: '#7d8590', lineWidth: 1,
               lineStyle: LC().LineStyle.Dotted, axisLabelVisible: false }); } catch(e) {}
     }
-    function cciRef(price, color) {
-        try { S.cci.createPriceLine({ price, color, lineWidth: 2,
-              lineStyle: LC().LineStyle.Dashed,
-              axisLabelVisible: true, axisLabelColor: color }); } catch(e) {}
-    }
+
 
     /* coordinate converters */
     function _timeToX(t)   {
@@ -91,7 +115,22 @@
     }
 
     function psWidth() {
-        try { return chart.priceScale('right').width() || 62; } catch(e) { return 62; }
+        try {
+            var w = chart.priceScale('right').width();
+            if (w && w > 20) return w;
+        } catch(e) {}
+        /* Fallback: measure the right-most child element of the chart container */
+        try {
+            var el = document.getElementById('tvlw-chart');
+            if (el) {
+                var tds = el.querySelectorAll('table td');
+                if (tds.length >= 2) {
+                    var last = tds[tds.length - 1];
+                    if (last && last.clientWidth > 20) return last.clientWidth;
+                }
+            }
+        } catch(e2) {}
+        return 80; /* safe over-estimate — better to clip 18px early than bleed into scale */
     }
 
     function _candleInterval() {
@@ -159,6 +198,7 @@
     function _trendKey()  { return 'apex_trendlines_' + _currentPair; }
     function _boxKey()    { return 'apex_boxes_'      + _currentPair; }
     function _posKey()    { return 'apex_pos_'        + _currentPair; }
+    function _circleKey() { return 'apex_circles_'   + _currentPair; }
 
     /* Legacy aliases — same as primary keys now (for smooth migration) */
     function _legacyDrawKey() { return _hlKey();    }
@@ -173,38 +213,16 @@
 
     /* ── Measure stats calculator ─────────────────────────────────────────── */
     function _measureStats(box) {
-        var pip = pipSize(_currentPair);
-        /* Chronological start/end so sign is always meaningful */
         var startPrice = box.t1 <= box.t2 ? box.p1 : box.p2;
         var endPrice   = box.t1 <= box.t2 ? box.p2 : box.p1;
         var priceDiff  = endPrice - startPrice;
-        var pips       = pip > 0 ? priceDiff / pip : 0;
         var pct        = startPrice > 0 ? (priceDiff / startPrice) * 100 : 0;
-        var t1b = Math.min(box.t1, box.t2), t2b = Math.max(box.t1, box.t2);
-        var bars = _candleData.filter(function(c){ return c.time >= t1b && c.time <= t2b; }).length;
-        var secs = Math.abs(box.t2 - box.t1);
-        var days = Math.floor(secs / 86400);
-        var hrs  = Math.floor((secs % 86400) / 3600);
-        var mins = Math.floor((secs % 3600) / 60);
-        var parts = [];
-        if (days) parts.push(days + 'd');
-        if (hrs)  parts.push(hrs + 'h');
-        if (!parts.length) parts.push(mins + 'm');
-        var dec   = isJPY(_currentPair) ? 3 : 5;
         var isUp  = priceDiff >= 0;
         var col   = isUp ? '#00ff88' : '#ff3366';
         var sign  = isUp ? '+' : '';
-        var arrow = isUp ? '▲' : '▼';
-        return {
-            pips:      sign + pips.toFixed(1) + 'p',
-            pct:       sign + pct.toFixed(2) + '%',
-            price:     sign + priceDiff.toFixed(dec),
-            bars:      bars + (bars === 1 ? ' bar' : ' bars'),
-            time:      parts.join(' '),
-            color:     col,
-            arrow:     arrow,
-            priceDiff: priceDiff,
-        };
+        var dec   = isJPY(_currentPair) ? 3 : 5;
+        var label = sign + priceDiff.toFixed(dec) + ' (' + sign + pct.toFixed(2) + '%)';
+        return { label: label, color: col, isUp: isUp, priceDiff: priceDiff };
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
@@ -218,7 +236,7 @@
         trendOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         trendOverlay.id = 'apex-trend-overlay';
         trendOverlay.style.cssText =
-            'position:absolute;top:0;left:0;z-index:13;pointer-events:none;overflow:visible;';
+            'position:absolute;top:0;left:0;z-index:13;pointer-events:none;overflow:hidden;';
         trendOverlay.setAttribute('width', '100%');
         trendOverlay.setAttribute('height', MAIN_H + 'px');
         el.style.position = 'relative';
@@ -263,20 +281,28 @@
         hit.setAttribute('stroke-width', '14');
         hit.setAttribute('pointer-events', 'stroke');
         hit.setAttribute('cursor', 'move');
+        /* Double-click → settings popup (Issue #6) */
+        hit.addEventListener('dblclick', function(e) {
+            e.stopPropagation(); e.preventDefault();
+            var idx = trendlines.indexOf(t);
+            if (idx >= 0) _showDrawingSettings(e.clientX, e.clientY, 'trend', idx);
+        });
+
         hit.addEventListener('mousedown', function(e) {
             if (drawMode) return;
             e.stopPropagation(); e.preventDefault();
             var idx = trendlines.indexOf(t);
             if (idx < 0) return;
             _selectTrend(idx);
-            _deselectBox();
             if (t.locked) return;
             var chartEl = document.getElementById('tvlw-chart');
             if (!chartEl) return;
             var r = chartEl.getBoundingClientRect();
             var cX = e.clientX - r.left, cY = e.clientY - r.top;
-            trendMove = {
-                idx: idx,
+            /* Pending — only promote to a real move after 5px drag to avoid
+               accidentally moving the line when the user clicks to select or pans */
+            _trendMoveStart = {
+                idx: idx, downX: e.clientX, downY: e.clientY,
                 startTime:  _xToTime(cX)  || t.t1,
                 startPrice: _yToPrice(cY) || t.p1,
                 origT1: t.t1, origP1: t.p1,
@@ -293,96 +319,34 @@
         var h1 = _makeTrendHandle(t, 'p1');
         var h2 = _makeTrendHandle(t, 'p2');
 
-        /* Delete button — circle+× at midpoint, shown when selected */
-        var del = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        del.setAttribute('cursor', 'pointer');
-        del.setAttribute('pointer-events', 'all');
-        del.setAttribute('display', 'none');
-        var dCirc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        dCirc.setAttribute('r', '8');
-        dCirc.setAttribute('fill', 'rgba(13,17,23,0.9)');
-        dCirc.setAttribute('stroke', '#555');
-        dCirc.setAttribute('stroke-width', '1');
-        var dTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        dTxt.setAttribute('text-anchor', 'middle');
-        dTxt.setAttribute('dominant-baseline', 'central');
-        dTxt.setAttribute('fill', '#ccc');
-        dTxt.setAttribute('font-size', '12');
-        dTxt.setAttribute('font-family', 'monospace');
-        dTxt.setAttribute('pointer-events', 'none');
-        dTxt.textContent = '×';
-        del.appendChild(dCirc); del.appendChild(dTxt);
-        del.addEventListener('click', function(e) {
-            e.stopPropagation();
-            var idx = trendlines.indexOf(t);
-            if (idx >= 0) delTrendline(idx);
-        });
-
-        /* Lock toggle button — shown when selected */
-        var lockG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        lockG.setAttribute('cursor', 'pointer');
-        lockG.setAttribute('pointer-events', 'all');
-        lockG.setAttribute('display', 'none');
-        var lCirc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        lCirc.setAttribute('r', '8');
-        lCirc.setAttribute('fill', 'rgba(13,17,23,0.9)');
-        lCirc.setAttribute('stroke', '#555');
-        lCirc.setAttribute('stroke-width', '1');
-        var lTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        lTxt.setAttribute('text-anchor', 'middle');
-        lTxt.setAttribute('dominant-baseline', 'central');
-        lTxt.setAttribute('fill', '#ffd700');
-        lTxt.setAttribute('font-size', '9');
-        lTxt.setAttribute('pointer-events', 'none');
-        lockG.appendChild(lCirc); lockG.appendChild(lTxt);
-        lockG.addEventListener('click', function(e) {
-            e.stopPropagation();
-            t.locked = !t.locked;
-            updateTrendline(t);
-            saveTrendlines();
-        });
-
-        /* Duplicate button */
-        var dupG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        dupG.setAttribute('cursor', 'pointer');
-        dupG.setAttribute('pointer-events', 'all');
-        dupG.setAttribute('display', 'none');
-        var dupCirc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        dupCirc.setAttribute('r', '8');
-        dupCirc.setAttribute('fill', 'rgba(13,17,23,0.9)');
-        dupCirc.setAttribute('stroke', '#555');
-        dupCirc.setAttribute('stroke-width', '1');
-        var dupTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        dupTxt.setAttribute('text-anchor', 'middle');
-        dupTxt.setAttribute('dominant-baseline', 'central');
-        dupTxt.setAttribute('fill', '#38b6ff');
-        dupTxt.setAttribute('font-size', '11');
-        dupTxt.setAttribute('font-family', 'monospace');
-        dupTxt.setAttribute('pointer-events', 'none');
-        dupTxt.textContent = '+';
-        dupG.appendChild(dupCirc); dupG.appendChild(dupTxt);
-        dupG.addEventListener('click', function(e) {
-            e.stopPropagation();
-            var idx = trendlines.indexOf(t);
-            if (idx >= 0) _dupTrendline(idx);
-        });
+        /* Persistent lock badge — always visible when locked */
+        var lockBadge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lockBadge.setAttribute('text-anchor', 'middle');
+        lockBadge.setAttribute('dominant-baseline', 'central');
+        lockBadge.setAttribute('fill', '#ffd700');
+        lockBadge.setAttribute('font-size', '13');
+        lockBadge.setAttribute('pointer-events', 'none');
+        lockBadge.setAttribute('display', 'none');
+        lockBadge.textContent = '🔒';
 
         g.appendChild(glow);
         g.appendChild(hit);
         g.appendChild(line);
+        g.appendChild(lockBadge);
         g.appendChild(h1); g.appendChild(h2);
-        g.appendChild(del);
-        g.appendChild(lockG);
-        g.appendChild(dupG);
         svg.appendChild(g);
 
         t.el = g; t.lineEl = line; t.hitEl = hit; t.glowEl = glow;
-        t.h1El = h1; t.h2El = h2; t.delEl = del; t.lockEl = lockG; t.dupEl = dupG;
-        t.lockTxt = lTxt;
+        t.h1El = h1; t.h2El = h2; t.lockBadge = lockBadge;
     }
 
     function updateTrendline(t) {
         if (!t.el || !chart || !S.candle) return;
+        /* Keep the SVG viewport clipped to the chart area, excluding the price scale */
+        var _tEl = document.getElementById('tvlw-chart');
+        if (_tEl && trendOverlay) {
+            trendOverlay.setAttribute('width', (_tEl.clientWidth - psWidth()) + 'px');
+        }
         var x1 = _timeToXExtrap(t.t1), y1 = _priceToY(t.p1);
         var x2 = _timeToXExtrap(t.t2), y2 = _priceToY(t.p2);
 
@@ -390,6 +354,22 @@
             t.el.setAttribute('display', 'none'); return;
         }
         t.el.removeAttribute('display');
+
+        /* Clip line segment to the chart area — stops the line entering the price column */
+        (function() {
+            var chartElC = document.getElementById('tvlw-chart');
+            if (!chartElC) return;
+            var maxX = chartElC.clientWidth - psWidth();
+            /* Parametric clip: given segment a→b, clip so both endpoints are x ≤ maxX */
+            function clipEnd(ax, ay, bx, by) {
+                if (bx <= maxX) return [bx, by];   // b already inside
+                if (ax >= maxX) return [maxX, ay];  // a also outside — pin to boundary
+                var t2 = (maxX - ax) / (bx - ax);
+                return [maxX, ay + t2 * (by - ay)];
+            }
+            var r1 = clipEnd(x2, y2, x1, y1); x1 = r1[0]; y1 = r1[1];
+            var r2 = clipEnd(x1, y1, x2, y2); x2 = r2[0]; y2 = r2[1];
+        })();
 
         function setLine(el, a, b, c, d) {
             el.setAttribute('x1', a); el.setAttribute('y1', b);
@@ -399,6 +379,17 @@
         setLine(t.hitEl,  x1, y1, x2, y2);
         setLine(t.glowEl, x1, y1, x2, y2);
 
+        /* Lock badge — always visible when locked so user has clear feedback */
+        if (t.lockBadge) {
+            if (t.locked) {
+                t.lockBadge.setAttribute('x', (x1 + x2) / 2);
+                t.lockBadge.setAttribute('y', (y1 + y2) / 2 - 10);
+                t.lockBadge.setAttribute('display', '');
+            } else {
+                t.lockBadge.setAttribute('display', 'none');
+            }
+        }
+
         var col  = t.color || '#ffd700';
         var w    = t.width || 1;
         var isSel = (selectedTrend === trendlines.indexOf(t));
@@ -407,6 +398,7 @@
         t.lineEl.setAttribute('stroke', col);
         t.lineEl.setAttribute('stroke-width', isSel ? w + 1 : w);
         t.lineEl.setAttribute('stroke-dasharray', dash);
+        t.lineEl.setAttribute('stroke-opacity', t.locked ? '0.55' : '1');
 
         t.glowEl.setAttribute('stroke', col);
         t.glowEl.setAttribute('stroke-width', w + 10);
@@ -414,7 +406,7 @@
         t.glowEl.setAttribute('display', isSel ? '' : 'none');
 
         if (isSel) {
-            /* Endpoint handles */
+            /* Endpoint handles visible when selected and unlocked */
             t.h1El.setAttribute('cx', x1); t.h1El.setAttribute('cy', y1);
             t.h2El.setAttribute('cx', x2); t.h2El.setAttribute('cy', y2);
             t.h1El.setAttribute('stroke', col);
@@ -422,23 +414,9 @@
             t.h1El.setAttribute('display', t.locked ? 'none' : '');
             t.h2El.setAttribute('display', t.locked ? 'none' : '');
             t.hitEl.setAttribute('cursor', t.locked ? 'default' : 'move');
-
-            /* Action buttons at midpoint, offset upward */
-            var mx = (x1 + x2) / 2, my = (y1 + y2) / 2 - 16;
-            t.delEl.setAttribute('transform', 'translate(' + mx + ',' + my + ')');
-            t.lockEl.setAttribute('transform', 'translate(' + (mx + 20) + ',' + my + ')');
-            t.dupEl.setAttribute('transform',  'translate(' + (mx - 20) + ',' + my + ')');
-            t.delEl.setAttribute('display', '');
-            t.lockEl.setAttribute('display', '');
-            t.dupEl.setAttribute('display', '');
-            t.lockTxt.textContent = t.locked ? 'L' : 'U';
-            t.lockTxt.setAttribute('fill', t.locked ? '#ffd700' : '#8b949e');
         } else {
             t.h1El.setAttribute('display', 'none');
             t.h2El.setAttribute('display', 'none');
-            t.delEl.setAttribute('display', 'none');
-            t.lockEl.setAttribute('display', 'none');
-            t.dupEl.setAttribute('display', 'none');
             t.hitEl.setAttribute('cursor', 'move');
         }
     }
@@ -446,6 +424,7 @@
     function updateAllTrendlines() { trendlines.forEach(updateTrendline); }
 
     function _selectTrend(idx) {
+        _deselectFib(); _deselectPos(); _deselectBox();
         selectedTrend = idx;
         trendlines.forEach(updateTrendline);
     }
@@ -511,6 +490,21 @@
 
     /* Global mouse handlers for trendline resize + move */
     document.addEventListener('mousemove', function(e) {
+        /* Promote pending move to active once drag exceeds 5px threshold */
+        if (_trendMoveStart && !trendMove) {
+            var dx = e.clientX - _trendMoveStart.downX;
+            var dy = e.clientY - _trendMoveStart.downY;
+            if (Math.sqrt(dx * dx + dy * dy) >= 5) {
+                trendMove = {
+                    idx:         _trendMoveStart.idx,
+                    startTime:   _trendMoveStart.startTime,
+                    startPrice:  _trendMoveStart.startPrice,
+                    origT1:      _trendMoveStart.origT1, origP1: _trendMoveStart.origP1,
+                    origT2:      _trendMoveStart.origT2, origP2: _trendMoveStart.origP2,
+                };
+                _trendMoveStart = null;
+            }
+        }
         if (!trendResize && !trendMove) return;
         /* Claim the event immediately — MUST be before any early returns so that
            null-coordinate frames never fall through to TVLC's pan handler. */
@@ -539,10 +533,15 @@
     });
 
     document.addEventListener('mouseup', function() {
+        if (_trendMoveStart) {
+            /* Drag never reached threshold — just a click, restore scroll */
+            _trendMoveStart = null;
+            try { if (chart) chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex) {}
+        }
         if (trendResize || trendMove) {
             try { if (chart) chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex) {}
             saveTrendlines();
-            trendResize = null; trendMove = null;
+            trendResize = null; trendMove = null; _trendMoveStart = null;
         }
     });
 
@@ -596,7 +595,7 @@
         boxOverlay.id = 'apex-box-overlay';
         boxOverlay.style.cssText =
             'position:absolute;top:0;left:0;pointer-events:none;z-index:12;' +
-            'width:100%;height:' + MAIN_H + 'px;overflow:hidden;';
+            'width:100%;height:' + MAIN_H + 'px;overflow:visible;';
         el.style.position = 'relative';
         el.appendChild(boxOverlay);
         return boxOverlay;
@@ -621,18 +620,23 @@
         bg.className = 'apex-box-bg';
         bg.style.cssText = 'position:absolute;inset:0;pointer-events:none;';
 
-        var drag = document.createElement('div');
-        drag.className = 'apex-box-drag';
-        drag.style.cssText = 'position:absolute;inset:0;z-index:10;cursor:move;pointer-events:auto;';
-        drag.addEventListener('mousedown', function(e) {
+        /* Shared event handlers — reused by drag div (rect) or border strips (measure) */
+        var isMeasure = (box.type === 'measure');
+        function _onDragDblClick(e) {
+            e.stopPropagation(); e.preventDefault();
+            var idx = boxes.findIndex(function(b) { return String(b.id) === String(wrap.dataset.boxId); });
+            if (idx >= 0) _showDrawingSettings(e.clientX, e.clientY, 'box', idx);
+        }
+        function _onDragMouseDown(e) {
             if (drawMode) return;
+            var idx = boxes.findIndex(function(b) { return String(b.id) === String(wrap.dataset.boxId); });
+            if (idx < 0) return;
+            var b = boxes[idx];
+            if (b.locked) return;
             e.stopPropagation(); e.preventDefault();
             var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
             var r   = chartEl.getBoundingClientRect();
             var cX  = e.clientX - r.left, cY = e.clientY - r.top;
-            var idx = boxes.findIndex(function(b) { return String(b.id) === String(wrap.dataset.boxId); });
-            if (idx < 0) return;
-            var b = boxes[idx];
             _selectBox(idx);
             _deselectTrend();
             boxMove = { idx, startX:cX, startY:cY,
@@ -640,7 +644,30 @@
                 startPrice: _yToPrice(cY)       || b.p1,
                 origT1:b.t1, origT2:b.t2, origP1:b.p1, origP2:b.p2 };
             try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
-        });
+        }
+
+        var drag = document.createElement('div');
+        drag.className = 'apex-box-drag';
+        if (isMeasure) {
+            /* Measure box: interior is transparent — only 8px border strips capture events */
+            drag.style.cssText = 'position:absolute;inset:0;z-index:10;pointer-events:none;';
+            ['top','bottom','left','right'].forEach(function(side) {
+                var s = document.createElement('div');
+                s.style.cssText = 'position:absolute;pointer-events:auto;cursor:move;' + (
+                    side === 'top'    ? 'top:0;left:0;right:0;height:8px;'     :
+                    side === 'bottom' ? 'bottom:0;left:0;right:0;height:8px;'  :
+                    side === 'left'   ? 'top:8px;bottom:8px;left:0;width:8px;' :
+                                        'top:8px;bottom:8px;right:0;width:8px;'
+                );
+                s.addEventListener('dblclick',  _onDragDblClick);
+                s.addEventListener('mousedown', _onDragMouseDown);
+                drag.appendChild(s);
+            });
+        } else {
+            drag.style.cssText = 'position:absolute;inset:0;z-index:10;cursor:move;pointer-events:auto;';
+            drag.addEventListener('dblclick',  _onDragDblClick);
+            drag.addEventListener('mousedown', _onDragMouseDown);
+        }
 
         var stats = document.createElement('div');
         stats.className = 'apex-box-stats';
@@ -704,14 +731,13 @@
             if (idx >= 0) _dupBox(idx);
         });
 
-        /* Stats label for measure-type boxes — upper-right corner */
+        /* Stats label for measure-type boxes — auto-positioned top-center or bottom-center */
         var mStats = document.createElement('div');
         mStats.className = 'apex-measure-stats';
         mStats.style.cssText =
-            'position:absolute;top:4px;right:4px;' +
-            'z-index:12;pointer-events:none;font-family:monospace;text-align:right;' +
-            'line-height:1.7;background:rgba(13,17,23,0.82);' +
-            'padding:4px 8px;border-radius:4px;white-space:nowrap;display:none;';
+            'position:absolute;left:50%;transform:translateX(-50%);' +
+            'z-index:12;pointer-events:none;font-family:monospace;text-align:center;' +
+            'padding:3px 8px;border-radius:3px;white-space:nowrap;display:none;';
 
         wrap.appendChild(bg); wrap.appendChild(drag); wrap.appendChild(stats);
         wrap.appendChild(mStats);
@@ -752,22 +778,33 @@
         });
 
         if (box.type === 'measure') {
-            /* ── Measure box: direction-aware colour + rich stats ── */
-            var ms  = _measureStats(box);
-            var col = ms.color;
-            box.el.style.border   = (isSel ? '2px' : '1px') + ' dashed ' + col;
-            box.bgEl.style.background = _hexToRgba(col, 0.07);
+            /* ── Measure box: user colour for border/fill, direction colour for label only ── */
+            var ms     = _measureStats(box);
+            var lblCol = ms.color;                          // green/red based on direction
+            var boxCol = box.color || '#8b949e';            // user-chosen colour (settable via dbl-click)
+            var bwM    = box.borderWidth || 1;
+            box.el.style.border       = (isSel ? bwM+1 : bwM) + 'px dashed ' + boxCol;
+            box.bgEl.style.background = _hexToRgba(boxCol, 0.07);
             box.statsEl.textContent = '';
             if (box.measureStatsEl) {
-                box.measureStatsEl.style.display = 'block';
-                box.measureStatsEl.style.color = col;
+                box.measureStatsEl.style.display    = 'block';
+                box.measureStatsEl.style.color      = lblCol;
+                box.measureStatsEl.style.background = 'rgba(13,17,23,0.88)';
+                box.measureStatsEl.style.border     = '1px solid ' + _hexToRgba(lblCol, 0.35);
+                box.measureStatsEl.style.left       = '50%';
+                box.measureStatsEl.style.bottom     = '';
                 box.measureStatsEl.innerHTML =
-                    '<span style="font-size:13px;font-weight:700">' +
-                        ms.arrow + '&ensp;' + ms.pips + '</span>' +
-                    '<br><span style="font-size:11px">' +
-                        ms.pct + '&ensp;' + ms.price + '</span>' +
-                    '<br><span style="font-size:10px;color:#8b949e">' +
-                        ms.bars + '&ensp;&middot;&ensp;' + ms.time + '</span>';
+                    '<span style="font-size:12px;font-weight:700">' + ms.label + '</span>';
+                /* Auto-position: use transform so the label stays inside the chart viewport.
+                   top<34 → label below the box; otherwise label above the box.
+                   transform handles both centering (X) and vertical offset (Y).        */
+                if (top < 34) {
+                    box.measureStatsEl.style.top       = '100%';
+                    box.measureStatsEl.style.transform = 'translate(-50%, 4px)';
+                } else {
+                    box.measureStatsEl.style.top       = '0';
+                    box.measureStatsEl.style.transform = 'translate(-50%, calc(-100% - 4px))';
+                }
             }
         } else {
             /* ── Regular rect/square box — no bar-count overlay ── */
@@ -789,8 +826,20 @@
     }
 
     function updateAllBoxes() { boxes.forEach(updateBox); }
-    function _selectBox(idx) { selectedBox = idx; boxes.forEach(updateBox); }
+    function _selectBox(idx) { _deselectFib(); _deselectPos(); _deselectTrend(); selectedBox = idx; boxes.forEach(updateBox); }
     function _deselectBox()  { selectedBox = -1;  boxes.forEach(updateBox); }
+
+    function _selectFib(idx) {
+        _deselectBox(); _deselectTrend(); selectedPos = -1;
+        selectedFib = idx; fibs.forEach(updateFib);
+    }
+    function _deselectFib() { if (selectedFib < 0) return; selectedFib = -1; fibs.forEach(updateFib); }
+
+    function _selectPos(idx) {
+        _deselectBox(); _deselectTrend(); selectedFib = -1;
+        selectedPos = idx; positions.forEach(updatePos);
+    }
+    function _deselectPos() { if (selectedPos < 0) return; selectedPos = -1; positions.forEach(updatePos); }
 
     function _startBoxPreview(sx, sy) {
         var ov = ensureBoxOverlay(); if (!ov) return;
@@ -798,20 +847,21 @@
         prev.id = 'apex-box-preview';
         var isMeas = boxDraw && boxDraw.isMeasure;
         prev.style.cssText =
-            'position:absolute;pointer-events:none;box-sizing:border-box;overflow:hidden;' +
-            'border:1px dashed ' + (isMeas ? '#8b949e' : drawColor) + ';' +
-            'background:' + _hexToRgba(isMeas ? '#e6edf3' : drawColor, 0.04) + ';';
+            'position:absolute;pointer-events:none;box-sizing:border-box;overflow:visible;' +
+            'border:1px dashed ' + drawColor + ';' +
+            'background:' + _hexToRgba(drawColor, 0.04) + ';';
         prev.style.left = sx+'px'; prev.style.top = sy+'px';
         prev.style.width = '0px'; prev.style.height = '0px';
         /* Live stats label — only for measure tool */
         if (isMeas) {
             var sl = document.createElement('div');
             sl.className = 'apex-preview-stats';
+            /* Position ABOVE the preview box so candles aren't obscured */
             sl.style.cssText =
-                'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);' +
-                'font-family:monospace;text-align:center;line-height:1.7;' +
-                'background:rgba(13,17,23,0.85);padding:5px 10px;border-radius:4px;' +
-                'white-space:nowrap;font-size:11px;display:none;pointer-events:none;';
+                'position:absolute;top:-3px;left:50%;transform:translate(-50%,-100%);' +
+                'font-family:monospace;text-align:center;font-size:12px;font-weight:700;' +
+                'padding:3px 8px;border-radius:3px;' +
+                'white-space:nowrap;display:none;pointer-events:none;';
             prev.appendChild(sl);
         }
         ov.appendChild(prev);
@@ -847,13 +897,12 @@
                     var tmpBox = { t1:boxDraw.startTime, p1:boxDraw.startPrice, t2:curT, p2:curP };
                     var ms = _measureStats(tmpBox);
                     prev.style.borderColor  = ms.color;
-                    prev.style.background   = _hexToRgba(ms.color, 0.05);
-                    sl.style.display = 'block';
-                    sl.style.color   = ms.color;
-                    sl.innerHTML =
-                        '<span style="font-size:13px;font-weight:700">' + ms.arrow + '&ensp;' + ms.pips + '</span>' +
-                        '<br><span style="font-size:11px">' + ms.pct + '&ensp;' + ms.price + '</span>' +
-                        '<br><span style="font-size:10px;color:#8b949e">' + ms.bars + '&ensp;&middot;&ensp;' + ms.time + '</span>';
+                    prev.style.background   = _hexToRgba(drawColor, 0.05);
+                    sl.style.display    = 'block';
+                    sl.style.color      = ms.color;
+                    sl.style.background = 'rgba(13,17,23,0.88)';
+                    sl.style.border     = '1px solid ' + _hexToRgba(ms.color, 0.35);
+                    sl.innerHTML = '<span style="font-weight:700">' + ms.label + '</span>';
                 } else {
                     sl.style.display = 'none';
                 }
@@ -891,6 +940,7 @@
         boxes.push(box);
         requestAnimationFrame(function(){ updateBox(box); });
         saveBoxes();
+        return box;
     }
 
     function delBox(idx) {
@@ -961,7 +1011,8 @@
         try { localStorage.setItem(_boxKey(), JSON.stringify(
             boxes.map(function(b){ return { id:b.id, t1:b.t1, p1:b.p1, t2:b.t2, p2:b.p2,
                 color:b.color, borderWidth:b.borderWidth, fillOpacity:b.fillOpacity,
-                borderStyle:b.borderStyle||'solid', type:b.type||'rect' }; })
+                borderStyle:b.borderStyle||'solid', type:b.type||'rect',
+                locked: !!b.locked }; })
         )); } catch(e) {}
     }
 
@@ -971,7 +1022,8 @@
             if (!raw) raw = localStorage.getItem(_legacyBoxKey());
             if (!raw) return;
             JSON.parse(raw).forEach(function(d){
-                addBox(d.t1,d.p1,d.t2,d.p2,d.color,d.borderWidth,d.id,d.fillOpacity,null,d.borderStyle,d.type||'rect');
+                var box = addBox(d.t1,d.p1,d.t2,d.p2,d.color,d.borderWidth,d.id,d.fillOpacity,null,d.borderStyle,d.type||'rect');
+                if (box && d.locked) { box.locked = true; updateBox(box); }
             });
         } catch(e) {}
     }
@@ -1018,10 +1070,12 @@
             'position:absolute;left:0;right:0;height:6px;' +
             'cursor:ns-resize;pointer-events:auto;z-index:20;';
         line.addEventListener('mousedown', function(e) {
-            e.stopPropagation(); e.preventDefault();
+            if (drawMode) return; // drawMode active: let event bubble for new drawing
             var idx = positions.findIndex(function(p){ return String(p.id)===String(line.dataset.posId); });
             if (idx < 0) return;
             var p = positions[idx];
+            if (p.locked) return;
+            e.stopPropagation(); e.preventDefault();
             posDrag = { type:'v', idx,
                 lineType: line.dataset.lineType,
                 startEntry:p.entry, startTp:p.tp, startSl:p.sl };
@@ -1055,7 +1109,8 @@
         lZone.appendChild(lLabel);
 
         var cLabel = document.createElement('div');
-        cLabel.style.cssText = 'position:absolute;left:6px;pointer-events:none;' +
+        /* Centred horizontally so the stats panel sits in the middle of the position box */
+        cLabel.style.cssText = 'position:absolute;left:50%;transform:translateX(-50%);pointer-events:none;' +
             'font-family:monospace;font-size:10px;white-space:nowrap;' +
             'padding:3px 7px;border-radius:3px;' +
             'border:1px solid rgba(120,120,120,0.35);background:rgba(13,17,23,0.88);';
@@ -1065,16 +1120,23 @@
         var slLine  = _makeLine(pos.id, 'sl');
 
         var dragArea = document.createElement('div');
+        /* pointer-events:auto always — locked check is inside the handlers,
+           so dblclick still fires on a locked tool */
         dragArea.style.cssText =
-            'position:absolute;left:0;right:0;cursor:move;pointer-events:auto;z-index:10;';
+            'position:absolute;left:0;right:0;pointer-events:auto;z-index:10;';
         dragArea.addEventListener('mousedown', function(e) {
-            e.stopPropagation(); e.preventDefault();
-            var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
-            var r   = chartEl.getBoundingClientRect();
-            var cX  = e.clientX - r.left, cY = e.clientY - r.top;
+            if (drawMode) return; // drawMode active: let event bubble so new drawing is created
             var idx = positions.findIndex(function(p){ return String(p.id)===String(wrap.dataset.posId); });
             if (idx < 0) return;
             var p = positions[idx];
+            _selectPos(idx);
+            /* Always stop propagation so _onDown doesn't immediately deselect */
+            e.stopPropagation();
+            if (p.locked) return; // locked: selected but no drag
+            e.preventDefault();
+            var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
+            var r   = chartEl.getBoundingClientRect();
+            var cX  = e.clientX - r.left, cY = e.clientY - r.top;
             posDrag = { type:'move', idx,
                 startTime:  _xToTime(cX)  || p.t1,
                 startPrice: _yToPrice(cY) || p.entry,
@@ -1082,12 +1144,32 @@
                 startEntry: p.entry, startTp: p.tp, startSl: p.sl };
             try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
         });
+        dragArea.addEventListener('dblclick', function(e) {
+            e.stopPropagation();
+            var idx = positions.findIndex(function(p){ return String(p.id)===String(wrap.dataset.posId); });
+            if (idx >= 0) _showPositionEditForm(positions[idx], e.clientX, e.clientY);
+        });
+
+        /* Pass mousemove through to the chart so the crosshair still tracks */
+        dragArea.addEventListener('mousemove', function(e) {
+            if (posDrag) return;
+            dragArea.style.pointerEvents = 'none';
+            var below = document.elementFromPoint(e.clientX, e.clientY);
+            dragArea.style.pointerEvents = 'auto';
+            if (below && below !== dragArea) {
+                below.dispatchEvent(new MouseEvent('mousemove', {
+                    bubbles: true, cancelable: true,
+                    clientX: e.clientX, clientY: e.clientY, view: window
+                }));
+            }
+        });
 
         var resizeR = document.createElement('div');
         resizeR.style.cssText =
             'position:absolute;right:0;top:0;bottom:0;width:6px;' +
             'cursor:ew-resize;pointer-events:auto;z-index:25;background:transparent;';
         resizeR.addEventListener('mousedown', function(e) {
+            if (drawMode) return;
             e.stopPropagation(); e.preventDefault();
             var idx = positions.findIndex(function(p){ return String(p.id)===String(wrap.dataset.posId); });
             if (idx < 0) return;
@@ -1183,10 +1265,17 @@
         else                        { pos.lLabel.style.top='3px';    pos.lLabel.style.bottom=''; }
         pos.lLabel.textContent = slText;
 
-        var lBase = 'position:absolute;left:0;right:0;height:6px;';
-        pos.tpLine.style.cssText  = lBase + 'top:' + (tpY-3)  + 'px;background:rgba(0,255,100,0.85);cursor:ns-resize;pointer-events:auto;z-index:20;';
-        pos.entLine.style.cssText = lBase + 'top:' + (entY-3) + 'px;background:transparent;border-top:2px dashed rgba(255,255,255,0.85);cursor:ns-resize;pointer-events:auto;z-index:20;';
-        pos.slLine.style.cssText  = lBase + 'top:' + (slY-3)  + 'px;background:rgba(255,51,102,0.85);cursor:ns-resize;pointer-events:auto;z-index:20;';
+        /* Locked state uses cursor hints only — pointer-events stay auto so
+           dblclick reaches the handler which opens the edit/unlock form. */
+        var locked = !!pos.locked;
+        var lCur = locked ? 'default' : 'ns-resize';
+        var lBase = 'position:absolute;left:0;right:0;height:6px;pointer-events:auto;z-index:20;';
+        pos.tpLine.style.cssText  = lBase + 'top:' + (tpY-3)  + 'px;background:rgba(0,255,100,0.85);cursor:' + lCur + ';';
+        pos.entLine.style.cssText = lBase + 'top:' + (entY-3) + 'px;background:transparent;border-top:2px dashed rgba(255,255,255,0.85);cursor:' + lCur + ';';
+        pos.slLine.style.cssText  = lBase + 'top:' + (slY-3)  + 'px;background:rgba(255,51,102,0.85);cursor:' + lCur + ';';
+        pos.dragArea.style.cursor        = locked ? 'default' : 'move';
+        pos.resizeR.style.pointerEvents  = locked ? 'none' : 'auto';
+        pos.el.title = locked ? 'Locked — double-click to edit' : '';
 
         var boxTop = Math.min(profTop, lossTop);
         var boxBot = Math.max(profBot, lossBot);
@@ -1205,7 +1294,7 @@
 
     function updateAllPos() { positions.forEach(updatePos); }
 
-    function addPosition(direction, entry, tp, sl, t1, t2, existingId) {
+    function addPosition(direction, entry, tp, sl, t1, t2, existingId, locked) {
         var ov = ensurePosOverlay(); if (!ov) return;
         var id = (existingId != null) ? existingId : posIdCtr++;
         if (id >= posIdCtr) posIdCtr = id + 1;
@@ -1217,7 +1306,7 @@
             t1 = t1 || now;
             t2 = t2 || (t1 + 20 * interval);
         }
-        var pos = { id, direction, entry, tp, sl, t1, t2 };
+        var pos = { id, direction, entry, tp, sl, t1, t2, locked: !!locked };
         buildPosEl(pos);
         ov.appendChild(pos.el);
         positions.push(pos);
@@ -1229,6 +1318,8 @@
         var pos = positions[idx]; if (!pos) return;
         if (pos.el && pos.el.parentNode) pos.el.parentNode.removeChild(pos.el);
         positions.splice(idx, 1);
+        if (selectedPos === idx) selectedPos = -1;
+        else if (selectedPos > idx) selectedPos--;
         savePos();
     }
 
@@ -1237,7 +1328,7 @@
             positions.map(function(p){
                 return { id:p.id, direction:p.direction,
                          entry:p.entry, tp:p.tp, sl:p.sl,
-                         t1:p.t1, t2:p.t2 };
+                         t1:p.t1, t2:p.t2, locked: !!p.locked };
             })
         )); } catch(e) {}
     }
@@ -1248,49 +1339,117 @@
             if (!raw) raw = localStorage.getItem(_legacyPosKey());
             if (!raw) return;
             JSON.parse(raw).forEach(function(d){
-                addPosition(d.direction, d.entry, d.tp, d.sl, d.t1, d.t2, d.id);
+                addPosition(d.direction, d.entry, d.tp, d.sl, d.t1, d.t2, d.id, !!d.locked);
             });
         } catch(e) {}
     }
 
-    /* Position drag globals */
+    /* Position / trade-line / circle drag — document-level so mouse can leave chart */
     document.addEventListener('mousemove', function(e) {
-        if (!posDrag || !chart || !S.candle) return;
-        e.preventDefault();   // claimed before any early-return so TVLC never pans
-        var el = document.getElementById('tvlw-chart'); if (!el) return;
-        var r  = el.getBoundingClientRect();
-        var cX = e.clientX - r.left, cY = e.clientY - r.top;
-        var pos = positions[posDrag.idx]; if (!pos) return;
-
-        if (posDrag.type === 'v') {
-            var price = _yToPrice(cY); if (!price) return;
-            var lt = posDrag.lineType;
-            if (lt === 'entry') {
-                var d = price - posDrag.startEntry;
-                pos.entry = posDrag.startEntry + d;
-                pos.tp    = posDrag.startTp    + d;
-                pos.sl    = posDrag.startSl    + d;
-            } else if (lt === 'tp') { pos.tp = price; }
-              else if (lt === 'sl') { pos.sl = price; }
-        } else if (posDrag.type === 'move') {
-            var ct = _xToTimeExtrap(cX), cp = _yToPrice(cY);
-            if (ct == null || cp == null) return;
-            var dt = ct - posDrag.startTime, dp = cp - posDrag.startPrice;
-            pos.t1    = posDrag.startT1    + dt; pos.t2    = posDrag.startT2    + dt;
-            pos.entry = posDrag.startEntry + dp; pos.tp    = posDrag.startTp    + dp;
-            pos.sl    = posDrag.startSl    + dp;
-        } else if (posDrag.type === 'resize-r') {
-            var ct2 = _xToTimeExtrap(cX); if (ct2 == null) return;
-            var iv   = _candleInterval();
-            pos.t2   = Math.max(pos.t1 + 5*iv, Math.min(pos.t1 + 100*iv, ct2));
+        /* ── Position tool drag ── */
+        if (posDrag && chart && S.candle) {
+            e.preventDefault();
+            var el2 = document.getElementById('tvlw-chart'); if (!el2) return;
+            var r2  = el2.getBoundingClientRect();
+            var cX2 = e.clientX - r2.left, cY2 = e.clientY - r2.top;
+            var pos = positions[posDrag.idx]; if (!pos) return;
+            if (posDrag.type === 'v') {
+                var price = _yToPrice(cY2); if (!price) return;
+                var lt = posDrag.lineType;
+                if (lt === 'entry') {
+                    var d = price - posDrag.startEntry;
+                    pos.entry = posDrag.startEntry + d;
+                    pos.tp    = posDrag.startTp    + d;
+                    pos.sl    = posDrag.startSl    + d;
+                } else if (lt === 'tp') { pos.tp = price; }
+                  else if (lt === 'sl') { pos.sl = price; }
+            } else if (posDrag.type === 'move') {
+                var ct = _xToTimeExtrap(cX2), cp = _yToPrice(cY2);
+                if (ct == null || cp == null) return;
+                var dt = ct - posDrag.startTime, dp = cp - posDrag.startPrice;
+                pos.t1    = posDrag.startT1    + dt; pos.t2    = posDrag.startT2    + dt;
+                pos.entry = posDrag.startEntry + dp; pos.tp    = posDrag.startTp    + dp;
+                pos.sl    = posDrag.startSl    + dp;
+            } else if (posDrag.type === 'resize-r') {
+                var ct3 = _xToTimeExtrap(cX2); if (ct3 == null) return;
+                var iv   = _candleInterval();
+                pos.t2   = Math.max(pos.t1 + 5*iv, Math.min(pos.t1 + 100*iv, ct3));
+            }
+            updatePos(pos);
+            return;
         }
-        updatePos(pos);
+
+        /* ── Live trade SL/TP drag ── */
+        if (tradeDrag && chart && S.candle) {
+            e.preventDefault();
+            var el3 = document.getElementById('tvlw-chart'); if (!el3) return;
+            var r3  = el3.getBoundingClientRect();
+            var cY3 = e.clientY - r3.top;
+            var newPrice = _yToPrice(cY3); if (!newPrice) return;
+            tradeDrag.tsl.price = newPrice;
+            _updateTradeSvgLine(tradeDrag.tsl);
+            return;
+        }
+
+        /* ── Circle drag (move or resize) ── */
+        if (circleDrag && chart && S.candle) {
+            e.preventDefault();
+            var el4 = document.getElementById('tvlw-chart'); if (!el4) return;
+            var r4  = el4.getBoundingClientRect();
+            var cX4 = e.clientX - r4.left, cY4 = e.clientY - r4.top;
+            var cc  = circles[circleDrag.idx]; if (!cc) return;
+            if (circleDrag.type === 'move') {
+                var newCxTime  = _xToTimeExtrap(cX4);
+                var newCyPrice = _yToPrice(cY4);
+                if (newCxTime)  cc.cx_time  = newCxTime;
+                if (newCyPrice) cc.cy_price = newCyPrice;
+            } else if (circleDrag.type === 'resize') {
+                var centerY = _priceToY(cc.cy_price);
+                if (centerY != null) {
+                    var rPx = Math.abs(cY4 - centerY);
+                    var edgePrice = _yToPrice(centerY + rPx);
+                    if (edgePrice) cc.r_price = Math.abs(edgePrice - cc.cy_price);
+                }
+            }
+            updateCircle(cc);
+            return;
+        }
     });
 
     document.addEventListener('mouseup', function() {
         if (posDrag) {
             try { if (chart) chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex) {}
             savePos(); posDrag = null;
+        }
+        if (tradeDrag) {
+            try { if (chart) chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex) {}
+            /* Write updated prices to Dash store → triggers server-side modify_trade */
+            var snap = tradeDrag.snapshot;
+            var tsl  = tradeDrag.tsl;
+            var lt   = tsl.lineType;
+            var payload = { id: snap.id, sl: snap.sl, tp1: snap.tp1, tp2: snap.tp2, tp3: snap.tp3 };
+            if (lt === 'sl')  payload.sl  = tsl.price;
+            if (lt === 'tp1') payload.tp1 = tsl.price;
+            if (lt === 'tp2') payload.tp2 = tsl.price;
+            if (lt === 'tp3') payload.tp3 = tsl.price;
+            /* Also update _liveTradeData so updateAll re-renders at correct position */
+            _liveTradeData.forEach(function(t) {
+                if (String(t.id) === String(snap.id)) {
+                    if (lt === 'sl')  t.sl  = tsl.price;
+                    if (lt === 'tp1') t.tp1 = tsl.price;
+                    if (lt === 'tp2') t.tp2 = tsl.price;
+                    if (lt === 'tp3') t.tp3 = tsl.price;
+                }
+            });
+            try {
+                window.dash_clientside.set_props('trade-modify-store', { data: payload });
+            } catch(ex) {}
+            tradeDrag = null;
+        }
+        if (circleDrag) {
+            try { if (chart) chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex) {}
+            saveCircles();
+            circleDrag = null;
         }
     });
 
@@ -1303,10 +1462,412 @@
             var data = drawings
                 .filter(function(d){ return d.type==='h-line'; })
                 .map(function(d) {
-                    return { type:'h-line', price:d.price, color:d.color, width:d.width, style:d.style };
+                    return { type:'h-line', price:d.price, color:d.color, width:d.width, style:d.style, locked:d.locked||false };
                 });
             localStorage.setItem(_hlKey(), JSON.stringify(data));
         } catch(e) {}
+    }
+
+    /* ── SVG horizontal line builder / updater ───────────────────────────── */
+    function buildHLineEl(d) {
+        var svg = ensureTrendOverlay(); if (!svg) return;
+        var g   = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+        /* Wide transparent hit strip — makes the thin line easy to click */
+        var hit = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        hit.setAttribute('stroke', 'transparent');
+        hit.setAttribute('stroke-width', '14');
+        hit.setAttribute('pointer-events', 'stroke');
+        hit.setAttribute('cursor', 'move');
+
+        /* Visual line */
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('pointer-events', 'none');
+
+        /* Price label — right-aligned just before the price scale */
+        var lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('font-size', '10');
+        lbl.setAttribute('font-family', 'monospace');
+        lbl.setAttribute('font-weight', '600');
+        lbl.setAttribute('dominant-baseline', 'central');
+        lbl.setAttribute('text-anchor', 'end');
+        lbl.setAttribute('pointer-events', 'none');
+
+        /* Selection handle (small circle at right end) */
+        var handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        handle.setAttribute('r', '4');
+        handle.setAttribute('stroke-width', '2');
+        handle.setAttribute('pointer-events', 'none');
+        handle.setAttribute('display', 'none');
+
+        /* Lock badge */
+        var lockBadge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lockBadge.setAttribute('font-size', '12');
+        lockBadge.setAttribute('text-anchor', 'middle');
+        lockBadge.setAttribute('dominant-baseline', 'central');
+        lockBadge.setAttribute('pointer-events', 'none');
+        lockBadge.setAttribute('display', 'none');
+        lockBadge.textContent = '🔒';
+
+        /* Delete button — × shown above line when selected */
+        var delBtn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        delBtn.textContent = '×';
+        delBtn.setAttribute('font-size', '16');
+        delBtn.setAttribute('font-family', 'monospace');
+        delBtn.setAttribute('font-weight', '700');
+        delBtn.setAttribute('dominant-baseline', 'central');
+        delBtn.setAttribute('text-anchor', 'middle');
+        delBtn.setAttribute('cursor', 'pointer');
+        delBtn.setAttribute('display', 'none');
+        delBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var idx = drawings.indexOf(d);
+            if (idx < 0) return;
+            _removeOne(d);
+            drawings.splice(idx, 1);
+            if (selectedIdx === idx) selectedIdx = -1;
+            else if (selectedIdx > idx) selectedIdx--;
+            saveDrawings();
+        });
+
+        /* Duplicate button — + shown above line when selected */
+        var dupBtn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        dupBtn.textContent = '+';
+        dupBtn.setAttribute('font-size', '14');
+        dupBtn.setAttribute('font-family', 'monospace');
+        dupBtn.setAttribute('font-weight', '700');
+        dupBtn.setAttribute('dominant-baseline', 'central');
+        dupBtn.setAttribute('text-anchor', 'middle');
+        dupBtn.setAttribute('cursor', 'pointer');
+        dupBtn.setAttribute('display', 'none');
+        dupBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var idx = drawings.indexOf(d);
+            if (idx >= 0) _dupHLine(idx);
+        });
+
+        g.appendChild(hit); g.appendChild(line);
+        g.appendChild(lbl); g.appendChild(handle); g.appendChild(lockBadge);
+        g.appendChild(delBtn); g.appendChild(dupBtn);
+        svg.appendChild(g);
+
+        d.el = g; d.lineEl = line; d.hitEl = hit;
+        d.lblEl = lbl; d.handleEl = handle; d.lockBadge = lockBadge;
+        d.delBtn = delBtn; d.dupBtn = dupBtn;
+
+        updateHLine(d);
+    }
+
+    function updateHLine(d) {
+        if (!d.el || !chart || !S.candle) return;
+        var y = _priceToY(d.price);
+        if (y == null) { d.el.setAttribute('display', 'none'); return; }
+        d.el.removeAttribute('display');
+
+        var chartEl = document.getElementById('tvlw-chart');
+        var maxX    = chartEl ? (chartEl.clientWidth - psWidth()) : 800;
+        var col     = d.color || '#ffd700';
+        var isSel   = (selectedIdx === drawings.indexOf(d));
+        var w       = d.width || 1;
+        var dash    = _svgDash(d.style);
+
+        function setH(el) {
+            el.setAttribute('x1', 0); el.setAttribute('y1', y);
+            el.setAttribute('x2', maxX); el.setAttribute('y2', y);
+        }
+        setH(d.lineEl); setH(d.hitEl);
+
+        d.lineEl.setAttribute('stroke', col);
+        d.lineEl.setAttribute('stroke-width', isSel ? w + 1 : w);
+        d.lineEl.setAttribute('stroke-dasharray', dash);
+        d.lineEl.setAttribute('stroke-opacity', d.locked ? '0.55' : '1');
+        d.hitEl.setAttribute('cursor', d.locked ? 'default' : 'move');
+
+        /* Price label tucked right against the chart boundary */
+        d.lblEl.setAttribute('x', maxX - 3);
+        d.lblEl.setAttribute('y', y - 8);
+        d.lblEl.setAttribute('fill', col);
+        d.lblEl.textContent = fmtPrice(d.price);
+
+        /* Selection handle at right end */
+        if (isSel && !d.locked) {
+            d.handleEl.setAttribute('cx', maxX);
+            d.handleEl.setAttribute('cy', y);
+            d.handleEl.setAttribute('fill', 'rgba(13,17,23,0.92)');
+            d.handleEl.setAttribute('stroke', col);
+            d.handleEl.setAttribute('display', '');
+            /* × delete button and + dup button — left side, above the line */
+            d.delBtn.setAttribute('x', 18);
+            d.delBtn.setAttribute('y', y - 11);
+            d.delBtn.setAttribute('fill', '#ff5252');
+            d.delBtn.setAttribute('display', '');
+            d.dupBtn.setAttribute('x', 36);
+            d.dupBtn.setAttribute('y', y - 11);
+            d.dupBtn.setAttribute('fill', '#38b6ff');
+            d.dupBtn.setAttribute('display', '');
+        } else {
+            d.handleEl.setAttribute('display', 'none');
+            if (d.delBtn) d.delBtn.setAttribute('display', 'none');
+            if (d.dupBtn) d.dupBtn.setAttribute('display', 'none');
+        }
+
+        /* Lock badge at midpoint */
+        if (d.locked) {
+            d.lockBadge.setAttribute('x', maxX / 2);
+            d.lockBadge.setAttribute('y', y - 10);
+            d.lockBadge.setAttribute('display', '');
+        } else {
+            d.lockBadge.setAttribute('display', 'none');
+        }
+    }
+
+    function updateAllHLines() {
+        drawings.forEach(function(d) { if (d.type === 'h-line') updateHLine(d); });
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+       CIRCLE DRAWING TOOL
+       ═══════════════════════════════════════════════════════════════════════ */
+
+    function saveCircles() {
+        try {
+            localStorage.setItem(_circleKey(), JSON.stringify(
+                circles.map(function(c) {
+                    return { cx_time:c.cx_time, cy_price:c.cy_price, r_price:c.r_price,
+                             color:c.color, width:c.width, style:c.style||'solid', locked:c.locked||false };
+                })
+            ));
+        } catch(e) {}
+    }
+
+    function loadCircles() {
+        try {
+            var raw = localStorage.getItem(_circleKey()); if (!raw) return;
+            JSON.parse(raw).forEach(function(d) {
+                try {
+                    var obj = { cx_time:d.cx_time, cy_price:d.cy_price, r_price:d.r_price,
+                                color:d.color||'#ffd700', width:d.width||1,
+                                style:d.style||'solid', locked:d.locked||false };
+                    circles.push(obj);
+                    buildCircleEl(obj);
+                } catch(e) {}
+            });
+        } catch(e) {}
+    }
+
+    function buildCircleEl(c) {
+        var svg = ensureTrendOverlay(); if (!svg) return;
+        var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+        var hitEl = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        hitEl.setAttribute('fill', 'none');
+        hitEl.setAttribute('stroke', 'transparent');
+        hitEl.setAttribute('stroke-width', '14');
+        hitEl.setAttribute('pointer-events', 'stroke');
+        hitEl.setAttribute('cursor', 'move');
+
+        var circEl = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circEl.setAttribute('fill', 'none');
+        circEl.setAttribute('pointer-events', 'none');
+
+        var cHandle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        cHandle.setAttribute('r', '5');
+        cHandle.setAttribute('stroke', '#fff');
+        cHandle.setAttribute('stroke-width', '1.5');
+        cHandle.setAttribute('pointer-events', 'all');
+        cHandle.setAttribute('cursor', 'move');
+        cHandle.setAttribute('display', 'none');
+
+        var rHandle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        rHandle.setAttribute('r', '5');
+        rHandle.setAttribute('stroke', '#fff');
+        rHandle.setAttribute('stroke-width', '1.5');
+        rHandle.setAttribute('pointer-events', 'all');
+        rHandle.setAttribute('cursor', 'ew-resize');
+        rHandle.setAttribute('display', 'none');
+
+        var lockBadge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lockBadge.textContent = '🔒';
+        lockBadge.setAttribute('font-size', '11');
+        lockBadge.setAttribute('pointer-events', 'none');
+        lockBadge.setAttribute('display', 'none');
+
+        g.appendChild(hitEl); g.appendChild(circEl);
+        g.appendChild(cHandle); g.appendChild(rHandle);
+        g.appendChild(lockBadge);
+        svg.appendChild(g);
+
+        c.el = g; c.circEl = circEl; c.hitEl = hitEl;
+        c.cHandle = cHandle; c.rHandle = rHandle; c.lockBadge = lockBadge;
+
+        hitEl.addEventListener('mousedown', function(e) {
+            if (drawMode) return;
+            var idx = circles.indexOf(c); if (idx < 0) return;
+            _selectCircle(idx);
+            e.stopPropagation();
+            if (c.locked) return;
+            e.preventDefault();
+            var chartEl2 = document.getElementById('tvlw-chart'); if (!chartEl2) return;
+            var rr = chartEl2.getBoundingClientRect();
+            circleDrag = { type:'move', idx:idx,
+                startX: e.clientX - rr.left, startY: e.clientY - rr.top,
+                origCxTime: c.cx_time, origCyPrice: c.cy_price };
+            try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+        });
+        hitEl.addEventListener('mousemove', function(e) {
+            if (circleDrag) return;
+            hitEl.setAttribute('pointer-events', 'none');
+            var below = document.elementFromPoint(e.clientX, e.clientY);
+            hitEl.setAttribute('pointer-events', 'stroke');
+            if (below && below !== hitEl) {
+                below.dispatchEvent(new MouseEvent('mousemove', {
+                    bubbles:true, cancelable:true,
+                    clientX:e.clientX, clientY:e.clientY, view:window
+                }));
+            }
+        });
+        cHandle.addEventListener('mousedown', function(e) {
+            if (drawMode) return;
+            var idx = circles.indexOf(c); if (idx < 0) return;
+            e.stopPropagation();
+            if (c.locked) return;
+            e.preventDefault();
+            var chartEl2 = document.getElementById('tvlw-chart'); if (!chartEl2) return;
+            var rr = chartEl2.getBoundingClientRect();
+            circleDrag = { type:'move', idx:idx,
+                startX: e.clientX - rr.left, startY: e.clientY - rr.top,
+                origCxTime: c.cx_time, origCyPrice: c.cy_price };
+            try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+        });
+        rHandle.addEventListener('mousedown', function(e) {
+            if (drawMode) return;
+            var idx = circles.indexOf(c); if (idx < 0) return;
+            e.stopPropagation();
+            if (c.locked) return;
+            e.preventDefault();
+            circleDrag = { type:'resize', idx:idx, origRPrice: c.r_price, origCyPrice: c.cy_price };
+            try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+        });
+    }
+
+    function updateCircle(c) {
+        if (!c.el || !chart || !S.candle) return;
+        var scx = _timeToXExtrap(c.cx_time);
+        var scy = _priceToY(c.cy_price);
+        if (scx == null || scy == null) { c.el.setAttribute('display', 'none'); return; }
+        c.el.setAttribute('display', '');
+
+        var scy2 = _priceToY(c.cy_price + c.r_price);
+        var sr = (scy2 != null) ? Math.abs(scy - scy2) : 20;
+        sr = Math.max(sr, 3);
+
+        var idx = circles.indexOf(c);
+        var isSel = (idx >= 0 && selectedCircle === idx);
+        var col   = c.color || '#ffd700';
+        var lw    = c.width || 1;
+
+        [c.circEl, c.hitEl].forEach(function(el) {
+            el.setAttribute('cx', String(scx));
+            el.setAttribute('cy', String(scy));
+            el.setAttribute('r',  String(sr));
+        });
+        c.circEl.setAttribute('stroke', col);
+        c.circEl.setAttribute('stroke-width', String(lw));
+        c.circEl.setAttribute('stroke-opacity', c.locked ? '0.55' : '1');
+        if (c.style === 'dashed') {
+            c.circEl.setAttribute('stroke-dasharray', '8,5');
+        } else if (c.style === 'dotted') {
+            c.circEl.setAttribute('stroke-dasharray', '2,4');
+        } else {
+            c.circEl.removeAttribute('stroke-dasharray');
+        }
+        c.hitEl.setAttribute('cursor', c.locked ? 'default' : 'move');
+
+        if (isSel && !c.locked) {
+            c.cHandle.setAttribute('cx', String(scx)); c.cHandle.setAttribute('cy', String(scy));
+            c.cHandle.setAttribute('fill', col); c.cHandle.setAttribute('display', '');
+            c.rHandle.setAttribute('cx', String(scx + sr)); c.rHandle.setAttribute('cy', String(scy));
+            c.rHandle.setAttribute('fill', col); c.rHandle.setAttribute('display', '');
+        } else {
+            c.cHandle.setAttribute('display', 'none');
+            c.rHandle.setAttribute('display', 'none');
+        }
+
+        if (c.locked) {
+            c.lockBadge.setAttribute('x', String(scx + 5));
+            c.lockBadge.setAttribute('y', String(scy - sr - 2));
+            c.lockBadge.setAttribute('display', '');
+        } else {
+            c.lockBadge.setAttribute('display', 'none');
+        }
+    }
+
+    function updateAllCircles() { circles.forEach(updateCircle); }
+
+    function _selectCircle(idx) {
+        if (selectedCircle >= 0) _deselectCircle();
+        selectedCircle = idx;
+        updateCircle(circles[idx]);
+    }
+    function _deselectCircle() {
+        if (selectedCircle < 0) return;
+        var old = selectedCircle; selectedCircle = -1;
+        if (circles[old]) updateCircle(circles[old]);
+    }
+
+    function delCircle(idx) {
+        var c = circles[idx]; if (!c) return;
+        if (c.el && c.el.parentNode) c.el.parentNode.removeChild(c.el);
+        circles.splice(idx, 1);
+        if (selectedCircle === idx) selectedCircle = -1;
+        else if (selectedCircle > idx) selectedCircle--;
+        saveCircles();
+    }
+
+    function _dupCircle(idx) {
+        var c = circles[idx]; if (!c) return;
+        var pip = pipSize(_currentPair) * 20;
+        var obj = { cx_time:c.cx_time, cy_price:c.cy_price + pip, r_price:c.r_price,
+                    color:c.color, width:c.width, style:c.style||'solid', locked:false };
+        circles.push(obj);
+        buildCircleEl(obj);
+        _selectCircle(circles.length - 1);
+        saveCircles();
+    }
+
+    function _dupHLine(idx) {
+        var d = drawings[idx]; if (!d) return;
+        var pip = pipSize(_currentPair) * 5;
+        var obj = { type:'h-line', price:d.price + pip, color:d.color,
+                    width:d.width, style:d.style||'solid', locked:false };
+        drawings.push(obj);
+        buildHLineEl(obj);
+        selectDrawing(drawings.length - 1);
+        saveDrawings();
+    }
+
+    /* ── Circle preview (shown while dragging to set radius) ──────────── */
+    function _updateCirclePreview(cx, cy) {
+        if (!circleDraw) return;
+        var svg = ensureTrendOverlay(); if (!svg) return;
+        if (!_circlePreviewEl) {
+            _circlePreviewEl = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            _circlePreviewEl.setAttribute('fill', 'none');
+            _circlePreviewEl.setAttribute('pointer-events', 'none');
+            svg.appendChild(_circlePreviewEl);
+        }
+        var dx = cx - circleDraw.startX, dy = cy - circleDraw.startY;
+        var r  = Math.sqrt(dx * dx + dy * dy);
+        _circlePreviewEl.setAttribute('cx', String(circleDraw.startX));
+        _circlePreviewEl.setAttribute('cy', String(circleDraw.startY));
+        _circlePreviewEl.setAttribute('r',  String(r));
+        _circlePreviewEl.setAttribute('stroke', drawColor);
+        _circlePreviewEl.setAttribute('stroke-width', String(drawWidth));
+        _circlePreviewEl.setAttribute('stroke-dasharray', '6,4');
+        _circlePreviewEl.setAttribute('display', '');
+    }
+    function _clearCirclePreview() {
+        if (_circlePreviewEl) _circlePreviewEl.setAttribute('display', 'none');
     }
 
     function loadDrawings() {
@@ -1318,12 +1879,11 @@
             JSON.parse(raw).forEach(function(d) {
                 if (d.type === 'h-line') {
                     try {
-                        var style = d.style || 'solid';
-                        var ls = _twlcLineStyle(style);
-                        var pl = S.candle.createPriceLine({ price:d.price, color:d.color||'#ffd700',
-                            lineWidth:d.width||1, lineStyle:ls,
-                            axisLabelVisible:true, title:fmtPrice(d.price) });
-                        drawings.push({ type:'h-line', priceLine:pl, price:d.price, color:d.color, width:d.width, style:style });
+                        var obj = { type:'h-line', price:d.price,
+                                    color:d.color||'#ffd700', width:d.width||1,
+                                    style:d.style||'solid', locked:d.locked||false };
+                        drawings.push(obj);
+                        buildHLineEl(obj);
                     } catch(e) {}
                 }
                 /* pips type (legacy) and trend type are ignored here */
@@ -1339,9 +1899,9 @@
     }
 
     function _removeOne(d) {
-        try {
-            if (d.type==='h-line') S.candle.removePriceLine(d.priceLine);
-        } catch(e) {}
+        if (d.type === 'h-line' && d.el && d.el.parentNode) {
+            d.el.parentNode.removeChild(d.el);
+        }
     }
 
     function copyDragData(d) {
@@ -1362,25 +1922,21 @@
     function selectDrawing(idx) {
         if (selectedIdx >= 0) deselectDrawing();
         var d = drawings[idx]; selectedIdx = idx; d._selected = true;
-        try {
-            if (d.type==='h-line') d.priceLine.applyOptions({ lineStyle:LC().LineStyle.LargeDashed, lineWidth:(d.width||drawWidth)+1 });
-        } catch(e) {}
+        if (d.type === 'h-line') updateHLine(d);
     }
 
     function deselectDrawing() {
         if (selectedIdx < 0) return;
         var d = drawings[selectedIdx]; d._selected = false;
-        try {
-            if (d.type==='h-line') d.priceLine.applyOptions({ lineStyle:_twlcLineStyle(d.style||'solid'), lineWidth:d.width||drawWidth });
-        } catch(e) {}
+        if (d.type === 'h-line') updateHLine(d);
         selectedIdx = -1;
     }
 
     function moveDrawing(idx, priceDelta) {
         var d = drawings[idx];
-        if (d.type==='h-line' && dragStartData) {
-            var np = (dragStartData.price||0) + priceDelta;
-            try { d.priceLine.applyOptions({ price:np, title:fmtPrice(np) }); d.price=np; } catch(e) {}
+        if (d.type === 'h-line' && dragStartData) {
+            d.price = (dragStartData.price || 0) + priceDelta;
+            updateHLine(d);
         }
         saveDrawings();
     }
@@ -1400,6 +1956,29 @@
             '</div>';
     }
 
+    /* ── Make any fixed/absolute element draggable by its handle ─────────────── */
+    function _makeDraggable(el, handle) {
+        if (!el || !handle) return;
+        var startX, startY, startLeft, startTop;
+        handle.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            startX    = e.clientX;
+            startY    = e.clientY;
+            startLeft = parseInt(el.style.left) || 0;
+            startTop  = parseInt(el.style.top)  || 0;
+            function onMove(ev) {
+                el.style.left = (startLeft + ev.clientX - startX) + 'px';
+                el.style.top  = (startTop  + ev.clientY - startY) + 'px';
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup',   onUp);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+        });
+    }
+
     function _showPositionForm(dir, entry, tp, sl, barTime, iv, screenX, screenY) {
         _hidePositionForm();
         var col   = dir === 'long' ? '#00ff88' : '#ff3366';
@@ -1408,30 +1987,30 @@
         var dec   = isJPY(_currentPair) ? 3  : 5;
         var step  = isJPY(_currentPair) ? 0.001 : 0.00001;
 
-        var chartEl = document.getElementById('tvlw-chart');
-        if (!chartEl) return;
-        var chartW = chartEl.clientWidth;
-
-        /* Keep form inside chart bounds */
-        var fx = Math.min(screenX + 18, chartW - 230);
-        var fy = Math.max(screenY - 110, 8);
+        /* Keep form inside viewport — use fixed positioning anchored to screen coords */
+        var vpW = window.innerWidth  || 1200;
+        var vpH = window.innerHeight || 800;
+        var fx  = Math.min(screenX + 18, vpW - 240);
+        var fy  = Math.max(screenY - 110, 8);
+        fy = Math.min(fy, vpH - 280);   /* don't run off bottom */
 
         var form = document.createElement('div');
         form.id = 'apex-pos-form';
         form.style.cssText =
-            'position:absolute;left:' + fx + 'px;top:' + fy + 'px;' +
-            'z-index:60;background:rgba(13,17,23,0.97);' +
+            'position:fixed;left:' + fx + 'px;top:' + fy + 'px;' +
+            'z-index:99999;background:rgba(13,17,23,0.97);' +
             'border:1.5px solid ' + col + ';border-radius:8px;' +
             'padding:14px;width:215px;box-sizing:border-box;' +
             'box-shadow:0 8px 28px rgba(0,0,0,0.7);' +
             'font-family:monospace;';
 
         form.innerHTML =
-            '<div style="color:' + col + ';font-weight:700;font-size:13px;' +
-            'margin-bottom:11px;display:flex;align-items:center">' +
+            '<div id="apf-drag-handle" style="color:' + col + ';font-weight:700;font-size:13px;' +
+            'margin-bottom:11px;display:flex;align-items:center;cursor:move;' +
+            'padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,0.08);">' +
             arrow +
             '<span style="color:#7d8590;font-size:10px;font-weight:400;margin-left:auto">' +
-            (_currentPair || '') + '</span></div>' +
+            (_currentPair || '') + ' &nbsp;⠿</span></div>' +
             _posFormField('Entry',      'apf-entry', entry.toFixed(dec), step, '#e6edf3') +
             _posFormField('Stop Loss',  'apf-sl',    sl.toFixed(dec),    step, '#ff3366') +
             _posFormField('Take Profit','apf-tp',    tp.toFixed(dec),    step, '#00ff88') +
@@ -1443,7 +2022,8 @@
             'border:1px solid #30363d;border-radius:4px;padding:7px 11px;' +
             'cursor:pointer;font-size:12px">✕</button></div>';
 
-        chartEl.appendChild(form);
+        document.body.appendChild(form);
+        _makeDraggable(form, document.getElementById('apf-drag-handle'));
 
         function _doPlace() {
             var e = parseFloat((document.getElementById('apf-entry')  || {}).value);
@@ -1474,16 +2054,534 @@
         if (f && f.parentNode) f.parentNode.removeChild(f);
     }
 
+    /* Edit form opened by double-clicking an existing position tool */
+    function _showPositionEditForm(pos, screenX, screenY) {
+        _hidePositionForm();
+        var dir   = pos.direction;
+        var col   = dir === 'long' ? '#00ff88' : '#ff3366';
+        var bgCol = dir === 'long' ? '#003d1f'  : '#3d0010';
+        var arrow = dir === 'long' ? '▲ LONG'   : '▼ SHORT';
+        var dec   = isJPY(_currentPair) ? 3  : 5;
+        var step  = isJPY(_currentPair) ? 0.001 : 0.00001;
+
+        /* screenX/Y are viewport clientX/Y from dblclick event — use fixed positioning */
+        var vpW = window.innerWidth  || 1200;
+        var vpH = window.innerHeight || 800;
+        var fx  = Math.min(screenX + 18, vpW - 250);
+        var fy  = Math.max(screenY - 130, 8);
+        fy = Math.min(fy, vpH - 320);
+
+        var form = document.createElement('div');
+        form.id = 'apex-pos-form';
+        form.style.cssText =
+            'position:fixed;left:' + fx + 'px;top:' + fy + 'px;z-index:99999;' +
+            'background:rgba(13,17,23,0.97);border:1.5px solid ' + col + ';border-radius:8px;' +
+            'padding:14px;width:220px;box-sizing:border-box;' +
+            'box-shadow:0 8px 28px rgba(0,0,0,0.7);font-family:monospace;';
+
+        var lockLabel = pos.locked ? '🔒 Locked' : '🔓 Unlocked';
+        var lockCol   = pos.locked ? '#ffd700' : '#8b949e';
+
+        form.innerHTML =
+            '<div id="apf-drag-handle" style="color:' + col + ';font-weight:700;font-size:13px;' +
+            'margin-bottom:11px;display:flex;align-items:center;gap:6px;cursor:move;' +
+            'padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,0.08);">' +
+            arrow +
+            '<span style="color:#7d8590;font-size:10px;font-weight:400;margin-left:auto">' +
+            (_currentPair || '') + ' &nbsp;⠿</span></div>' +
+            _posFormField('Entry',       'apf-entry', pos.entry.toFixed(dec), step, '#e6edf3') +
+            _posFormField('Stop Loss',   'apf-sl',    pos.sl.toFixed(dec),    step, '#ff3366') +
+            _posFormField('Take Profit', 'apf-tp',    pos.tp.toFixed(dec),    step, '#00ff88') +
+            '<div style="display:flex;gap:5px;margin-top:12px">' +
+            '<button id="apf-apply" style="flex:1;background:' + bgCol + ';color:' + col +
+            ';border:1px solid ' + col + ';border-radius:4px;padding:7px;cursor:pointer;' +
+            'font-weight:700;font-size:12px;font-family:monospace">Apply</button>' +
+            '<button id="apf-lock" style="background:#21262d;color:' + lockCol +
+            ';border:1px solid #30363d;border-radius:4px;padding:6px 8px;' +
+            'cursor:pointer;font-size:11px;white-space:nowrap">' + lockLabel + '</button>' +
+            '<button id="apf-cancel" style="background:#21262d;color:#8b949e;' +
+            'border:1px solid #30363d;border-radius:4px;padding:7px 10px;' +
+            'cursor:pointer;font-size:12px">✕</button></div>';
+
+        document.body.appendChild(form);
+        _makeDraggable(form, document.getElementById('apf-drag-handle'));
+
+        function _doApply() {
+            var ev = parseFloat((document.getElementById('apf-entry') || {}).value);
+            var sv = parseFloat((document.getElementById('apf-sl')    || {}).value);
+            var tv = parseFloat((document.getElementById('apf-tp')    || {}).value);
+            if (isNaN(ev) || isNaN(sv) || isNaN(tv)) return;
+            pos.entry = ev; pos.sl = sv; pos.tp = tv;
+            updatePos(pos); savePos(); _hidePositionForm();
+        }
+
+        document.getElementById('apf-apply').addEventListener('click', _doApply);
+        document.getElementById('apf-lock').addEventListener('click', function() {
+            pos.locked = !pos.locked;
+            updatePos(pos); savePos(); _hidePositionForm();
+        });
+        document.getElementById('apf-cancel').addEventListener('click', _hidePositionForm);
+
+        form.addEventListener('keydown', function(ev) {
+            if (ev.key === 'Enter')  _doApply();
+            if (ev.key === 'Escape') _hidePositionForm();
+            ev.stopPropagation();
+        });
+        setTimeout(function() {
+            var inp = document.getElementById('apf-entry');
+            if (inp) { inp.focus(); inp.select(); }
+        }, 60);
+    }
+
     /* Dismiss form when clicking anywhere outside it */
     document.addEventListener('mousedown', function(e) {
         var f = document.getElementById('apex-pos-form');
         if (f && !f.contains(e.target)) _hidePositionForm();
     });
 
-    /* Dismiss form on Escape */
+    /* Keyboard shortcuts — Delete/Backspace deletes selected drawing; Escape dismisses forms */
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') _hidePositionForm();
+        /* Never intercept keys while user is typing in an input or textarea */
+        var tag = e.target && e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (e.target && e.target.isContentEditable) return;
+
+        if (e.key === 'Escape') {
+            _hidePositionForm();
+            _hideDrawingSettings();
+            _deselectBox(); _deselectTrend(); _deselectFib(); _deselectPos();
+            return;
+        }
+
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (window._apexDeleteSelected && window._apexDeleteSelected()) {
+                e.preventDefault();
+            }
+        }
+
+        if (e.key === 'l' || e.key === 'L') {
+            if (window._apexLockSelected) window._apexLockSelected();
+            e.preventDefault();
+        }
     });
+
+    /* ═══════════════════════════════════════════════════════════════════════
+       DRAWING SETTINGS POPUP  (Issue #6 — double-click any drawing to edit)
+       ═══════════════════════════════════════════════════════════════════════ */
+
+    var _SETTINGS_COLORS = [
+        '#ffffff','#ff3366','#00ff88','#38b6ff','#ffd700','#ff9900','#cc44ff','#ff69b4','#7d8590'
+    ];
+
+    function _showDrawingSettings(cx, cy, drawingType, idx) {
+        _hideDrawingSettings();
+        var popup = document.createElement('div');
+        popup.id  = 'apex-drawing-settings';
+        popup.style.cssText =
+            'position:fixed;z-index:9999;background:#161b22;border:1px solid #30363d;' +
+            'border-radius:6px;padding:10px 12px;box-shadow:0 4px 16px rgba(0,0,0,0.6);' +
+            'font-family:monospace;font-size:11px;min-width:170px;';
+        /* Position near cursor but keep on-screen */
+        var pw = 180, ph = 130;
+        var lft = Math.min(cx + 8, window.innerWidth  - pw - 4);
+        var top = Math.min(cy + 8, window.innerHeight - ph - 4);
+        popup.style.left = lft + 'px';
+        popup.style.top  = top + 'px';
+
+        /* Title */
+        var title = document.createElement('div');
+        title.style.cssText = 'color:#8b949e;margin-bottom:8px;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;display:flex;justify-content:space-between;';
+        title.innerHTML = '<span>' + drawingType + ' Settings</span>';
+        var closeBtn = document.createElement('span');
+        closeBtn.textContent = '×'; closeBtn.style.cssText = 'cursor:pointer;color:#8b949e;font-size:14px;';
+        closeBtn.addEventListener('click', _hideDrawingSettings);
+        title.appendChild(closeBtn);
+        popup.appendChild(title);
+
+        /* Color row */
+        var colorRow = document.createElement('div');
+        colorRow.style.cssText = 'display:flex;gap:5px;align-items:center;margin-bottom:8px;';
+        var colorLbl = document.createElement('span'); colorLbl.textContent = 'Color'; colorLbl.style.color='#8b949e'; colorLbl.style.minWidth='36px';
+        colorRow.appendChild(colorLbl);
+        _SETTINGS_COLORS.forEach(function(col) {
+            var sw = document.createElement('div');
+            sw.style.cssText = 'width:14px;height:14px;border-radius:50%;background:' + col + ';cursor:pointer;border:1.5px solid rgba(255,255,255,0.15);flex-shrink:0;';
+            sw.addEventListener('click', function() {
+                _applySettingColor(drawingType, idx, col);
+                _hideDrawingSettings();
+            });
+            colorRow.appendChild(sw);
+        });
+        popup.appendChild(colorRow);
+
+        /* Width row (boxes / trendlines only) */
+        if (drawingType === 'box' || drawingType === 'trend') {
+            var wRow = document.createElement('div');
+            wRow.style.cssText = 'display:flex;gap:5px;align-items:center;margin-bottom:8px;';
+            var wLbl = document.createElement('span'); wLbl.textContent = 'Width'; wLbl.style.color='#8b949e'; wLbl.style.minWidth='36px';
+            wRow.appendChild(wLbl);
+            [1,2,3].forEach(function(w) {
+                var wb = document.createElement('div');
+                wb.textContent = w + 'px';
+                wb.style.cssText = 'cursor:pointer;padding:2px 6px;border-radius:3px;background:#21262d;color:#e6edf3;border:1px solid #30363d;';
+                wb.addEventListener('click', function() {
+                    _applySettingWidth(drawingType, idx, w);
+                    _hideDrawingSettings();
+                });
+                wRow.appendChild(wb);
+            });
+            popup.appendChild(wRow);
+        }
+
+        /* Lock toggle — available for all drawing types */
+        (function() {
+            var obj = null;
+            var isLocked = false;
+            if (drawingType === 'fib')   { obj = fibs[idx];       isLocked = !!(obj && obj.locked); }
+            if (drawingType === 'box')   { obj = boxes[idx];      isLocked = !!(obj && obj.locked); }
+            if (drawingType === 'trend') { obj = trendlines[idx]; isLocked = !!(obj && obj.locked); }
+            if (!obj) return;
+
+            var lockRow = document.createElement('div'); lockRow.style.marginBottom = '6px';
+            var lockBtn0 = document.createElement('div');
+            lockBtn0.textContent = isLocked ? '🔒 Locked — click to unlock' : '🔓 Unlocked — click to lock';
+            lockBtn0.style.cssText = 'cursor:pointer;color:' + (isLocked ? '#ffd700' : '#8b949e') + ';padding:3px 0;font-size:11px;';
+            lockBtn0.addEventListener('click', function() {
+                _hideDrawingSettings();
+                if (drawingType === 'fib') {
+                    var f = fibs[idx]; if (!f) return;
+                    f.locked = !f.locked; updateFib(f); saveFibs();
+                } else if (drawingType === 'box') {
+                    var b = boxes[idx]; if (!b) return;
+                    b.locked = !b.locked; updateBox(b); saveBoxes();
+                } else if (drawingType === 'trend') {
+                    var t = trendlines[idx]; if (!t) return;
+                    t.locked = !t.locked; updateTrendline(t); saveTrendlines();
+                }
+            });
+            lockRow.appendChild(lockBtn0);
+            popup.appendChild(lockRow);
+        }());
+
+        /* Delete button */
+        var delRow = document.createElement('div'); delRow.style.marginTop = '4px';
+        var delBtn2 = document.createElement('div');
+        delBtn2.textContent = '🗑 Delete';
+        delBtn2.style.cssText = 'cursor:pointer;color:#ff3366;padding:3px 0;';
+        delBtn2.addEventListener('click', function() {
+            _hideDrawingSettings();
+            if (drawingType === 'box')   delBox(idx);
+            if (drawingType === 'trend') delTrendline(idx);
+            if (drawingType === 'fib')   delFib(idx);
+        });
+        delRow.appendChild(delBtn2);
+        popup.appendChild(delRow);
+
+        document.body.appendChild(popup);
+
+        /* Close on outside click */
+        setTimeout(function() {
+            document.addEventListener('mousedown', _settingsOutsideClick);
+        }, 50);
+    }
+
+    function _settingsOutsideClick(e) {
+        var p = document.getElementById('apex-drawing-settings');
+        if (p && !p.contains(e.target)) _hideDrawingSettings();
+    }
+
+    function _hideDrawingSettings() {
+        var p = document.getElementById('apex-drawing-settings');
+        if (p && p.parentNode) p.parentNode.removeChild(p);
+        document.removeEventListener('mousedown', _settingsOutsideClick);
+    }
+
+    function _applySettingColor(type, idx, col) {
+        if (type === 'box') {
+            var b = boxes[idx]; if (!b) return;
+            b.color = col; updateBox(b); saveBoxes();
+        } else if (type === 'trend') {
+            var t = trendlines[idx]; if (!t) return;
+            t.color = col; updateTrendline(t); saveTrendlines();
+        } else if (type === 'fib') {
+            var f = fibs[idx]; if (!f) return;
+            f.color = col; updateFib(f); saveFibs();
+        }
+    }
+
+    function _applySettingWidth(type, idx, w) {
+        if (type === 'box') {
+            var b = boxes[idx]; if (!b) return;
+            b.borderWidth = w; updateBox(b); saveBoxes();
+        } else if (type === 'trend') {
+            var t = trendlines[idx]; if (!t) return;
+            t.width = w; updateTrendline(t); saveTrendlines();
+        }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+       FIBONACCI RETRACEMENT TOOL
+       ═══════════════════════════════════════════════════════════════════════ */
+
+    function _fibKey() {
+        return 'apex_fibs_' + (_currentPair || 'default');
+    }
+
+    function saveFibs() {
+        try {
+            var data = fibs.map(function(f) {
+                return { id:f.id, t1:f.t1, p1:f.p1, t2:f.t2, p2:f.p2,
+                         color:f.color, locked: !!f.locked };
+            });
+            localStorage.setItem(_fibKey(), JSON.stringify(data));
+        } catch(e) {}
+    }
+
+    function loadFibs() {
+        try {
+            var raw = localStorage.getItem(_fibKey());
+            if (!raw) return;
+            var arr = JSON.parse(raw);
+            arr.forEach(function(d) {
+                addFib(d.t1, d.p1, d.t2, d.p2, d.color || drawColor, d.id, !!d.locked);
+                /* Keep fibIdCtr above any loaded ids so new fibs don't collide */
+                var numId = parseInt(d.id, 10);
+                if (!isNaN(numId) && numId > fibIdCtr) fibIdCtr = numId;
+            });
+        } catch(e) {}
+    }
+
+    function ensureFibOverlay() {
+        if (fibOverlay && fibOverlay.parentNode) return fibOverlay;
+        var el = document.getElementById('tvlw-chart'); if (!el) return null;
+        fibOverlay = document.createElement('div');
+        fibOverlay.id = 'apex-fib-overlay';
+        fibOverlay.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:visible;z-index:4;';
+        el.style.position = 'relative';
+        el.appendChild(fibOverlay);
+        return fibOverlay;
+    }
+
+    function buildFibEl(fib) {
+        /* ── outer wrapper: full overlay size; overflow:visible so labels escape ── */
+        var wrap = document.createElement('div');
+        wrap.className = 'apex-fib';
+        wrap.dataset.fibId = String(fib.id);
+        wrap.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:visible;';
+
+        /* ── inner band: horizontally bounded between x1 and x2 ── */
+        var band = document.createElement('div');
+        band.style.cssText = 'position:absolute;top:0;bottom:0;overflow:visible;pointer-events:none;';
+        wrap.appendChild(band);
+
+        /* ── level lines + labels + per-level hit strip inside the band ── */
+        var levels = [];
+        FIB_LEVELS.forEach(function(lvl) {
+            var lineEl = document.createElement('div');
+            lineEl.style.cssText =
+                'position:absolute;left:0;right:0;height:1px;pointer-events:none;' +
+                'background:' + lvl.col + ';opacity:0.80;';
+
+            var labelEl = document.createElement('div');
+            labelEl.style.cssText =
+                'position:absolute;left:calc(100% + 5px);font-family:monospace;font-size:12px;' +
+                'pointer-events:none;white-space:nowrap;' +
+                'color:' + lvl.col + ';background:rgba(13,17,23,0.72);' +
+                'padding:1px 4px;border-radius:2px;transform:translateY(-50%);';
+
+            /* Thin hit strip centred on this level line — replaces the old full-area moveArea.
+               Only the level lines are interactive; space between them is transparent to events. */
+            var hitStrip = document.createElement('div');
+            hitStrip.style.cssText =
+                'position:absolute;left:0;right:0;height:10px;pointer-events:auto;' +
+                'cursor:move;z-index:8;';
+            hitStrip.addEventListener('mousedown', function(e) { _fibMousedown('move', e); });
+            /* Pass mousemove through so crosshair still tracks above/below a level */
+            hitStrip.addEventListener('mousemove', function(e) {
+                if (fibDrag) return;
+                hitStrip.style.pointerEvents = 'none';
+                var below = document.elementFromPoint(e.clientX, e.clientY);
+                hitStrip.style.pointerEvents = 'auto';
+                if (below && below !== hitStrip) {
+                    below.dispatchEvent(new MouseEvent('mousemove', {
+                        bubbles: true, cancelable: true,
+                        clientX: e.clientX, clientY: e.clientY, view: window
+                    }));
+                }
+            });
+
+            band.appendChild(lineEl);
+            band.appendChild(labelEl);
+            band.appendChild(hitStrip);
+            levels.push({ lineEl: lineEl, labelEl: labelEl, hitStrip: hitStrip,
+                          pct: lvl.pct, col: lvl.col });
+        });
+
+        /* ── p1 and p2 endpoint circles for resize ── */
+        function _mkHandle() {
+            var h = document.createElement('div');
+            h.style.cssText =
+                'position:absolute;width:10px;height:10px;border-radius:50%;' +
+                'background:#fff;border:1.5px solid #666;cursor:crosshair;' +
+                'pointer-events:auto;z-index:18;transform:translate(-50%,-50%);';
+            return h;
+        }
+        var h1 = _mkHandle();  // p1 endpoint handle
+        var h2 = _mkHandle();  // p2 endpoint handle
+        wrap.appendChild(h1);
+        wrap.appendChild(h2);
+
+        /* ── delete button (shown on hover) ── */
+        var delBtn = document.createElement('div');
+        delBtn.textContent = '×';
+        delBtn.style.cssText =
+            'position:absolute;z-index:22;color:#ccc;font-size:12px;cursor:pointer;' +
+            'pointer-events:auto;background:rgba(13,17,23,0.88);' +
+            'width:14px;height:14px;line-height:14px;text-align:center;' +
+            'border-radius:50%;border:1px solid #555;display:none;';
+        wrap.appendChild(delBtn);
+
+        /* ── wire events ── */
+        function _getIdx() {
+            return fibs.findIndex(function(f) { return String(f.id) === String(fib.id); });
+        }
+        function _fibMousedown(type, e) {
+            if (drawMode) return; // drawMode active: let event bubble so new drawing is created
+            var idx = _getIdx(); if (idx < 0) return;
+            var ff = fibs[idx];
+            _selectFib(idx);
+            /* Always stop propagation — prevents _onDown from immediately deselecting the fib */
+            e.stopPropagation();
+            if (ff.locked) return; // locked: selected but no drag
+            e.preventDefault();
+            var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
+            var r = chartEl.getBoundingClientRect();
+            fibDrag = {
+                type: type, idx: idx,
+                startX: e.clientX - r.left, startY: e.clientY - r.top,
+                origP1: ff.p1, origP2: ff.p2, origT1: ff.t1, origT2: ff.t2,
+            };
+            try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+        }
+        h1.addEventListener('mousedown', function(e) { _fibMousedown('p1', e); });
+        h2.addEventListener('mousedown', function(e) { _fibMousedown('p2', e); });
+
+        delBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var idx = _getIdx(); if (idx >= 0) delFib(idx);
+        });
+        /* Delete button visibility is now managed in updateFib (shown when selected) */
+        wrap.addEventListener('dblclick', function(e) {
+            var idx = _getIdx(); if (idx >= 0) _showDrawingSettings(e.clientX, e.clientY, 'fib', idx);
+        });
+
+        fib.el     = wrap;
+        fib.band   = band;
+        fib.h1     = h1;
+        fib.h2     = h2;
+        fib.delBtn = delBtn;
+        fib.levels = levels;
+    }
+
+    function updateFib(fib) {
+        if (!fib.el || !chart || !S.candle) return;
+        var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
+        var chartW  = chartEl.clientWidth - psWidth();
+
+        var x1 = _timeToXExtrap(fib.t1);
+        var x2 = _timeToXExtrap(fib.t2);
+        if (x1 == null) x1 = 0;
+        if (x2 == null) x2 = chartW;
+
+        var xLeft  = Math.min(x1, x2);
+        var xRight = Math.max(x1, x2);
+        var w      = Math.max(xRight - xLeft, 4);
+
+        fib.el.style.display  = 'block';
+        fib.band.style.left   = xLeft + 'px';
+        fib.band.style.width  = w + 'px';
+
+        var dec   = (_currentPair && _currentPair.indexOf('JPY') !== -1) ? 3 : 5;
+        var range = fib.p2 - fib.p1;
+
+        fib.levels.forEach(function(lv) {
+            var price = fib.p1 + lv.pct * range;
+            var y = _priceToY(price);
+            if (y == null) {
+                lv.lineEl.style.display   = 'none';
+                lv.labelEl.style.display  = 'none';
+                lv.hitStrip.style.display = 'none';
+                return;
+            }
+            lv.lineEl.style.display   = 'block';
+            lv.labelEl.style.display  = 'block';
+            lv.hitStrip.style.display = 'block';
+            lv.lineEl.style.top       = y + 'px';
+            lv.labelEl.style.top      = y + 'px';
+            lv.hitStrip.style.top     = (y - 5) + 'px'; /* ±5px centred on the line */
+            var pctStr = lv.pct === 0 ? '0%' : lv.pct === 1 ? '100%' : (lv.pct * 100).toFixed(1) + '%';
+            lv.labelEl.textContent    = pctStr + '  ' + price.toFixed(dec);
+        });
+
+        /* Position endpoint handles (absolute within the full overlay) */
+        var locked = !!fib.locked;
+        var y1 = _priceToY(fib.p1), y2 = _priceToY(fib.p2);
+
+        /* Update hit strip cursor based on locked state */
+        fib.levels.forEach(function(lv) {
+            lv.hitStrip.style.cursor = locked ? 'default' : 'move';
+        });
+
+        fib.el.title = locked ? 'Locked — double-click to edit' : '';
+
+        /* Resize handles: visible only when selected and unlocked */
+        var isSel = (selectedFib === fibs.indexOf(fib));
+        if (isSel && !locked && y1 != null) {
+            fib.h1.style.display = 'block';
+            fib.h1.style.left    = x1 + 'px';
+            fib.h1.style.top     = y1 + 'px';
+        } else { fib.h1.style.display = 'none'; }
+
+        if (isSel && !locked && y2 != null) {
+            fib.h2.style.display = 'block';
+            fib.h2.style.left    = x2 + 'px';
+            fib.h2.style.top     = y2 + 'px';
+        } else { fib.h2.style.display = 'none'; }
+
+        /* Delete button near p1 handle — shown when selected and not locked */
+        if (isSel && !locked && y1 != null) {
+            fib.delBtn.style.display = 'block';
+            fib.delBtn.style.left = (x1 + 6) + 'px';
+            fib.delBtn.style.top  = (y1 - 6) + 'px';
+        } else {
+            fib.delBtn.style.display = 'none';
+        }
+    }
+
+    function updateAllFibs() { fibs.forEach(updateFib); }
+
+    function addFib(t1, p1, t2, p2, color, existingId, locked) {
+        var ov = ensureFibOverlay(); if (!ov) return;
+        var fib = {
+            id: existingId != null ? existingId : (++fibIdCtr),
+            t1: t1, p1: p1, t2: t2, p2: p2, color: color || drawColor,
+            locked: !!locked,
+        };
+        buildFibEl(fib);
+        ov.appendChild(fib.el);
+        fibs.push(fib);
+        updateFib(fib);
+        if (existingId == null) saveFibs();
+    }
+
+    function delFib(idx) {
+        var fib = fibs[idx];
+        if (fib && fib.el && fib.el.parentNode) fib.el.parentNode.removeChild(fib.el);
+        fibs.splice(idx, 1);
+        if (selectedFib === idx) selectedFib = -1;
+        else if (selectedFib > idx) selectedFib--;
+        saveFibs();
+    }
 
     /* ═══════════════════════════════════════════════════════════════════════
        AUTO-SAVE TIMER
@@ -1492,7 +2590,7 @@
     function _startAutoSave() {
         _stopAutoSave();
         _autoSaveTimer = setInterval(function() {
-            saveDrawings(); saveTrendlines(); saveBoxes(); savePos();
+            saveDrawings(); saveTrendlines(); saveBoxes(); savePos(); saveFibs();
         }, 60000);
     }
 
@@ -1529,7 +2627,7 @@
         trendlines = [];
         if (trendOverlay && trendOverlay.parentNode) trendOverlay.parentNode.removeChild(trendOverlay);
         trendOverlay = null; selectedTrend = -1; trendP1 = null;
-        _hideTrendPreview(); trendResize = null; trendMove = null;
+        _hideTrendPreview(); trendResize = null; trendMove = null; _trendMoveStart = null;
 
         /* Positions */
         positions.forEach(function(pos){ if (pos.el&&pos.el.parentNode) pos.el.parentNode.removeChild(pos.el); });
@@ -1542,6 +2640,19 @@
         boxes = [];
         if (boxOverlay && boxOverlay.parentNode) boxOverlay.parentNode.removeChild(boxOverlay);
         boxOverlay = null; boxDraw = null; boxResize = null; boxMove = null; selectedBox = -1;
+
+        /* Fibonacci */
+        fibs.forEach(function(f){ if (f.el&&f.el.parentNode) f.el.parentNode.removeChild(f.el); });
+        fibs = [];
+        if (fibOverlay && fibOverlay.parentNode) fibOverlay.parentNode.removeChild(fibOverlay);
+        fibOverlay = null; fibDraw = null; selectedFib = -1;
+
+        /* Circles — stored in trend overlay (removed above with trendOverlay) */
+        circles = []; selectedCircle = -1; circleDraw = null; circleDrag = null;
+        _circlePreviewEl = null;
+
+        /* Trade SVG lines — also in trend overlay */
+        _tradeSvgLines = []; _liveTradeData = []; tradeDrag = null;
     }
 
     function init() {
@@ -1573,21 +2684,49 @@
             wickUpColor:'#00ff88', wickDownColor:'#ff3366',
             priceFormat: priceFormat(_currentPair),
         }, 0);
+        /* TWLC v5: markers are a separate plugin, not series.setMarkers() */
+        S.markers = LC().createSeriesMarkers(S.candle, []);
         S.emas = [];
 
-        S.cci = chart.addSeries(LC().LineSeries, { color:'#38b6ff', lineWidth:1.5,
-            lastValueVisible:false, priceLineVisible:false, crosshairMarkerVisible:false }, 1);
-        cciRef(100,'#00ff88'); cciRef(0,'#ffd700'); cciRef(-100,'#ff3366');
+        /* CCI and MACD — deferred panes: created on first show, destroyed on hide.
+           LWCHARTS auto-collapses pane[0] fills the freed space automatically.   */
+        S.cci = S.cciMa = S.cciBbUpper = S.cciBbLower = null;
+        S.macd = S.macdLine = S.macdSignal = null;
 
-        S.macd = chart.addSeries(LC().HistogramSeries, {
-            lastValueVisible:false, priceLineVisible:false }, 2);
-        dotted(0, S.macd);
+        /* Bollinger Bands — overlay on price pane (initially invisible) */
+        S.bbUpper = chart.addSeries(LC().LineSeries, {
+            color: '#38b6ff', lineWidth: 1,
+            lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            title: 'BB+', visible: false,
+        }, 0);
+        S.bbBasis = chart.addSeries(LC().LineSeries, {
+            color: '#ffd700', lineWidth: 1, lineStyle: 2,
+            lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            title: 'BB Mid', visible: false,
+        }, 0);
+        S.bbLower = chart.addSeries(LC().LineSeries, {
+            color: '#38b6ff', lineWidth: 1,
+            lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            title: 'BB-', visible: false,
+        }, 0);
+
+        /* Volume — histogram overlay on price pane (initially invisible) */
+        S.volume = chart.addSeries(LC().HistogramSeries, {
+            priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false,
+            visible: false,
+        }, 0);
+        try {
+            chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
+        } catch(e) {}
+
+        /* RSI and Stochastic panes are deferred — created on first enable, destroyed on disable */
+        S.rsi    = null;
+        S.stochK = null;
+        S.stochD = null;
 
         requestAnimationFrame(function() {
-            var panes = chart.panes();
-            try { if (panes[0]) panes[0].setHeight(MAIN_H); } catch(e) {}
-            try { if (panes[1]) panes[1].setHeight(IND_H);  } catch(e) {}
-            try { if (panes[2]) panes[2].setHeight(IND_H);  } catch(e) {}
+            _loadIndSettings();
+            _resizePanes();
         });
 
         try {
@@ -1597,19 +2736,30 @@
             });
         } catch(e) {}
 
-        loadDrawings(); loadTrendlines(); loadPos(); loadBoxes();
+        loadDrawings(); loadTrendlines(); loadPos(); loadBoxes(); loadFibs(); loadCircles();
         _startAutoSave();
 
         try {
             chart.timeScale().subscribeVisibleLogicalRangeChange(function() {
-                updateAllTrendlines(); updateAllPos(); updateAllBoxes();
+                updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines();
+                updateAllCircles(); _updateAllTradeSvgLines();
+            });
+            /* Save zoom (time range) whenever the user scrolls/zooms, keyed per pair+TF */
+            chart.timeScale().subscribeVisibleTimeRangeChange(function(range) {
+                if (!range) return;
+                var zoomKey = 'apex_zoom_' + (_currentPair||'') + '_' + (_currentTf||'');
+                try { localStorage.setItem(zoomKey, JSON.stringify({ from: range.from, to: range.to })); } catch(e) {}
             });
         } catch(e) {}
         try {
             chart.subscribeCrosshairMove(function() {
-                if (trendlines.length > 0) updateAllTrendlines();
-                if (positions.length > 0)  updateAllPos();
-                if (boxes.length > 0)      updateAllBoxes();
+                if (trendlines.length > 0)      updateAllTrendlines();
+                if (positions.length > 0)       updateAllPos();
+                if (boxes.length > 0)           updateAllBoxes();
+                if (fibs.length > 0)            updateAllFibs();
+                if (drawings.length > 0)        updateAllHLines();
+                if (circles.length > 0)         updateAllCircles();
+                if (_tradeSvgLines.length > 0)  _updateAllTradeSvgLines();
             });
         } catch(e) {}
 
@@ -1628,19 +2778,24 @@
                     var tp  = dir==='long' ? price + pip*50 : price - pip*50;
                     var sl  = dir==='long' ? price - pip*25 : price + pip*25;
                     var iv  = _candleInterval();
-                    /* Show manual-entry form so user can set precise levels */
-                    var sx = param.point ? param.point.x : 200;
-                    var sy = param.point ? param.point.y : 200;
+                    /* Use raw mouse event client coords (screen-level) for reliable form placement */
+                    var sx = (param.sourceEvent && param.sourceEvent.clientX != null)
+                             ? param.sourceEvent.clientX
+                             : (param.point ? param.point.x : 200);
+                    var sy = (param.sourceEvent && param.sourceEvent.clientY != null)
+                             ? param.sourceEvent.clientY
+                             : (param.point ? param.point.y : 200);
                     _showPositionForm(dir, price, tp, sl, time, iv, sx, sy);
                     return;
                 }
 
                 if (drawMode==='h-line') {
                     try {
-                        var pl = S.candle.createPriceLine({ price, color:drawColor,
-                            lineWidth:drawWidth, lineStyle:_twlcLineStyle(drawStyle),
-                            axisLabelVisible:true, title:fmtPrice(price) });
-                        drawings.push({ type:'h-line', priceLine:pl, price, color:drawColor, width:drawWidth, style:drawStyle });
+                        var hobj = { type:'h-line', price:price, color:drawColor,
+                                     width:drawWidth, style:drawStyle, locked:false };
+                        drawings.push(hobj);
+                        buildHLineEl(hobj);
+                        selectDrawing(drawings.length - 1);
                         saveDrawings();
                     } catch(e) {}
                     return;
@@ -1659,17 +2814,18 @@
                             tmp=p1v; p1v=p2v; p2v=tmp;
                         }
                         addTrendline(t1v, p1v, t2v, p2v, drawColor, drawWidth, drawStyle);
+                        _selectTrend(trendlines.length - 1);
                     }
                     return;
                 }
 
-                /* pips (measure) mode is handled by the drag system — no click action here */
+                /* pips (measure) and fib modes are handled by the drag system — no click action here */
             });
         } catch(e) {}
 
         /* ── Mouse events ───────────────────────────────────────────────── */
         var _onDown = function(e) {
-            if (posDrag || boxResize || boxMove || trendResize || trendMove) return;
+            if (posDrag || boxResize || boxMove || trendResize || trendMove || fibDrag) return;
             var rect   = el.getBoundingClientRect();
             var chartX = e.clientX - rect.left;
             var chartY = e.clientY - rect.top;
@@ -1688,11 +2844,34 @@
                 return;
             }
 
+            /* Fibonacci retracement draw start — drag from p1 to p2 */
+            if (drawMode === 'fib') {
+                var fTime = _xToTimeExtrap(chartX), fPrice = _yToPrice(chartY);
+                if (!fTime || !fPrice) return;
+                fibDraw = { startX:chartX, startY:chartY, startTime:fTime, startPrice:fPrice };
+                try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+                e.stopPropagation(); e.preventDefault();
+                return;
+            }
+
+            /* Circle draw start — click center, drag to set radius */
+            if (drawMode === 'circle') {
+                var cTime2 = _xToTimeExtrap(chartX), cPrice2 = _yToPrice(chartY);
+                if (!cTime2 || !cPrice2) return;
+                circleDraw = { cx_time:cTime2, cy_price:cPrice2, startX:chartX, startY:chartY };
+                try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+                e.stopPropagation(); e.preventDefault();
+                return;
+            }
+
             if (drawMode) return;
 
             /* Deselect all overlays when clicking neutral area */
             _deselectBox();
             _deselectTrend();
+            _deselectFib();
+            _deselectPos();
+            _deselectCircle();
 
             var price=null, time=null;
             try { price = S.candle.coordinateToPrice(chartY); } catch(err) {}
@@ -1700,8 +2879,12 @@
             if (price==null || !isFinite(price)) return;
             var idx = findNearest(price, time);
             if (idx >= 0) {
-                selectDrawing(idx); isDragging=true;
-                dragStartPrice=price; dragStartData=copyDragData(drawings[idx]);
+                selectDrawing(idx);
+                if (!drawings[idx].locked) {
+                    isDragging=true;
+                    dragStartPrice=price; dragStartData=copyDragData(drawings[idx]);
+                    try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+                }
                 e.stopPropagation();
             } else { deselectDrawing(); }
         };
@@ -1711,6 +2894,52 @@
             if (boxDraw) {
                 var r0 = el.getBoundingClientRect();
                 _updateBoxPreview(e.clientX-r0.left, e.clientY-r0.top);
+                return;
+            }
+            /* fibDrag — move or resize an existing fib */
+            if (fibDrag) {
+                var rfd = el.getBoundingClientRect();
+                var cxd = e.clientX - rfd.left, cyd = e.clientY - rfd.top;
+                var ff  = fibs[fibDrag.idx]; if (!ff) return;
+                if (fibDrag.type === 'move') {
+                    var dprice = (_yToPrice(cyd)||fibDrag.origP1) - (_yToPrice(fibDrag.startY)||fibDrag.origP1);
+                    var dt     = (_xToTimeExtrap(cxd)||fibDrag.origT1) - (_xToTimeExtrap(fibDrag.startX)||fibDrag.origT1);
+                    ff.p1 = fibDrag.origP1 + dprice;
+                    ff.p2 = fibDrag.origP2 + dprice;
+                    ff.t1 = fibDrag.origT1 + dt;
+                    ff.t2 = fibDrag.origT2 + dt;
+                } else if (fibDrag.type === 'p1') {
+                    ff.p1 = _yToPrice(cyd)           || fibDrag.origP1;
+                    ff.t1 = _xToTimeExtrap(cxd)      || fibDrag.origT1;
+                } else if (fibDrag.type === 'p2') {
+                    ff.p2 = _yToPrice(cyd)           || fibDrag.origP2;
+                    ff.t2 = _xToTimeExtrap(cxd)      || fibDrag.origT2;
+                }
+                updateFib(ff);
+                e.stopPropagation(); e.preventDefault();
+                return;
+            }
+            if (fibDraw) {
+                /* Live update: show a temporary fib while dragging */
+                var r0f = el.getBoundingClientRect();
+                var cx = e.clientX - r0f.left, cy = e.clientY - r0f.top;
+                var curP = _yToPrice(cy);
+                /* Remove old preview fib if any, then add fresh one */
+                if (fibDraw._previewIdx != null) {
+                    var pf = fibs[fibDraw._previewIdx];
+                    if (pf) { if (pf.el&&pf.el.parentNode) pf.el.parentNode.removeChild(pf.el); fibs.splice(fibDraw._previewIdx,1); }
+                    fibDraw._previewIdx = null;
+                }
+                if (curP && Math.abs(cy - fibDraw.startY) > 8) {
+                    var curT = _xToTimeExtrap(cx) || fibDraw.startTime;
+                    addFib(fibDraw.startTime, fibDraw.startPrice, curT, curP, drawColor, '__preview__');
+                    fibDraw._previewIdx = fibs.length - 1;
+                }
+                return;
+            }
+            if (circleDraw) {
+                var r0c = el.getBoundingClientRect();
+                _updateCirclePreview(e.clientX - r0c.left, e.clientY - r0c.top);
                 return;
             }
             var rect   = el.getBoundingClientRect();
@@ -1736,9 +2965,68 @@
             }
         };
 
-        var _onUp = function() {
-            if (isDragging) saveDrawings();
+        var _onUp = function(e) {
+            if (isDragging) {
+                saveDrawings();
+                try { chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex) {}
+            }
             isDragging=false; dragStartPrice=null; dragStartData=null;
+
+            /* Finish fibDrag (move/resize) */
+            if (fibDrag) {
+                var ff2 = fibs[fibDrag.idx];
+                if (ff2) { updateFib(ff2); saveFibs(); }
+                fibDrag = null;
+                try { chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex3) {}
+            }
+
+            if (fibDraw) {
+                /* Remove live preview fib */
+                if (fibDraw._previewIdx != null) {
+                    var pf = fibs[fibDraw._previewIdx];
+                    if (pf) { if (pf.el&&pf.el.parentNode) pf.el.parentNode.removeChild(pf.el); fibs.splice(fibDraw._previewIdx,1); }
+                }
+                /* Only place if dragged enough vertically */
+                var r0u = el.getBoundingClientRect();
+                var ey  = (e ? e.clientY : fibDraw.startY) - (r0u ? r0u.top : 0);
+                var endP = _yToPrice(ey);
+                var ex  = e ? (e.clientX - r0u.left) : fibDraw.startX;
+                var endT = _xToTimeExtrap(ex) || fibDraw.startTime;
+                if (endP && Math.abs(ey - fibDraw.startY) > 10) {
+                    addFib(fibDraw.startTime, fibDraw.startPrice, endT, endP, drawColor);
+                }
+                fibDraw = null;
+                try { chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex2) {}
+            }
+
+            /* Circle draw finalize */
+            if (circleDraw) {
+                _clearCirclePreview();
+                var r0ci = el.getBoundingClientRect();
+                var ex2  = e ? (e.clientX - r0ci.left) : circleDraw.startX;
+                var ey2  = e ? (e.clientY - r0ci.top)  : circleDraw.startY;
+                var dx2  = ex2 - circleDraw.startX, dy2 = ey2 - circleDraw.startY;
+                var rPx  = Math.sqrt(dx2*dx2 + dy2*dy2);
+                if (rPx > 5) {
+                    /* Convert pixel radius to price units */
+                    var cySc  = circleDraw.startY;
+                    var edgeP = _yToPrice(cySc + rPx);
+                    var cenP2 = _yToPrice(cySc);
+                    var rPrice = (edgeP && cenP2) ? Math.abs(edgeP - cenP2) : 0;
+                    if (rPrice > 0) {
+                        var cobj = { cx_time:circleDraw.cx_time, cy_price:circleDraw.cy_price,
+                                     r_price:rPrice, color:drawColor, width:drawWidth,
+                                     style:drawStyle, locked:false };
+                        circles.push(cobj);
+                        buildCircleEl(cobj);
+                        updateCircle(cobj);
+                        _selectCircle(circles.length - 1);
+                        saveCircles();
+                    }
+                }
+                circleDraw = null;
+                try { chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex3) {}
+            }
         };
 
         el.addEventListener('mousedown', _onDown);
@@ -1749,8 +3037,16 @@
 
         new ResizeObserver(function() {
             if (chart && el) {
-                try { chart.applyOptions({ width:el.clientWidth, height:el.clientHeight||TOTAL_H }); } catch(e) {}
-                updateAllTrendlines(); updateAllPos(); updateAllBoxes();
+                try {
+                    if (_paneResizeActive) {
+                        /* Height is being managed by _resizePanes — only update width */
+                        chart.applyOptions({ width: el.clientWidth });
+                    } else {
+                        chart.applyOptions({ width: el.clientWidth, height: el.clientHeight || TOTAL_H });
+                    }
+                } catch(e) {}
+                updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs();
+                updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines();
             }
         }).observe(el);
 
@@ -1764,6 +3060,7 @@
 
     function load(data, fitIt) {
         if (!chart || !data) return;
+        _lastChartData = data;
         try { S.candle.applyOptions({ priceFormat:priceFormat(data.pair||'') }); } catch(e) {}
         try { S.candle.setData(data.candlestick||[]); } catch(e) {}
 
@@ -1778,8 +3075,86 @@
             } catch(e) {}
         });
 
-        try { S.cci.setData(data.cci||[]); } catch(e) {}
-        try { S.macd.setData(data.macd||[]); } catch(e) {}
+        /* CCI and MACD — update data if series already exist (creation/removal handled by _applyIndVisualSettings) */
+        try { if (S.cci)        S.cci.setData(data.cci||[]); }              catch(e) {}
+        try { if (S.cciMa)      S.cciMa.setData(data.cci_ma||[]); }        catch(e) {}
+        try { if (S.cciBbUpper) S.cciBbUpper.setData(data.cci_bb_upper||[]); } catch(e) {}
+        try { if (S.cciBbLower) S.cciBbLower.setData(data.cci_bb_lower||[]); } catch(e) {}
+        try { if (S.macd)       S.macd.setData(data.macd||[]); }            catch(e) {}
+        try { if (S.macdLine)   S.macdLine.setData(data.macd_line||[]); }   catch(e) {}
+        try { if (S.macdSignal) S.macdSignal.setData(data.macd_signal||[]); } catch(e) {}
+
+        /* ── New indicators ── */
+        var toggles = data.ind_toggles || {};
+
+        /* RSI — deferred pane: create on first enable, remove on disable.
+           Use chart.panes().length as the target to get a sequential index. */
+        if (!!toggles.rsi) {
+            if (!S.rsi) {
+                try {
+                    var _rsiPane = chart.panes().length;
+                    S.rsi = chart.addSeries(LC().LineSeries, {
+                        color: '#aa00ff', lineWidth: 1.5,
+                        lastValueVisible: false, priceLineVisible: false,
+                        crosshairMarkerVisible: false, title: 'RSI',
+                    }, _rsiPane);
+                    _rsiPane = chart.panes().length - 1;
+                    dotted(70, S.rsi); dotted(30, S.rsi); dotted(50, S.rsi);
+                    (function(pi) { requestAnimationFrame(function() {
+                        try { chart.panes()[pi].setHeight(IND_H); } catch(e) {}
+                    }); })(_rsiPane);
+                } catch(e) {}
+            }
+            try { if (S.rsi) S.rsi.setData(data.rsi || []); } catch(e) {}
+        } else if (S.rsi) {
+            try { chart.removeSeries(S.rsi); } catch(e) {}
+            S.rsi = null;
+        }
+
+        /* Stochastic — deferred pane: create on first enable, remove on disable.
+           K and D must share the same pane — use panes().length-1 for D after K is created. */
+        if (!!toggles.stoch) {
+            if (!S.stochK) {
+                try {
+                    var _stochPane = chart.panes().length;
+                    S.stochK = chart.addSeries(LC().LineSeries, {
+                        color: '#2962ff', lineWidth: 1.5,
+                        lastValueVisible: false, priceLineVisible: false,
+                        crosshairMarkerVisible: false, title: '%K',
+                    }, _stochPane);
+                    _stochPane = chart.panes().length - 1;  /* actual pane after K creation */
+                    S.stochD = chart.addSeries(LC().LineSeries, {
+                        color: '#ff6d00', lineWidth: 1.5,
+                        lastValueVisible: false, priceLineVisible: false,
+                        crosshairMarkerVisible: false, title: '%D',
+                    }, _stochPane);
+                    dotted(80, S.stochK); dotted(20, S.stochK);
+                    (function(pi) { requestAnimationFrame(function() {
+                        try { chart.panes()[pi].setHeight(IND_H); } catch(e) {}
+                    }); })(_stochPane);
+                } catch(e) {}
+            }
+            try { if (S.stochK) S.stochK.setData(data.stoch_k || []); } catch(e) {}
+            try { if (S.stochD) S.stochD.setData(data.stoch_d || []); } catch(e) {}
+        } else if (S.stochK) {
+            try { chart.removeSeries(S.stochK); } catch(e) {}
+            try { chart.removeSeries(S.stochD); } catch(e) {}
+            S.stochK = null;
+            S.stochD = null;
+        }
+
+        /* Bollinger Bands (pane 0 overlay) */
+        try { if (S.bbUpper) { S.bbUpper.setData(data.bb_upper||[]); S.bbUpper.applyOptions({ visible: !!toggles.bb }); } } catch(e) {}
+        try { if (S.bbBasis) { S.bbBasis.setData(data.bb_basis||[]); S.bbBasis.applyOptions({ visible: !!toggles.bb }); } } catch(e) {}
+        try { if (S.bbLower) { S.bbLower.setData(data.bb_lower||[]); S.bbLower.applyOptions({ visible: !!toggles.bb }); } } catch(e) {}
+        /* Volume (pane 0 overlay) */
+        try {
+            if (S.volume) {
+                S.volume.setData(data.volume||[]);
+                S.volume.applyOptions({ visible: !!toggles.volume });
+                chart.priceScale('vol').applyOptions({ visible: !!toggles.volume });
+            }
+        } catch(e) {}
 
         try {
             if (wm) wm.applyOptions({ lines:[{
@@ -1792,7 +3167,10 @@
             window._apexLastPrice = data.candlestick[data.candlestick.length-1].close;
         }
 
-        /* ── Open broker/paper trades — Entry, SL, TP price lines ── */
+        /* ── All candle markers (open + closed trades) — built together then applied once ── */
+        var existingMarkers = [];
+
+        /* ── Open broker/paper trades — Entry arrow + SL/TP price lines ── */
         _tradePriceLines.forEach(function(pl){ try { S.candle.removePriceLine(pl); } catch(e){} });
         _tradePriceLines = [];
         var trades = data.open_trades || [];
@@ -1804,24 +3182,83 @@
                     price: t.entry, color: col, lineWidth: 2,
                     lineStyle: LC().LineStyle.Solid,
                     axisLabelVisible: true,
-                    title: (isBuy ? '▲ ' : '▼ ') + 'Entry',
+                    title: (isBuy ? '▲ BUY ' : '▼ SELL ') + (t.id || ''),
                 }));
                 if (t.sl) {
                     _tradePriceLines.push(S.candle.createPriceLine({
-                        price: t.sl, color: '#ff3366', lineWidth: 1,
+                        price: t.sl, color: '#ff4444', lineWidth: 1,
                         lineStyle: LC().LineStyle.Dashed,
-                        axisLabelVisible: true, title: 'SL',
+                        axisLabelVisible: true, title: '— SL',
                     }));
                 }
-                if (t.tp) {
+                if (t.tp1) {
                     _tradePriceLines.push(S.candle.createPriceLine({
-                        price: t.tp, color: '#00ff88', lineWidth: 1,
+                        price: t.tp1, color: '#00ff88', lineWidth: 1,
                         lineStyle: LC().LineStyle.Dashed,
-                        axisLabelVisible: true, title: 'TP',
+                        axisLabelVisible: true, title: '✓ TP1',
                     }));
+                }
+                if (t.tp2) {
+                    _tradePriceLines.push(S.candle.createPriceLine({
+                        price: t.tp2, color: '#00cc66', lineWidth: 1,
+                        lineStyle: LC().LineStyle.Dashed,
+                        axisLabelVisible: true, title: '✓ TP2',
+                    }));
+                }
+                if (t.tp3) {
+                    _tradePriceLines.push(S.candle.createPriceLine({
+                        price: t.tp3, color: '#009944', lineWidth: 1,
+                        lineStyle: LC().LineStyle.Dashed,
+                        axisLabelVisible: true, title: '✓ TP3',
+                    }));
+                }
+                /* Blue entry arrow on the candle where this open trade was entered */
+                if (t.open_time) {
+                    existingMarkers.push({
+                        time:     t.open_time,
+                        position: isBuy ? 'belowBar' : 'aboveBar',
+                        color:    '#2962ff',
+                        shape:    isBuy ? 'arrowUp' : 'arrowDown',
+                        text:     (isBuy ? '▲ BUY' : '▼ SELL') + ' ' + t.entry.toFixed(5),
+                        size:     1,
+                    });
                 }
             } catch(ex) {}
         });
+
+        /* ── Historical closed trade markers — entry/exit arrows on candles ── */
+        try {
+            var closedTrades = data.closed_trades || [];
+            closedTrades.forEach(function(ct) {
+                var isBuy  = ct.direction === 'long';
+                var pnlStr = (ct.realised_pnl >= 0 ? '+' : '') + ct.realised_pnl.toFixed(2);
+                /* Entry marker — Blue arrow */
+                if (ct.open_time) {
+                    existingMarkers.push({
+                        time:     ct.open_time,
+                        position: isBuy ? 'belowBar' : 'aboveBar',
+                        color:    '#2962ff',
+                        shape:    isBuy ? 'arrowUp' : 'arrowDown',
+                        text:     (isBuy ? '▲ BUY' : '▼ SELL') + ' ' + ct.entry.toFixed(5),
+                        size:     1,
+                    });
+                }
+                /* Exit marker — Green for long exits, Red for short exits */
+                if (ct.close_time) {
+                    existingMarkers.push({
+                        time:     ct.close_time,
+                        position: isBuy ? 'aboveBar' : 'belowBar',
+                        color:    isBuy ? '#00ff88' : '#ff3366',
+                        shape:    isBuy ? 'arrowDown' : 'arrowUp',
+                        text:     (isBuy ? '✓ EXIT' : '✓ COVER') + ' ' + ct.exit_price.toFixed(5) + ' (' + pnlStr + ')',
+                        size:     1,
+                    });
+                }
+            });
+            /* TWLC v5 requires markers sorted by time; use plugin not series.setMarkers */
+            existingMarkers.sort(function(a, b){ return a.time - b.time; });
+            if (S.markers) { S.markers.setMarkers(existingMarkers); }
+        } catch(ex) {}
 
         /* ── Signal overlay — Entry / SL / TP from the last generated signal ── */
         if (S._signalLines) {
@@ -1848,21 +3285,35 @@
             _sigLine(sig.tp3, '#009944', 'TP3');
         }
 
-        requestAnimationFrame(function(){ updateAllTrendlines(); updateAllPos(); updateAllBoxes(); });
+        requestAnimationFrame(function(){ updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines(); });
+
+        /* Apply saved indicator visual settings after data loads */
+        try { window._apexApplyIndSettings(data.ind_params || null); } catch(e) {}
 
         if (fitIt) {
-            /* Use ACTUAL candle timestamps so zoom is consistent for every asset.
-               Wall-clock time fails for crypto (24/7) when the last bar is old.
-               Show ~240 bars (≈ 10 days of H1 / 60 days of 4H / 240 days of D). */
-            if (_candleData.length > 0) {
-                var interval = _candleInterval();           // avg seconds per bar
+            /* Try to restore a previously-saved zoom for this pair+TF */
+            var zoomKey     = 'apex_zoom_' + (_currentPair||'') + '_' + (_currentTf||'');
+            var savedRange  = null;
+            try {
+                var zRaw = localStorage.getItem(zoomKey);
+                if (zRaw) savedRange = JSON.parse(zRaw);
+            } catch(e) {}
+
+            if (savedRange && savedRange.from && savedRange.to) {
+                /* Restore saved zoom */
+                try { chart.timeScale().setVisibleRange(savedRange); } catch(e) {
+                    try { chart.timeScale().fitContent(); } catch(e2) {}
+                }
+            } else if (_candleData.length > 0) {
+                /* Default: show last ~240 bars (≈ 10 days H1 / 60 days 4H / 240 days D) */
+                var interval = _candleInterval();
                 var nShow    = Math.min(_candleData.length, 240);
                 var firstVis = _candleData[Math.max(0, _candleData.length - nShow)];
                 var lastBar  = _candleData[_candleData.length - 1];
                 try {
                     chart.timeScale().setVisibleRange({
-                        from: firstVis.time - interval * 2,   // tiny left margin
-                        to:   lastBar.time  + interval * 10,  // right breathing room
+                        from: firstVis.time - interval * 2,
+                        to:   lastBar.time  + interval * 10,
                     });
                 } catch(e) {
                     try { chart.timeScale().fitContent(); } catch(e2) {}
@@ -1877,34 +3328,129 @@
        PUBLIC API
        ═══════════════════════════════════════════════════════════════════════ */
 
+    /* ── Trade SVG drag lines (SL / TP) ─────────────────────────────────── */
+
+    function _clearTradeSvgLines() {
+        _tradeSvgLines.forEach(function(tsl) {
+            if (tsl.g && tsl.g.parentNode) tsl.g.parentNode.removeChild(tsl.g);
+        });
+        _tradeSvgLines = [];
+    }
+
+    function _buildTradeSvgLine(tradeId, lineType, price, color, title) {
+        var svg = ensureTrendOverlay(); if (!svg) return null;
+        var g   = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+        var hitEl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        hitEl.setAttribute('stroke', 'transparent');
+        hitEl.setAttribute('stroke-width', '14');
+        hitEl.setAttribute('pointer-events', 'stroke');
+        hitEl.setAttribute('cursor', 'ns-resize');
+
+        var lineEl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        lineEl.setAttribute('stroke', color);
+        lineEl.setAttribute('stroke-width', '1.5');
+        lineEl.setAttribute('stroke-dasharray', '8,5');
+        lineEl.setAttribute('pointer-events', 'none');
+
+        var lblEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lblEl.setAttribute('font-size', '10');
+        lblEl.setAttribute('font-family', 'monospace');
+        lblEl.setAttribute('font-weight', '600');
+        lblEl.setAttribute('fill', color);
+        lblEl.setAttribute('dominant-baseline', 'central');
+        lblEl.setAttribute('text-anchor', 'end');
+        lblEl.setAttribute('pointer-events', 'none');
+
+        g.appendChild(hitEl); g.appendChild(lineEl); g.appendChild(lblEl);
+        svg.appendChild(g);
+
+        var tsl = { tradeId:tradeId, lineType:lineType, price:price,
+                    color:color, title:title, g:g, hitEl:hitEl, lineEl:lineEl, lblEl:lblEl };
+
+        hitEl.addEventListener('mousedown', function(e) {
+            if (drawMode) return;
+            e.stopPropagation(); e.preventDefault();
+            /* Snapshot all current prices for this trade so we can write all fields on mouseup */
+            var snap = null;
+            _liveTradeData.forEach(function(t) {
+                if (String(t.id) === String(tradeId)) snap = JSON.parse(JSON.stringify(t));
+            });
+            if (!snap) return;
+            tradeDrag = { tsl:tsl, snapshot:snap, startPrice:tsl.price };
+            try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+        });
+        hitEl.addEventListener('mousemove', function(e) {
+            if (tradeDrag) return;
+            hitEl.setAttribute('pointer-events', 'none');
+            var below = document.elementFromPoint(e.clientX, e.clientY);
+            hitEl.setAttribute('pointer-events', 'stroke');
+            if (below && below !== hitEl) {
+                below.dispatchEvent(new MouseEvent('mousemove', {
+                    bubbles:true, cancelable:true,
+                    clientX:e.clientX, clientY:e.clientY, view:window
+                }));
+            }
+        });
+
+        return tsl;
+    }
+
+    function _updateTradeSvgLine(tsl) {
+        if (!tsl.g || !chart || !S.candle) return;
+        var chartEl2 = document.getElementById('tvlw-chart');
+        var maxX = chartEl2 ? (chartEl2.clientWidth - psWidth()) : 800;
+        var y = _priceToY(tsl.price);
+        if (y == null) { tsl.g.setAttribute('display', 'none'); return; }
+        tsl.g.setAttribute('display', '');
+        tsl.hitEl.setAttribute('x1', '0');  tsl.hitEl.setAttribute('y1', String(y));
+        tsl.hitEl.setAttribute('x2', String(maxX)); tsl.hitEl.setAttribute('y2', String(y));
+        tsl.lineEl.setAttribute('x1', '0');  tsl.lineEl.setAttribute('y1', String(y));
+        tsl.lineEl.setAttribute('x2', String(maxX)); tsl.lineEl.setAttribute('y2', String(y));
+        tsl.lblEl.setAttribute('x', String(maxX - 3));
+        tsl.lblEl.setAttribute('y', String(y - 8));
+        tsl.lblEl.textContent = tsl.title + ' ' + fmtPrice(tsl.price);
+    }
+
+    function _updateAllTradeSvgLines() { _tradeSvgLines.forEach(_updateTradeSvgLine); }
+
     /* Live trade price-line refresh — called by clientside callback on trade change */
     window._apexUpdateTrades = function(trades) {
         if (!chart || !S.candle) return;
+        /* Remove old TWLC entry price lines */
         _tradePriceLines.forEach(function(pl){ try { S.candle.removePriceLine(pl); } catch(e){} });
         _tradePriceLines = [];
+        /* Remove old SVG SL/TP lines */
+        _clearTradeSvgLines();
+        _liveTradeData = (trades || []).slice();
+
         (trades || []).forEach(function(t) {
             try {
                 var isBuy = t.direction === 'long';
                 var col   = isBuy ? '#00ff88' : '#ff3366';
+                /* Entry: keep as TWLC price line (shows trade ID in price scale label) */
                 _tradePriceLines.push(S.candle.createPriceLine({
                     price: t.entry, color: col, lineWidth: 2,
                     lineStyle: LC().LineStyle.Solid,
                     axisLabelVisible: true,
-                    title: (isBuy ? '▲ ' : '▼ ') + 'Entry',
+                    title: (isBuy ? '▲ BUY ' : '▼ SELL ') + (t.id || ''),
                 }));
+                /* SL / TP: SVG overlay so they are draggable */
                 if (t.sl) {
-                    _tradePriceLines.push(S.candle.createPriceLine({
-                        price: t.sl, color: '#ff3366', lineWidth: 1,
-                        lineStyle: LC().LineStyle.Dashed,
-                        axisLabelVisible: true, title: 'SL',
-                    }));
+                    var tsl = _buildTradeSvgLine(t.id, 'sl',  t.sl,  '#ff4444', '— SL');
+                    if (tsl) { _updateTradeSvgLine(tsl); _tradeSvgLines.push(tsl); }
                 }
-                if (t.tp) {
-                    _tradePriceLines.push(S.candle.createPriceLine({
-                        price: t.tp, color: '#00ff88', lineWidth: 1,
-                        lineStyle: LC().LineStyle.Dashed,
-                        axisLabelVisible: true, title: 'TP',
-                    }));
+                if (t.tp1) {
+                    var tsl1 = _buildTradeSvgLine(t.id, 'tp1', t.tp1, '#00ff88', '✓ TP1');
+                    if (tsl1) { _updateTradeSvgLine(tsl1); _tradeSvgLines.push(tsl1); }
+                }
+                if (t.tp2) {
+                    var tsl2 = _buildTradeSvgLine(t.id, 'tp2', t.tp2, '#00cc66', '✓ TP2');
+                    if (tsl2) { _updateTradeSvgLine(tsl2); _tradeSvgLines.push(tsl2); }
+                }
+                if (t.tp3) {
+                    var tsl3 = _buildTradeSvgLine(t.id, 'tp3', t.tp3, '#009944', '✓ TP3');
+                    if (tsl3) { _updateTradeSvgLine(tsl3); _tradeSvgLines.push(tsl3); }
                 }
             } catch(ex) {}
         });
@@ -1913,8 +3459,12 @@
     window._apexSetDrawMode = function(mode) {
         drawMode = mode || null;
         trendP1 = null;
+        fibDraw = null;
+        fibDrag = null;
+        if (circleDraw) { _clearCirclePreview(); circleDraw = null; }
         _hideTrendPreview();
         _hidePositionForm();
+        _hideDrawingSettings();
         if (!drawMode) { deselectDrawing(); }
         var el = document.getElementById('tvlw-chart');
         if (el) el.style.cursor = drawMode ? 'crosshair' : 'default';
@@ -1933,6 +3483,18 @@
             delBox(selectedBox);
             return true;
         }
+        if (selectedFib >= 0) {
+            delFib(selectedFib);
+            return true;
+        }
+        if (selectedPos >= 0) {
+            delPosition(selectedPos);
+            return true;
+        }
+        if (selectedCircle >= 0) {
+            delCircle(selectedCircle);
+            return true;
+        }
         if (selectedIdx >= 0) {
             _removeOne(drawings[selectedIdx]);
             drawings.splice(selectedIdx, 1);
@@ -1947,12 +3509,34 @@
             var t = trendlines[selectedTrend];
             if (t) { t.locked = !t.locked; updateTrendline(t); saveTrendlines(); return true; }
         }
+        if (selectedBox >= 0) {
+            var b = boxes[selectedBox];
+            if (b) { b.locked = !b.locked; updateBox(b); saveBoxes(); return true; }
+        }
+        if (selectedFib >= 0) {
+            var f = fibs[selectedFib];
+            if (f) { f.locked = !f.locked; updateFib(f); saveFibs(); return true; }
+        }
+        if (selectedPos >= 0) {
+            var p = positions[selectedPos];
+            if (p) { p.locked = !p.locked; updatePos(p); savePos(); return true; }
+        }
+        if (selectedCircle >= 0) {
+            var c = circles[selectedCircle];
+            if (c) { c.locked = !c.locked; updateCircle(c); saveCircles(); return true; }
+        }
+        if (selectedIdx >= 0) {
+            var d = drawings[selectedIdx];
+            if (d) { d.locked = !d.locked; if (d.type === 'h-line') updateHLine(d); saveDrawings(); return true; }
+        }
         return false;
     };
 
     window._apexDuplicateSelected = function() {
-        if (selectedTrend >= 0) { _dupTrendline(selectedTrend); return true; }
-        if (selectedBox >= 0)   { _dupBox(selectedBox); return true; }
+        if (selectedTrend >= 0)   { _dupTrendline(selectedTrend); return true; }
+        if (selectedBox >= 0)     { _dupBox(selectedBox); return true; }
+        if (selectedCircle >= 0)  { _dupCircle(selectedCircle); return true; }
+        if (selectedIdx >= 0)     { _dupHLine(selectedIdx); return true; }
         return false;
     };
 
@@ -1965,21 +3549,28 @@
         trendlines = []; selectedTrend = -1; saveTrendlines();
 
         positions.forEach(function(p){ if (p.el&&p.el.parentNode) p.el.parentNode.removeChild(p.el); });
-        positions = []; savePos();
+        positions = []; selectedPos = -1; savePos();
 
         boxes.forEach(function(b){ if (b.el&&b.el.parentNode) b.el.parentNode.removeChild(b.el); });
         boxes = []; selectedBox = -1; saveBoxes();
+
+        fibs.forEach(function(f){ if (f.el&&f.el.parentNode) f.el.parentNode.removeChild(f.el); });
+        fibs = []; selectedFib = -1; saveFibs();
+
+        circles.forEach(function(c){ if (c.el&&c.el.parentNode) c.el.parentNode.removeChild(c.el); });
+        circles = []; selectedCircle = -1; saveCircles();
     };
 
     window._apexUpdateChart = function(data) {
         if (!data) return;
-        _currentPair = data.pair || '';
-        _currentTf   = data.tf   || '';
+        _currentPair   = data.pair   || '';
+        _currentTf     = data.tf     || '';
+        _currentRawTf  = data.raw_tf || data.tf || '';   /* raw TF for storage keys (matches Python) */
         var pairTf   = _currentPair + '|' + _currentTf;
         if (data.accountBalance) window._apexAccountBalance = data.accountBalance;
 
         if (chart && _lastPairTf !== null && pairTf !== _lastPairTf) {
-            saveDrawings(); saveTrendlines(); saveBoxes(); savePos();
+            saveDrawings(); saveTrendlines(); saveBoxes(); savePos(); saveFibs(); saveCircles();
             destroy();
         }
 
@@ -1997,6 +3588,873 @@
         var fitIt = (_lastPairTf===null || pairTf!==_lastPairTf);
         _lastPairTf = pairTf;
         load(data, fitIt);
+    };
+
+    /* ═══════════════════════════════════════════════════════════════════════
+       INDICATOR SETTINGS  (CCI / MACD)
+       ─────────────────────────────────────────────────────────────────────
+       Architecture:
+         • All settings (visual + computational) live in localStorage per pair+TF.
+         • Visual changes (color/width/style/visibility) are applied immediately
+           via series.applyOptions() — no server round-trip.
+         • Computational changes (CCI length/source, MACD fast/slow/signal) are
+           also written to the Dash `ind-comp-store` via set_props, triggering
+           a chart-data rebuild.
+         • Profiles are stored in `apex_ind_profiles`.
+       ═══════════════════════════════════════════════════════════════════════ */
+
+    /* ── Default settings (matches TV CCI & MACD script defaults) ────────── */
+    var _IND_DEFAULTS = {
+        cci: {
+            length: 20, source: 'hlc3',
+            color: '#2962ff', width: 1.5, lineStyle: 0, opacity: 1, visible: true,
+            upperLevel: 100, lowerLevel: -100,
+            upperColor: '#787b86', lowerColor: '#787b86', midColor: '#787b86',
+            upperStyle: 2, lowerStyle: 2, midStyle: 2,
+            showUpper: true, showLower: true, showMid: true,
+            maType: 'SMA', maLength: 14, maColor: '#ffd700', maVisible: true,
+            bbMult: 2.0, bbVisible: false,
+        },
+        macd: {
+            fast: 12, slow: 26, signal: 9,
+            macdColor: '#38b6ff', signalColor: '#ff6d00',
+            histColorUp: '#26a69a', histColorDown: '#ff5252',
+            macdWidth: 1.5, signalWidth: 1.5,
+            macdStyle: 0, signalStyle: 0,
+            histOpacity: 1, visible: true,
+            showMacd: true, showSignal: true, showHist: true,
+        },
+        rsi: {
+            period: 14, visible: false,
+            color: '#aa00ff', width: 1.5,
+            obLevel: 70, osLevel: 30,
+            obColor: '#787b86', osColor: '#787b86',
+        },
+        bb: {
+            period: 20, mult: 2.0, visible: false,
+            upperColor: '#38b6ff', basisColor: '#ffd700', lowerColor: '#38b6ff',
+            width: 1,
+        },
+        volume: { visible: false },
+        stoch: {
+            k: 14, d: 3, smooth: 3, visible: false,
+            kColor: '#2962ff', dColor: '#ff6d00',
+            width: 1.5, obLevel: 80, osLevel: 20,
+        },
+    };
+
+    /* ── Per-pair+TF settings cache ───────────────────────────────────────── */
+    var _indSettings = null;   // settings for current pair+TF (live reference)
+
+    function _indKey() {
+        /* Use raw TF ("H1"/"H4"/"D") to match the Python-side key format */
+        return 'apex_ind_' + (_currentPair || 'default') + '_' + (_currentRawTf || _currentTf || 'H1');
+    }
+
+    function _loadIndSettings() {
+        try {
+            var raw = localStorage.getItem(_indKey());
+            if (raw) {
+                var saved = JSON.parse(raw);
+                /* Deep-merge with defaults so new fields added later are populated */
+                _indSettings = {
+                    cci:    Object.assign({}, _IND_DEFAULTS.cci,    saved.cci    || {}),
+                    macd:   Object.assign({}, _IND_DEFAULTS.macd,   saved.macd   || {}),
+                    rsi:    Object.assign({}, _IND_DEFAULTS.rsi,    saved.rsi    || {}),
+                    bb:     Object.assign({}, _IND_DEFAULTS.bb,     saved.bb     || {}),
+                    volume: Object.assign({}, _IND_DEFAULTS.volume, saved.volume || {}),
+                    stoch:  Object.assign({}, _IND_DEFAULTS.stoch,  saved.stoch  || {}),
+                };
+            } else {
+                _indSettings = JSON.parse(JSON.stringify(_IND_DEFAULTS));
+            }
+        } catch(e) {
+            _indSettings = JSON.parse(JSON.stringify(_IND_DEFAULTS));
+        }
+    }
+
+    function _saveIndSettings() {
+        if (!_indSettings) return;
+        try {
+            localStorage.setItem(_indKey(), JSON.stringify(_indSettings));
+        } catch(e) {}
+    }
+
+    /* Push computational params to Dash so Python rebuilds indicator data */
+    function _pushIndCompParams() {
+        if (!_indSettings || !_currentPair || !(_currentRawTf || _currentTf)) return;
+        try {
+            /* Key matches Python's pair-only key (shared across all TFs) */
+            var key = _currentPair;
+            var all = {};
+            try {
+                var raw = localStorage.getItem('ind-comp-store');
+                if (raw) all = JSON.parse(raw);
+            } catch(ee) {}
+            var rsi = _indSettings.rsi || {};
+            var bb  = _indSettings.bb  || {};
+            var vol = _indSettings.volume || {};
+            var st  = _indSettings.stoch || {};
+            all[key] = {
+                cci_length:   _indSettings.cci.length,
+                cci_src:      _indSettings.cci.source,
+                macd_fast:    _indSettings.macd.fast,
+                macd_slow:    _indSettings.macd.slow,
+                macd_signal:  _indSettings.macd.signal,
+                show_rsi:     !!(rsi.visible),
+                rsi_period:   rsi.period || 14,
+                show_bb:      !!(bb.visible),
+                bb_period:    bb.period  || 20,
+                bb_mult:      bb.mult    || 2.0,
+                show_volume:  !!(vol.visible),
+                show_stoch:   !!(st.visible),
+                stoch_k:      st.k      || 14,
+                stoch_d:      st.d      || 3,
+                stoch_smooth: st.smooth || 3,
+            };
+            if (window.dash_clientside && window.dash_clientside.set_props) {
+                window.dash_clientside.set_props('ind-comp-store', { data: all });
+            }
+        } catch(e) {}
+    }
+
+    /* Keep the chart container pinned to TOTAL_H.
+       CCI/MACD panes collapse automatically when their series are removed —
+       LWCHARTS redistributes the freed height to pane[0] without any setHeight() calls. */
+    function _resizePanes() {
+        if (!chart) return;
+        var el = document.getElementById('tvlw-chart');
+        if (el) { el.style.height = TOTAL_H + 'px'; el.style.overflow = 'hidden'; }
+    }
+
+    /* Apply visual settings to live chart series (no reload needed) */
+    function _applyIndVisualSettings() {
+        if (!_indSettings || !chart) return;
+        var c = _indSettings.cci,  m = _indSettings.macd;
+        var LC_ = LC(); if (!LC_) return;
+
+        /* CCI — create pane when shown, remove series (collapses pane) when hidden.
+           Use chart.panes().length as the target so LWCHARTS always gets a sequential index
+           (avoids pane-splitting when intermediate panes don't exist). */
+        if (c.visible && !S.cci && _lastChartData) {
+            try {
+                var _cciPane = chart.panes().length;
+                S.cci = chart.addSeries(LC_.BaselineSeries, {
+                    baseValue: { type: 'price', price: 0 },
+                    topLineColor: '#00ff88', topFillColor1: 'rgba(0,255,136,0.12)',
+                    topFillColor2: 'rgba(0,255,136,0.02)',
+                    bottomLineColor: '#ff3366', bottomFillColor1: 'rgba(255,51,102,0.12)',
+                    bottomFillColor2: 'rgba(255,51,102,0.02)',
+                    lineWidth: 1.5,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                }, _cciPane);
+                _cciPane = chart.panes().length - 1;  /* actual index after creation */
+                S.cciMa = chart.addSeries(LC_.LineSeries, {
+                    color: '#ffd700', lineWidth: 1.5,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                    title: 'CCI MA',
+                }, _cciPane);
+                S.cciBbUpper = chart.addSeries(LC_.LineSeries, {
+                    color: '#00cc66', lineWidth: 1, lineStyle: 2,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                    title: 'BB+',
+                }, _cciPane);
+                S.cciBbLower = chart.addSeries(LC_.LineSeries, {
+                    color: '#00cc66', lineWidth: 1, lineStyle: 2,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                    title: 'BB-',
+                }, _cciPane);
+                S.cci.setData(_lastChartData.cci || []);
+                if (S.cciMa)      S.cciMa.setData(_lastChartData.cci_ma || []);
+                if (S.cciBbUpper) S.cciBbUpper.setData(_lastChartData.cci_bb_upper || []);
+                if (S.cciBbLower) S.cciBbLower.setData(_lastChartData.cci_bb_lower || []);
+            } catch(e) {}
+        } else if (!c.visible && S.cci) {
+            try { chart.removeSeries(S.cci); }       catch(e) {}
+            try { if (S.cciMa)      chart.removeSeries(S.cciMa); }      catch(e) {}
+            try { if (S.cciBbUpper) chart.removeSeries(S.cciBbUpper); } catch(e) {}
+            try { if (S.cciBbLower) chart.removeSeries(S.cciBbLower); } catch(e) {}
+            S.cci = S.cciMa = S.cciBbUpper = S.cciBbLower = null;
+        }
+        /* CCI visual options — only when series exists */
+        try {
+            if (S.cci) {
+                S.cci.applyOptions({
+                    topLineColor:     c.color,
+                    bottomLineColor:  c.color,
+                    topFillColor1:    _hexToRgba(c.color, 0.12 * c.opacity),
+                    topFillColor2:    _hexToRgba(c.color, 0.02 * c.opacity),
+                    bottomFillColor1: _hexToRgba(c.color, 0.12 * c.opacity),
+                    bottomFillColor2: _hexToRgba(c.color, 0.02 * c.opacity),
+                    lineWidth: c.width,
+                    lineStyle: c.lineStyle,
+                });
+            }
+        } catch(e) {}
+        try {
+            if (S.cciMa) S.cciMa.applyOptions({ visible: !!c.maVisible, color: c.maColor, lineWidth: c.width });
+        } catch(e) {}
+        try {
+            if (S.cciBbUpper) S.cciBbUpper.applyOptions({ visible: !!c.bbVisible, color: c.maColor });
+            if (S.cciBbLower) S.cciBbLower.applyOptions({ visible: !!c.bbVisible, color: c.maColor });
+        } catch(e) {}
+        /* CCI reference lines */
+        try {
+            if (S.cci && S.cci._priceLinesCreatedByPanel) {
+                S.cci._priceLinesCreatedByPanel.forEach(function(pl){ try { S.cci.removePriceLine(pl); } catch(e){} });
+            }
+            if (S.cci) {
+                S.cci._priceLinesCreatedByPanel = [];
+                function _cciLvl(price, col, style, show) {
+                    if (!show || !S.cci) return;
+                    try {
+                        var pl = S.cci.createPriceLine({ price: price, color: col, lineWidth: 1,
+                            lineStyle: style, axisLabelVisible: true, axisLabelColor: col });
+                        S.cci._priceLinesCreatedByPanel.push(pl);
+                    } catch(e) {}
+                }
+                _cciLvl(c.upperLevel, c.upperColor, c.upperStyle, c.showUpper);
+                _cciLvl(0,            c.midColor,   c.midStyle,   c.showMid);
+                _cciLvl(c.lowerLevel, c.lowerColor, c.lowerStyle, c.showLower);
+            }
+        } catch(e) {}
+
+        /* MACD — create pane when shown, remove series (collapses pane) when hidden.
+           All three series must share the same pane — use panes().length to get the
+           next sequential index, then panes().length-1 for the co-located series. */
+        if (m.visible && !S.macd && _lastChartData) {
+            try {
+                var _macdPane = chart.panes().length;
+                S.macd = chart.addSeries(LC_.HistogramSeries, {
+                    lastValueVisible: false, priceLineVisible: false,
+                }, _macdPane);
+                _macdPane = chart.panes().length - 1;  /* actual index after creation */
+                S.macdLine = chart.addSeries(LC_.LineSeries, {
+                    color: '#38b6ff', lineWidth: 1.5,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                    title: 'MACD',
+                }, _macdPane);
+                S.macdSignal = chart.addSeries(LC_.LineSeries, {
+                    color: '#ff6d00', lineWidth: 1.5,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                    title: 'Signal',
+                }, _macdPane);
+                dotted(0, S.macd);  /* add price line after all series are placed */
+                S.macd.setData(_lastChartData.macd || []);
+                if (S.macdLine)   S.macdLine.setData(_lastChartData.macd_line || []);
+                if (S.macdSignal) S.macdSignal.setData(_lastChartData.macd_signal || []);
+            } catch(e) {}
+        } else if (!m.visible && S.macd) {
+            try { chart.removeSeries(S.macd); }         catch(e) {}
+            try { if (S.macdLine)   chart.removeSeries(S.macdLine); }   catch(e) {}
+            try { if (S.macdSignal) chart.removeSeries(S.macdSignal); } catch(e) {}
+            S.macd = S.macdLine = S.macdSignal = null;
+        }
+        /* MACD visual options — only when series exists */
+        try {
+            if (S.macd) S.macd.applyOptions({ visible: !!(m.showHist) });
+        } catch(e) {}
+        try {
+            if (S.macdLine) S.macdLine.applyOptions({
+                visible: !!(m.showMacd),
+                color: m.macdColor, lineWidth: m.macdWidth, lineStyle: m.macdStyle,
+            });
+        } catch(e) {}
+        try {
+            if (S.macdSignal) S.macdSignal.applyOptions({
+                visible: !!(m.showSignal),
+                color: m.signalColor, lineWidth: m.signalWidth, lineStyle: m.signalStyle,
+            });
+        } catch(e) {}
+
+        /* RSI */
+        var r = _indSettings.rsi || {};
+        try {
+            if (S.rsi) S.rsi.applyOptions({ visible: !!r.visible, color: r.color || '#aa00ff', lineWidth: r.width || 1.5 });
+        } catch(e) {}
+
+        /* Bollinger Bands */
+        var b = _indSettings.bb || {};
+        try {
+            if (S.bbUpper) S.bbUpper.applyOptions({ visible: !!b.visible, color: b.upperColor || '#38b6ff', lineWidth: b.width || 1 });
+            if (S.bbBasis) S.bbBasis.applyOptions({ visible: !!b.visible, color: b.basisColor || '#ffd700', lineWidth: b.width || 1 });
+            if (S.bbLower) S.bbLower.applyOptions({ visible: !!b.visible, color: b.lowerColor || '#38b6ff', lineWidth: b.width || 1 });
+        } catch(e) {}
+
+        /* Volume */
+        var vol = _indSettings.volume || {};
+        try {
+            if (S.volume) {
+                S.volume.applyOptions({ visible: !!vol.visible });
+                chart.priceScale('vol').applyOptions({ visible: !!vol.visible });
+            }
+        } catch(e) {}
+
+        /* Stochastic */
+        var st = _indSettings.stoch || {};
+        try {
+            if (S.stochK) S.stochK.applyOptions({ visible: !!st.visible, color: st.kColor || '#2962ff', lineWidth: st.width || 1.5 });
+            if (S.stochD) S.stochD.applyOptions({ visible: !!st.visible, color: st.dColor || '#ff6d00', lineWidth: st.width || 1.5 });
+        } catch(e) {}
+
+        /* Collapse/expand CCI and MACD panes based on visibility */
+        _resizePanes();
+    }
+
+    /* ── Settings panel DOM ───────────────────────────────────────────────── */
+    var _indPanelEl = null;
+    var _indActiveTab = 'cci';
+
+    function _ensureIndPanel() {
+        if (_indPanelEl && document.body.contains(_indPanelEl)) return _indPanelEl;
+        var el = document.createElement('div');
+        el.id = 'apex-ind-panel';
+        el.innerHTML = '<div class="aip-header"><span class="aip-title">⚙ Indicator Settings</span><button class="aip-close" title="Close">✕</button></div>' +
+            '<div class="aip-tabs">' +
+            '<button class="aip-tab aip-active" data-tab="cci">CCI</button>' +
+            '<button class="aip-tab" data-tab="macd">MACD</button>' +
+            '<button class="aip-tab" data-tab="rsi">RSI</button>' +
+            '<button class="aip-tab" data-tab="bb">BB</button>' +
+            '<button class="aip-tab" data-tab="volume">Vol</button>' +
+            '<button class="aip-tab" data-tab="stoch">Stoch</button>' +
+            '<button class="aip-tab" data-tab="profiles">Profiles</button></div>' +
+            '<div class="aip-body">' +
+            '<div id="aip-cci-tab"     class="aip-tab-content"></div>' +
+            '<div id="aip-macd-tab"    class="aip-tab-content" style="display:none"></div>' +
+            '<div id="aip-rsi-tab"     class="aip-tab-content" style="display:none"></div>' +
+            '<div id="aip-bb-tab"      class="aip-tab-content" style="display:none"></div>' +
+            '<div id="aip-volume-tab"  class="aip-tab-content" style="display:none"></div>' +
+            '<div id="aip-stoch-tab"   class="aip-tab-content" style="display:none"></div>' +
+            '<div id="aip-profiles-tab" class="aip-tab-content" style="display:none"></div>' +
+            '</div>';
+        document.body.appendChild(el);
+        _indPanelEl = el;
+
+        /* Close button */
+        el.querySelector('.aip-close').onclick = _hideIndPanel;
+
+        /* Tab switching */
+        el.querySelectorAll('.aip-tab').forEach(function(btn) {
+            btn.onclick = function() {
+                el.querySelectorAll('.aip-tab').forEach(function(b){ b.classList.remove('aip-active'); });
+                btn.classList.add('aip-active');
+                _indActiveTab = btn.dataset.tab;
+                el.querySelectorAll('.aip-tab-content').forEach(function(c){ c.style.display = 'none'; });
+                document.getElementById('aip-' + _indActiveTab + '-tab').style.display = 'block';
+            };
+        });
+
+        /* Draggable panel */
+        var drag = null;
+        el.querySelector('.aip-header').addEventListener('mousedown', function(e) {
+            if (e.target.classList.contains('aip-close')) return;
+            drag = { x: e.clientX - el.offsetLeft, y: e.clientY - el.offsetTop };
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function(e) {
+            if (!drag) return;
+            el.style.left = (e.clientX - drag.x) + 'px';
+            el.style.top  = (e.clientY - drag.y) + 'px';
+        });
+        document.addEventListener('mouseup', function() { drag = null; });
+
+        return el;
+    }
+
+    function _closeIndOnOutsideClick(e) {
+        var el = document.getElementById('apex-ind-panel');
+        if (el && !el.contains(e.target)) {
+            _hideIndPanel();
+        }
+    }
+
+    function _showIndPanel() {
+        _loadIndSettings();
+        var el = _ensureIndPanel();
+        _renderIndTabs();
+        el.style.display = 'block';
+        // Attach click-outside listener after a tick so the opening click doesn't close it
+        setTimeout(function() {
+            document.addEventListener('click', _closeIndOnOutsideClick);
+        }, 0);
+    }
+
+    function _hideIndPanel() {
+        if (_indPanelEl) _indPanelEl.style.display = 'none';
+        document.removeEventListener('click', _closeIndOnOutsideClick);
+    }
+
+    /* ── Tab render helpers ───────────────────────────────────────────────── */
+    var _SOURCES = ['close','open','high','low','hl2','hlc3','ohlc4'];
+    var _MA_TYPES = ['None','SMA','EMA','SMMA (RMA)','WMA','SMA + Bollinger Bands'];
+    var _LINE_STYLES = [{v:0,l:'Solid'},{v:1,l:'Dotted'},{v:2,l:'Dashed'},{v:3,l:'LargeDashed'},{v:4,l:'SparseDotted'}];
+    var _WIDTHS = [1, 1.5, 2, 2.5, 3];
+    var _SWATCH_COLORS = ['#2962ff','#00ff88','#ff3366','#ffd700','#ff9900','#38b6ff','#ff6d00','#26a69a','#ff5252','#ffffff','#8b949e'];
+
+    function _row(label, content) {
+        return '<div class="aip-row"><span class="aip-label">' + label + '</span><span class="aip-ctrl">' + content + '</span></div>';
+    }
+
+    function _select(id, options, value) {
+        var html = '<select id="' + id + '" class="aip-select">';
+        options.forEach(function(o) {
+            var v = typeof o === 'object' ? o.v : o;
+            var l = typeof o === 'object' ? o.l : o;
+            html += '<option value="' + v + '"' + (String(v) === String(value) ? ' selected' : '') + '>' + l + '</option>';
+        });
+        return html + '</select>';
+    }
+
+    function _numInput(id, value, min, max, step) {
+        return '<input type="number" id="' + id + '" class="aip-num" value="' + value +
+               '" min="' + (min||1) + '" max="' + (max||999) + '" step="' + (step||1) + '">';
+    }
+
+    function _toggle(id, value, label) {
+        return '<label class="aip-toggle"><input type="checkbox" id="' + id + '"' + (value ? ' checked' : '') + '>' +
+               '<span class="aip-toggle-track"></span>' + (label ? '<span class="aip-toggle-lbl">' + label + '</span>' : '') + '</label>';
+    }
+
+    function _colorInput(id, value) {
+        return '<input type="color" id="' + id + '" class="aip-color" value="' + (value||'#ffffff') + '">';
+    }
+
+    function _swatches(idPrefix, current) {
+        var html = '<div class="aip-swatches">';
+        _SWATCH_COLORS.forEach(function(c) {
+            html += '<button class="aip-swatch' + (c === current ? ' aip-swatch-active' : '') +
+                    '" data-id="' + idPrefix + '" data-color="' + c + '" style="background:' + c + '" title="' + c + '"></button>';
+        });
+        html += '<input type="color" class="aip-swatch-custom" data-id="' + idPrefix + '" value="' + (current||'#ffffff') + '" title="Custom color">';
+        html += '</div>';
+        return html;
+    }
+
+    function _renderCCITab() {
+        var c = _indSettings.cci;
+        var tab = document.getElementById('aip-cci-tab');
+        tab.innerHTML =
+            '<div class="aip-section">CCI Settings</div>' +
+            _row('Length',      _numInput('aip-cci-length', c.length, 1, 500)) +
+            _row('Source',      _select('aip-cci-source', _SOURCES, c.source)) +
+            _row('Visible',     _toggle('aip-cci-visible', c.visible)) +
+
+            '<div class="aip-section">Line Style</div>' +
+            _row('Color',       _swatches('cci-color', c.color) + _colorInput('aip-cci-color', c.color)) +
+            _row('Width',       _select('aip-cci-width', _WIDTHS.map(function(w){return {v:w,l:w+'px'};}), c.width)) +
+            _row('Style',       _select('aip-cci-linestyle', _LINE_STYLES, c.lineStyle)) +
+            _row('Opacity',     '<input type="range" id="aip-cci-opacity" min="0.1" max="1" step="0.05" value="' + c.opacity + '" class="aip-range"><span id="aip-cci-opacity-val">' + Math.round(c.opacity*100) + '%</span>') +
+
+            '<div class="aip-section">Levels</div>' +
+            _row('Upper Level', _numInput('aip-cci-upper', c.upperLevel, 0, 500) + _colorInput('aip-cci-upperclr', c.upperColor) + _select('aip-cci-upperstyle', _LINE_STYLES, c.upperStyle) + _toggle('aip-cci-showupper', c.showUpper)) +
+            _row('Mid Line',    _colorInput('aip-cci-midclr', c.midColor)    + _select('aip-cci-midstyle',   _LINE_STYLES, c.midStyle)   + _toggle('aip-cci-showmid',   c.showMid)) +
+            _row('Lower Level', _numInput('aip-cci-lower', c.lowerLevel, -500, 0) + _colorInput('aip-cci-lowerclr', c.lowerColor) + _select('aip-cci-lowerstyle', _LINE_STYLES, c.lowerStyle) + _toggle('aip-cci-showlower', c.showLower)) +
+
+            '<div class="aip-section">Smoothing MA</div>' +
+            _row('Type',        _select('aip-cci-matype', _MA_TYPES, c.maType)) +
+            _row('MA Length',   _numInput('aip-cci-malength', c.maLength, 1, 200)) +
+            _row('MA Color',    _swatches('cci-macolor', c.maColor) + _colorInput('aip-cci-macolor', c.maColor)) +
+            _row('MA Visible',  _toggle('aip-cci-mavisible', c.maVisible)) +
+            _row('BB Multiplier', _numInput('aip-cci-bbmult', c.bbMult, 0.1, 10, 0.1)) +
+            _row('BB Visible',  _toggle('aip-cci-bbvisible', c.bbVisible));
+
+        _bindCCIEvents(tab);
+    }
+
+    function _renderMACDTab() {
+        var m = _indSettings.macd;
+        var tab = document.getElementById('aip-macd-tab');
+        tab.innerHTML =
+            '<div class="aip-section">MACD Lengths</div>' +
+            _row('Fast Length',   _numInput('aip-macd-fast', m.fast, 1, 200)) +
+            _row('Slow Length',   _numInput('aip-macd-slow', m.slow, 1, 500)) +
+            _row('Signal Length', _numInput('aip-macd-signal', m.signal, 1, 100)) +
+            _row('Visible',       _toggle('aip-macd-visible', m.visible)) +
+
+            '<div class="aip-section">MACD Line</div>' +
+            _row('Color',   _swatches('macd-line-color', m.macdColor) + _colorInput('aip-macd-linecolor', m.macdColor)) +
+            _row('Width',   _select('aip-macd-linewidth', _WIDTHS.map(function(w){return {v:w,l:w+'px'};}), m.macdWidth)) +
+            _row('Style',   _select('aip-macd-linestyle', _LINE_STYLES, m.macdStyle)) +
+            _row('Show',    _toggle('aip-macd-showmacd', m.showMacd)) +
+
+            '<div class="aip-section">Signal Line</div>' +
+            _row('Color',   _swatches('macd-sig-color', m.signalColor) + _colorInput('aip-macd-sigcolor', m.signalColor)) +
+            _row('Width',   _select('aip-macd-sigwidth', _WIDTHS.map(function(w){return {v:w,l:w+'px'};}), m.signalWidth)) +
+            _row('Style',   _select('aip-macd-sigstyle', _LINE_STYLES, m.signalStyle)) +
+            _row('Show',    _toggle('aip-macd-showsig', m.showSignal)) +
+
+            '<div class="aip-section">Histogram</div>' +
+            _row('Bull Color',  _swatches('macd-hist-up',   m.histColorUp)   + _colorInput('aip-macd-histup',   m.histColorUp)) +
+            _row('Bear Color',  _swatches('macd-hist-down', m.histColorDown) + _colorInput('aip-macd-histdown', m.histColorDown)) +
+            _row('Opacity',     '<input type="range" id="aip-macd-histopacity" min="0.1" max="1" step="0.05" value="' + m.histOpacity + '" class="aip-range"><span id="aip-macd-opacity-val">' + Math.round(m.histOpacity*100) + '%</span>') +
+            _row('Show',        _toggle('aip-macd-showhist', m.showHist));
+
+        _bindMACDEvents(tab);
+    }
+
+    function _renderProfilesTab() {
+        var tab = document.getElementById('aip-profiles-tab');
+        var profiles = {};
+        try { profiles = JSON.parse(localStorage.getItem('apex_ind_profiles') || '{}'); } catch(e) {}
+        var names = Object.keys(profiles);
+
+        var html = '<div class="aip-section">Profiles</div>' +
+            '<div class="aip-profile-list">';
+        if (names.length === 0) {
+            html += '<span class="aip-hint">No saved profiles yet.</span>';
+        } else {
+            names.forEach(function(n) {
+                html += '<div class="aip-profile-row">' +
+                    '<span class="aip-profile-name">' + n + '</span>' +
+                    '<button class="aip-btn-sm aip-btn-blue"  data-load="' + n + '">Load</button>' +
+                    '<button class="aip-btn-sm aip-btn-red"   data-del="'  + n + '">Delete</button>' +
+                    '</div>';
+            });
+        }
+        html += '</div>' +
+            '<div class="aip-section">Save Current Settings</div>' +
+            '<div class="aip-row">' +
+            '<input type="text" id="aip-profile-name" class="aip-num" style="width:120px" placeholder="Profile name">' +
+            '<button class="aip-btn aip-btn-blue" id="aip-profile-save">Save</button>' +
+            '</div>' +
+            '<div class="aip-section">Built-in Templates</div>' +
+            '<div class="aip-profile-list">' +
+            ['Scalping','Swing Trading','Trend Following'].map(function(n){
+                return '<button class="aip-btn-sm aip-btn-grey" data-template="' + n + '">' + n + '</button>';
+            }).join('') +
+            '</div>';
+
+        tab.innerHTML = html;
+
+        /* Bind profile events */
+        var saveBtn = tab.querySelector('#aip-profile-save');
+        if (saveBtn) saveBtn.onclick = function() {
+            var nameEl = tab.querySelector('#aip-profile-name');
+            var name = (nameEl ? nameEl.value.trim() : '') || 'Custom';
+            var ps = {};
+            try { ps = JSON.parse(localStorage.getItem('apex_ind_profiles') || '{}'); } catch(e) {}
+            ps[name] = JSON.parse(JSON.stringify(_indSettings));
+            localStorage.setItem('apex_ind_profiles', JSON.stringify(ps));
+            _renderProfilesTab();
+        };
+
+        tab.querySelectorAll('[data-load]').forEach(function(btn) {
+            btn.onclick = function() {
+                var ps = {};
+                try { ps = JSON.parse(localStorage.getItem('apex_ind_profiles') || '{}'); } catch(e) {}
+                var p = ps[btn.dataset.load];
+                if (!p) return;
+                _indSettings = {
+                    cci:  Object.assign({}, _IND_DEFAULTS.cci,  p.cci  || {}),
+                    macd: Object.assign({}, _IND_DEFAULTS.macd, p.macd || {}),
+                };
+                _saveIndSettings();
+                _applyIndVisualSettings();
+                _pushIndCompParams();
+                _renderIndTabs();
+            };
+        });
+
+        tab.querySelectorAll('[data-del]').forEach(function(btn) {
+            btn.onclick = function() {
+                var ps = {};
+                try { ps = JSON.parse(localStorage.getItem('apex_ind_profiles') || '{}'); } catch(e) {}
+                delete ps[btn.dataset.del];
+                localStorage.setItem('apex_ind_profiles', JSON.stringify(ps));
+                _renderProfilesTab();
+            };
+        });
+
+        /* Built-in templates */
+        var _TEMPLATES = {
+            'Scalping':       { cci: { length:  14, source: 'close' }, macd: { fast: 6,  slow: 13, signal: 5  } },
+            'Swing Trading':  { cci: { length:  20, source: 'hlc3'  }, macd: { fast: 12, slow: 26, signal: 9  } },
+            'Trend Following':{ cci: { length: 100, source: 'hlc3'  }, macd: { fast: 34, slow: 89, signal: 21 } },
+        };
+        tab.querySelectorAll('[data-template]').forEach(function(btn) {
+            btn.onclick = function() {
+                var t = _TEMPLATES[btn.dataset.template]; if (!t) return;
+                _indSettings.cci  = Object.assign({}, _indSettings.cci,  t.cci  || {});
+                _indSettings.macd = Object.assign({}, _indSettings.macd, t.macd || {});
+                _saveIndSettings();
+                _applyIndVisualSettings();
+                _pushIndCompParams();
+
+                /* If the user typed a profile name, also save under that name */
+                var nameEl = tab.querySelector('#aip-profile-name');
+                var customName = nameEl ? nameEl.value.trim() : '';
+                if (customName) {
+                    var ps = {};
+                    try { ps = JSON.parse(localStorage.getItem('apex_ind_profiles') || '{}'); } catch(e) {}
+                    ps[customName] = JSON.parse(JSON.stringify(_indSettings));
+                    localStorage.setItem('apex_ind_profiles', JSON.stringify(ps));
+                }
+
+                _renderIndTabs();
+            };
+        });
+    }
+
+    function _renderIndTabs() {
+        if (!_indSettings) _loadIndSettings();
+        _renderCCITab();
+        _renderMACDTab();
+        _renderRSITab();
+        _renderBBTab();
+        _renderVolumeTab();
+        _renderStochTab();
+        _renderProfilesTab();
+    }
+
+    function _renderRSITab() {
+        var r = _indSettings.rsi;
+        var tab = document.getElementById('aip-rsi-tab');
+        if (!tab) return;
+        tab.innerHTML =
+            '<div class="aip-section">RSI</div>' +
+            _row('Show RSI',  _toggle('aip-rsi-visible', r.visible)) +
+            _row('Period',    _numInput('aip-rsi-period', r.period, 2, 200)) +
+            _row('OB Level',  _numInput('aip-rsi-ob', r.obLevel, 50, 100)) +
+            _row('OS Level',  _numInput('aip-rsi-os', r.osLevel, 0, 50)) +
+            _row('Color',     _colorInput('aip-rsi-color', r.color));
+        tab.querySelector('#aip-rsi-visible').onchange  =
+        tab.querySelector('#aip-rsi-period').oninput    =
+        tab.querySelector('#aip-rsi-ob').oninput        =
+        tab.querySelector('#aip-rsi-os').oninput        =
+        tab.querySelector('#aip-rsi-color').oninput     = function() {
+            r.visible  = tab.querySelector('#aip-rsi-visible').checked;
+            r.period   = parseInt(tab.querySelector('#aip-rsi-period').value) || r.period;
+            r.obLevel  = parseFloat(tab.querySelector('#aip-rsi-ob').value)   || r.obLevel;
+            r.osLevel  = parseFloat(tab.querySelector('#aip-rsi-os').value)   || r.osLevel;
+            r.color    = tab.querySelector('#aip-rsi-color').value;
+            _saveIndSettings(); _pushIndCompParams();
+        };
+    }
+
+    function _renderBBTab() {
+        var b = _indSettings.bb;
+        var tab = document.getElementById('aip-bb-tab');
+        if (!tab) return;
+        tab.innerHTML =
+            '<div class="aip-section">Bollinger Bands</div>' +
+            _row('Show BB',    _toggle('aip-bb-visible', b.visible)) +
+            _row('Length',     _numInput('aip-bb-period', b.period, 2, 500)) +
+            _row('Std Dev',    _numInput('aip-bb-mult', b.mult, 0.5, 10, 0.1)) +
+            _row('Upper/Lower Color', _colorInput('aip-bb-upper-color', b.upperColor)) +
+            _row('Basis Color',       _colorInput('aip-bb-basis-color', b.basisColor));
+        tab.querySelector('#aip-bb-visible').onchange      =
+        tab.querySelector('#aip-bb-period').oninput        =
+        tab.querySelector('#aip-bb-mult').oninput          =
+        tab.querySelector('#aip-bb-upper-color').oninput   =
+        tab.querySelector('#aip-bb-basis-color').oninput   = function() {
+            b.visible    = tab.querySelector('#aip-bb-visible').checked;
+            b.period     = parseInt(tab.querySelector('#aip-bb-period').value) || b.period;
+            b.mult       = parseFloat(tab.querySelector('#aip-bb-mult').value) || b.mult;
+            b.upperColor = tab.querySelector('#aip-bb-upper-color').value;
+            b.lowerColor = b.upperColor;
+            b.basisColor = tab.querySelector('#aip-bb-basis-color').value;
+            _saveIndSettings(); _pushIndCompParams();
+        };
+    }
+
+    function _renderVolumeTab() {
+        var v = _indSettings.volume;
+        var tab = document.getElementById('aip-volume-tab');
+        if (!tab) return;
+        tab.innerHTML =
+            '<div class="aip-section">Volume</div>' +
+            _row('Show Volume', _toggle('aip-vol-visible', v.visible));
+        tab.querySelector('#aip-vol-visible').onchange = function() {
+            v.visible = tab.querySelector('#aip-vol-visible').checked;
+            _saveIndSettings(); _pushIndCompParams();
+        };
+    }
+
+    function _renderStochTab() {
+        var s = _indSettings.stoch;
+        var tab = document.getElementById('aip-stoch-tab');
+        if (!tab) return;
+        tab.innerHTML =
+            '<div class="aip-section">Stochastic</div>' +
+            _row('Show Stoch', _toggle('aip-stoch-visible', s.visible)) +
+            _row('%K Period',  _numInput('aip-stoch-k', s.k, 1, 200)) +
+            _row('%D Period',  _numInput('aip-stoch-d', s.d, 1, 50)) +
+            _row('Smooth',     _numInput('aip-stoch-smooth', s.smooth, 1, 50)) +
+            _row('OB Level',   _numInput('aip-stoch-ob', s.obLevel, 50, 100)) +
+            _row('OS Level',   _numInput('aip-stoch-os', s.osLevel, 0, 50)) +
+            _row('%K Color',   _colorInput('aip-stoch-k-color', s.kColor)) +
+            _row('%D Color',   _colorInput('aip-stoch-d-color', s.dColor));
+        var changed = function() {
+            s.visible  = tab.querySelector('#aip-stoch-visible').checked;
+            s.k        = parseInt(tab.querySelector('#aip-stoch-k').value)      || s.k;
+            s.d        = parseInt(tab.querySelector('#aip-stoch-d').value)      || s.d;
+            s.smooth   = parseInt(tab.querySelector('#aip-stoch-smooth').value) || s.smooth;
+            s.obLevel  = parseFloat(tab.querySelector('#aip-stoch-ob').value)   || s.obLevel;
+            s.osLevel  = parseFloat(tab.querySelector('#aip-stoch-os').value)   || s.osLevel;
+            s.kColor   = tab.querySelector('#aip-stoch-k-color').value;
+            s.dColor   = tab.querySelector('#aip-stoch-d-color').value;
+            _saveIndSettings(); _pushIndCompParams();
+        };
+        ['#aip-stoch-visible','#aip-stoch-k','#aip-stoch-d','#aip-stoch-smooth',
+         '#aip-stoch-ob','#aip-stoch-os','#aip-stoch-k-color','#aip-stoch-d-color'].forEach(function(sel) {
+            var el = tab.querySelector(sel);
+            if (el) { el.onchange = changed; el.oninput = changed; }
+        });
+    }
+
+    /* ── Bind CCI events (auto-save on every change) ─────────────────────── */
+    function _bindCCIEvents(tab) {
+        /* Helper: read input, update _indSettings.cci, save, apply */
+        function _cciChanged(isComp) {
+            var c = _indSettings.cci;
+            c.length    = parseInt(tab.querySelector('#aip-cci-length').value)   || c.length;
+            c.source    = tab.querySelector('#aip-cci-source').value             || c.source;
+            c.visible   = tab.querySelector('#aip-cci-visible').checked;
+            c.color     = tab.querySelector('#aip-cci-color').value              || c.color;
+            c.width     = parseFloat(tab.querySelector('#aip-cci-width').value)  || c.width;
+            c.lineStyle = parseInt(tab.querySelector('#aip-cci-linestyle').value);
+            c.opacity   = parseFloat(tab.querySelector('#aip-cci-opacity').value) || c.opacity;
+            c.upperLevel= parseFloat(tab.querySelector('#aip-cci-upper').value)  || c.upperLevel;
+            c.lowerLevel= parseFloat(tab.querySelector('#aip-cci-lower').value)  || c.lowerLevel;
+            c.upperColor= tab.querySelector('#aip-cci-upperclr').value           || c.upperColor;
+            c.lowerColor= tab.querySelector('#aip-cci-lowerclr').value           || c.lowerColor;
+            c.midColor  = tab.querySelector('#aip-cci-midclr').value             || c.midColor;
+            c.upperStyle= parseInt(tab.querySelector('#aip-cci-upperstyle').value);
+            c.lowerStyle= parseInt(tab.querySelector('#aip-cci-lowerstyle').value);
+            c.midStyle  = parseInt(tab.querySelector('#aip-cci-midstyle').value);
+            c.showUpper = tab.querySelector('#aip-cci-showupper').checked;
+            c.showLower = tab.querySelector('#aip-cci-showlower').checked;
+            c.showMid   = tab.querySelector('#aip-cci-showmid').checked;
+            c.maType    = tab.querySelector('#aip-cci-matype').value             || c.maType;
+            c.maLength  = parseInt(tab.querySelector('#aip-cci-malength').value) || c.maLength;
+            c.maColor   = tab.querySelector('#aip-cci-macolor').value            || c.maColor;
+            c.maVisible = tab.querySelector('#aip-cci-mavisible').checked;
+            c.bbMult    = parseFloat(tab.querySelector('#aip-cci-bbmult').value) || c.bbMult;
+            c.bbVisible = tab.querySelector('#aip-cci-bbvisible').checked;
+
+            /* Update opacity display */
+            var opEl = tab.querySelector('#aip-cci-opacity-val');
+            if (opEl) opEl.textContent = Math.round(c.opacity * 100) + '%';
+
+            _saveIndSettings();
+            _applyIndVisualSettings();
+            if (isComp) _pushIndCompParams();
+        }
+
+        /* Computational: length/source → needs server rebuild */
+        ['aip-cci-length','aip-cci-source','aip-cci-matype','aip-cci-malength','aip-cci-bbmult'].forEach(function(id) {
+            var el = tab.querySelector('#' + id); if (!el) return;
+            el.addEventListener('change', function(){ _cciChanged(true); });
+        });
+
+        /* Visual-only: no server rebuild needed */
+        ['aip-cci-visible','aip-cci-color','aip-cci-width','aip-cci-linestyle','aip-cci-opacity',
+         'aip-cci-upper','aip-cci-lower','aip-cci-upperclr','aip-cci-lowerclr','aip-cci-midclr',
+         'aip-cci-upperstyle','aip-cci-lowerstyle','aip-cci-midstyle',
+         'aip-cci-showupper','aip-cci-showlower','aip-cci-showmid',
+         'aip-cci-macolor','aip-cci-mavisible','aip-cci-bbvisible'].forEach(function(id) {
+            var el = tab.querySelector('#' + id); if (!el) return;
+            el.addEventListener('change', function(){ _cciChanged(false); });
+            el.addEventListener('input',  function(){ _cciChanged(false); });
+        });
+
+        /* Colour swatch clicks */
+        tab.querySelectorAll('.aip-swatch[data-id^="cci-color"]').forEach(function(sw) {
+            sw.onclick = function() {
+                tab.querySelector('#aip-cci-color').value = sw.dataset.color;
+                tab.querySelectorAll('.aip-swatch[data-id^="cci-color"]').forEach(function(s){ s.classList.remove('aip-swatch-active'); });
+                sw.classList.add('aip-swatch-active');
+                _cciChanged(false);
+            };
+        });
+        tab.querySelectorAll('.aip-swatch[data-id="cci-macolor"]').forEach(function(sw) {
+            sw.onclick = function() {
+                tab.querySelector('#aip-cci-macolor').value = sw.dataset.color;
+                _cciChanged(false);
+            };
+        });
+    }
+
+    /* ── Bind MACD events ─────────────────────────────────────────────────── */
+    function _bindMACDEvents(tab) {
+        function _macdChanged(isComp) {
+            var m = _indSettings.macd;
+            m.fast         = parseInt(tab.querySelector('#aip-macd-fast').value)       || m.fast;
+            m.slow         = parseInt(tab.querySelector('#aip-macd-slow').value)       || m.slow;
+            m.signal       = parseInt(tab.querySelector('#aip-macd-signal').value)     || m.signal;
+            m.visible      = tab.querySelector('#aip-macd-visible').checked;
+            m.macdColor    = tab.querySelector('#aip-macd-linecolor').value            || m.macdColor;
+            m.macdWidth    = parseFloat(tab.querySelector('#aip-macd-linewidth').value)|| m.macdWidth;
+            m.macdStyle    = parseInt(tab.querySelector('#aip-macd-linestyle').value);
+            m.showMacd     = tab.querySelector('#aip-macd-showmacd').checked;
+            m.signalColor  = tab.querySelector('#aip-macd-sigcolor').value             || m.signalColor;
+            m.signalWidth  = parseFloat(tab.querySelector('#aip-macd-sigwidth').value) || m.signalWidth;
+            m.signalStyle  = parseInt(tab.querySelector('#aip-macd-sigstyle').value);
+            m.showSignal   = tab.querySelector('#aip-macd-showsig').checked;
+            m.histColorUp  = tab.querySelector('#aip-macd-histup').value               || m.histColorUp;
+            m.histColorDown= tab.querySelector('#aip-macd-histdown').value             || m.histColorDown;
+            m.histOpacity  = parseFloat(tab.querySelector('#aip-macd-histopacity').value) || m.histOpacity;
+            m.showHist     = tab.querySelector('#aip-macd-showhist').checked;
+
+            var opEl = tab.querySelector('#aip-macd-opacity-val');
+            if (opEl) opEl.textContent = Math.round(m.histOpacity * 100) + '%';
+
+            _saveIndSettings();
+            _applyIndVisualSettings();
+            if (isComp) _pushIndCompParams();
+        }
+
+        /* Computational */
+        ['aip-macd-fast','aip-macd-slow','aip-macd-signal'].forEach(function(id) {
+            var el = tab.querySelector('#' + id); if (!el) return;
+            el.addEventListener('change', function(){ _macdChanged(true); });
+        });
+
+        /* Visual */
+        ['aip-macd-visible','aip-macd-linecolor','aip-macd-linewidth','aip-macd-linestyle','aip-macd-showmacd',
+         'aip-macd-sigcolor','aip-macd-sigwidth','aip-macd-sigstyle','aip-macd-showsig',
+         'aip-macd-histup','aip-macd-histdown','aip-macd-histopacity','aip-macd-showhist'].forEach(function(id) {
+            var el = tab.querySelector('#' + id); if (!el) return;
+            el.addEventListener('change', function(){ _macdChanged(false); });
+            el.addEventListener('input',  function(){ _macdChanged(false); });
+        });
+
+        /* Colour swatches */
+        [['macd-line-color','#aip-macd-linecolor'],['macd-sig-color','#aip-macd-sigcolor'],
+         ['macd-hist-up','#aip-macd-histup'],['macd-hist-down','#aip-macd-histdown']].forEach(function(pair_) {
+            var swId = pair_[0], inpSel = pair_[1];
+            tab.querySelectorAll('.aip-swatch[data-id="' + swId + '"]').forEach(function(sw) {
+                sw.onclick = function() {
+                    var inp = tab.querySelector(inpSel); if (inp) inp.value = sw.dataset.color;
+                    tab.querySelectorAll('.aip-swatch[data-id="' + swId + '"]').forEach(function(s){ s.classList.remove('aip-swatch-active'); });
+                    sw.classList.add('aip-swatch-active');
+                    _macdChanged(false);
+                };
+            });
+        });
+    }
+
+    /* ── Expose show/hide to Dash button ─────────────────────────────────── */
+    window._apexShowIndPanel = function() {
+        _loadIndSettings();
+        _showIndPanel();
+    };
+    window._apexHideIndPanel = _hideIndPanel;
+
+    /* Called after chart data loads — applies saved visual settings */
+    window._apexApplyIndSettings = function(indParams) {
+        _loadIndSettings();
+        /* If Python used different params (e.g. first load), reconcile */
+        if (indParams) {
+            if (indParams.cci_length) _indSettings.cci.length = indParams.cci_length;
+            if (indParams.cci_src)    _indSettings.cci.source = indParams.cci_src;
+            if (indParams.macd_fast)  _indSettings.macd.fast   = indParams.macd_fast;
+            if (indParams.macd_slow)  _indSettings.macd.slow   = indParams.macd_slow;
+            if (indParams.macd_signal) _indSettings.macd.signal = indParams.macd_signal;
+        }
+        _applyIndVisualSettings();
+        /* Refresh panel if open */
+        if (_indPanelEl && _indPanelEl.style.display !== 'none') _renderIndTabs();
     };
 
     /* ── bootstrap ───────────────────────────────────────────────────────── */

@@ -20,9 +20,13 @@ Persistence:
 import json
 import logging
 import os
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,8 @@ _TP1_PCT = 0.40
 _TP2_PCT = 0.35
 _TP3_PCT = 0.25  # must equal 1 - _TP1_PCT - _TP2_PCT
 
-_DEFAULT_SAVE_PATH = Path("data/paper_state.json")
+# Absolute path derived from this file's location — immune to working-directory changes
+_DEFAULT_SAVE_PATH = Path(__file__).parent.parent / "data" / "paper_state.json"
 
 
 # ── JSON helpers for datetime serialisation ────────────────────────────────────
@@ -74,6 +79,7 @@ class PaperTrader:
 
     def __init__(self, starting_balance: float = 500.0,
                  save_path: str | Path = None):
+        self._lock = threading.Lock()   # protects open_trades / closed_trades mutations
         self._save_path = Path(save_path) if save_path else _DEFAULT_SAVE_PATH
 
         loaded = self._load_state()
@@ -100,7 +106,7 @@ class PaperTrader:
         """Write full state to disk. Called after every mutation."""
         try:
             self._save_path.parent.mkdir(parents=True, exist_ok=True)
-            state = {
+            payload = {
                 "balance":        self.balance,
                 "_start_balance": self._start_balance,
                 "open_trades":    [_ser(t) for t in self.open_trades],
@@ -109,26 +115,58 @@ class PaperTrader:
                 "pending_orders": [_ser(o) for o in self.pending_orders],
                 "saved_at":       datetime.now(timezone.utc).isoformat(),
             }
-            tmp = str(self._save_path) + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(state, f, indent=2)
-            os.replace(tmp, self._save_path)   # atomic rename
+            json_str = json.dumps(payload, indent=2)
+            tmp = Path(str(self._save_path) + ".tmp")
+            tmp.write_text(json_str, encoding="utf-8")
+
+            # Tier 1: atomic rename (preferred — safest on same-volume writes)
+            for _attempt in range(3):
+                try:
+                    os.replace(tmp, self._save_path)
+                    return
+                except OSError:
+                    if _attempt < 2:
+                        time.sleep(0.05)
+
+            # Tier 2: Windows file-lock workaround — delete destination then rename.
+            # os.replace() can fail on Windows when an AV scanner or VS Code briefly
+            # holds a read handle on the destination (WinError 32/5).
+            try:
+                self._save_path.unlink(missing_ok=True)
+                tmp.rename(self._save_path)
+                return
+            except OSError:
+                pass
+
+            # Tier 3: direct overwrite — non-atomic but guarantees data is written.
+            # tmp already has the correct content; copy it directly.
+            self._save_path.write_text(json_str, encoding="utf-8")
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            logger.debug("PaperTrader._save_state: used direct-write fallback")
+
         except Exception as exc:
             logger.warning("PaperTrader._save_state failed: %s", exc)
 
     def _load_state(self) -> dict | None:
         """Read state from disk. Returns None if file missing or corrupt."""
         try:
+            logger.info("PaperTrader._load_state: reading %s", self._save_path)
             if not self._save_path.exists():
+                logger.warning("PaperTrader._load_state: file not found at %s", self._save_path)
                 return None
-            with open(self._save_path, "r") as f:
+            with open(self._save_path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
+            logger.info("PaperTrader._load_state: parsed OK — balance=%.2f  closed=%d",
+                        raw.get("balance", 0), len(raw.get("closed_trades", [])))
             raw["open_trades"]    = [_deser(t) for t in raw.get("open_trades",    [])]
             raw["closed_trades"]  = [_deser(t) for t in raw.get("closed_trades",  [])]
             raw["pending_orders"] = [_deser(o) for o in raw.get("pending_orders", [])]
             return raw
         except Exception as exc:
-            logger.warning("PaperTrader._load_state failed: %s", exc)
+            logger.warning("PaperTrader._load_state FAILED: %s", exc, exc_info=True)
             return None
 
     # ── Open (Market) ─────────────────────────────────────────────────────────
@@ -141,40 +179,55 @@ class PaperTrader:
         sl: float,
         tp_levels: dict,
         size: float,
-    ) -> str:
+        extra: dict | None = None,
+    ) -> str | None:
         """
         Fill immediately at entry_price (market order).
         size: units (forex) or qty (crypto) — used as a raw multiplier for P&L.
-        Returns trade_id string.
+        extra: optional dict of additional fields to store on the trade (e.g. latency_ms).
+        Returns trade_id string, or None if rejected (duplicate pair).
         """
-        trade_id = str(uuid.uuid4())[:8].upper()
-        trade = {
-            "id":            trade_id,
-            "pair":          pair,
-            "direction":     direction,
-            "entry":         entry_price,
-            "sl":            sl,
-            "tp1":           tp_levels["tp1"],
-            "tp2":           tp_levels["tp2"],
-            "tp3":           tp_levels["tp3"],
-            "size":          float(size),
-            "remaining":     1.0,
-            "tp1_hit":       False,
-            "tp2_hit":       False,
-            "tp3_hit":       False,
-            "breakeven_set": False,
-            "realised_pnl":  0.0,
-            "open_time":     datetime.now(timezone.utc),
-            "last_price":    entry_price,
-            "order_type":    "market",
-        }
-        self.open_trades.append(trade)
-        self._save_state()
-        logger.info(
-            "PAPER OPEN  %s %s  entry=%.5f  sl=%.5f  tp1=%.5f  size=%s  id=%s",
-            direction.upper(), pair, entry_price, sl, tp_levels["tp1"], size, trade_id,
-        )
-        return trade_id
+        with self._lock:
+            # ── Last-resort duplicate guard (primary check is in main._process_pair) ──
+            existing = self.get_open_trade(pair)
+            if existing and not getattr(__import__("config"), "ALLOW_MULTIPLE_PER_PAIR", False):
+                logger.warning(
+                    "PAPER TRADER: Duplicate trade rejected for %s "
+                    "(existing id=%s dir=%s) — ALLOW_MULTIPLE_PER_PAIR=False",
+                    pair, existing["id"], existing["direction"],
+                )
+                return None
+
+            trade_id = str(uuid.uuid4())[:8].upper()
+            trade = {
+                "id":            trade_id,
+                "pair":          pair,
+                "direction":     direction,
+                "entry":         entry_price,
+                "sl":            sl,
+                "tp1":           tp_levels["tp1"],
+                "tp2":           tp_levels["tp2"],
+                "tp3":           tp_levels["tp3"],
+                "size":          float(size),
+                "remaining":     1.0,
+                "tp1_hit":       False,
+                "tp2_hit":       False,
+                "tp3_hit":       False,
+                "breakeven_set": False,
+                "realised_pnl":  0.0,
+                "open_time":     datetime.now(timezone.utc),
+                "last_price":    entry_price,
+                "order_type":    "market",
+            }
+            if extra:
+                trade.update(extra)
+            self.open_trades.append(trade)
+            self._save_state()
+            logger.info(
+                "PAPER OPEN  %s %s  entry=%.5f  sl=%.5f  tp1=%.5f  size=%s  id=%s",
+                direction.upper(), pair, entry_price, sl, tp_levels["tp1"], size, trade_id,
+            )
+            return trade_id
 
     # ── Open (Limit) ──────────────────────────────────────────────────────────
 
@@ -224,27 +277,35 @@ class PaperTrader:
 
     def update(self, pair: str, candle_high: float, candle_low: float, candle_close: float) -> None:
         """Process one completed candle for all open trades and pending limit orders on `pair`."""
-        self._check_limit_fills(pair, candle_high, candle_low)
+        with self._lock:
+            self._check_limit_fills(pair, candle_high, candle_low)
 
-        dirty = False
-        still_open = []
-        for trade in self.open_trades:
-            if trade["pair"] != pair:
-                still_open.append(trade)
-                continue
-            trade["last_price"] = candle_close
-            fully_closed = self._eval_candle(trade, candle_high, candle_low)
-            if not fully_closed:
-                still_open.append(trade)
-            else:
-                dirty = True
-        self.open_trades = still_open
-        if dirty:
-            self._save_state()
+            dirty = False
+            still_open = []
+            for trade in self.open_trades:
+                if trade["pair"] != pair:
+                    still_open.append(trade)
+                    continue
+                trade["last_price"] = candle_close
+                fully_closed = self._eval_candle(trade, candle_high, candle_low)
+                if not fully_closed:
+                    still_open.append(trade)
+                else:
+                    dirty = True
+            self.open_trades = still_open
+            if dirty:
+                self._save_state()
+
+    # Default: cancel unfilled limit orders after this many candles (configurable in config)
+    _LIMIT_ORDER_EXPIRY_CANDLES = 4   # expire after 4 candle closes (≈ 4 hours on H1)
 
     def _check_limit_fills(self, pair: str, high: float, low: float) -> None:
         remaining = []
         dirty = False
+        expiry_candles = getattr(
+            __import__("config"), "LIMIT_ORDER_EXPIRY_CANDLES",
+            self._LIMIT_ORDER_EXPIRY_CANDLES,
+        )
         for order in self.pending_orders:
             if order["pair"] != pair:
                 remaining.append(order)
@@ -263,7 +324,16 @@ class PaperTrader:
                 logger.info("LIMIT ORDER FILLED  %s %s  at=%.5f  id=%s",
                             d.upper(), pair, limit, order["id"])
             else:
-                remaining.append(order)
+                # ── Candle-based expiry: increment miss counter and cancel if exceeded ──
+                order["candles_missed"] = order.get("candles_missed", 0) + 1
+                if order["candles_missed"] >= expiry_candles:
+                    logger.info(
+                        "LIMIT ORDER EXPIRED (missed %d candles)  %s %s  limit=%.5f  id=%s",
+                        order["candles_missed"], d.upper(), pair, limit, order["id"],
+                    )
+                    dirty = True   # state changed — needs save
+                else:
+                    remaining.append(order)
         self.pending_orders = remaining
         if dirty:
             self._save_state()
@@ -301,9 +371,15 @@ class PaperTrader:
                       (d == "short" and low  <= t["tp1"])
             if tp1_hit:
                 self._partial_close(t, t["tp1"], _TP1_PCT, "tp1")
-                t["tp1_hit"]     = True
-                t["sl"]          = t["entry"]   # move SL to breakeven
-                t["breakeven_set"] = True
+                t["tp1_hit"] = True
+                _pair = t.get("pair", "")
+                _be_on = config.BREAKEVEN_PER_PAIR.get(_pair, config.BREAKEVEN_ENABLED)
+                if _be_on:
+                    _pip  = 0.01 if "JPY" in _pair else 0.0001
+                    _buf  = config.BREAKEVEN_BUFFER_PIPS * _pip
+                    _mult = 1 if d == "long" else -1
+                    t["sl"]            = round(t["entry"] + _mult * _buf, 5)
+                    t["breakeven_set"] = True
 
         if t["tp1_hit"] and not t["tp2_hit"]:
             tp2_hit = (d == "long" and high >= t["tp2"]) or \
@@ -353,6 +429,87 @@ class PaperTrader:
             t["direction"].upper(), t["pair"], reason, price, t["realised_pnl"],
         )
         return True
+
+    # ── Real-time tick check (called every ~5 s from dashboard interval) ─────────
+
+    def tick_check(self, pair: str, bid: float, ask: float) -> list[str]:
+        """
+        Check SL/TP against the current live bid/ask and close any trades that are hit.
+        Returns a list of closed trade IDs so callers can sync state.
+
+        Uses ask for short SL (worst-case fill) and bid for long SL,
+        mirroring real broker fill logic for paper simulation.
+        Thread-safe — called from both the price-stream daemon and the 5-second Dash interval.
+        """
+        with self._lock:
+            closed_ids: list[str] = []
+            still_open = []
+            dirty = False
+
+            for t in self.open_trades:
+                if t["pair"] != pair:
+                    still_open.append(t)
+                    continue
+
+                d = t["direction"]
+                check_price = bid if d == "long" else ask
+
+                sl_hit = (d == "long"  and bid <= t["sl"]) or \
+                         (d == "short" and ask >= t["sl"])
+
+                if sl_hit:
+                    fill = t["sl"]
+                    logger.info(
+                        "TICK SL HIT  %s %s  price=%.5f  sl=%.5f",
+                        d.upper(), pair, check_price, t["sl"],
+                    )
+                    self._close_remaining(t, fill, "sl")
+                    closed_ids.append(t["id"])
+                    dirty = True
+                    continue
+
+                # TP checks (favourable side: long=ask, short=bid)
+                tp_price = ask if d == "long" else bid
+
+                if not t.get("tp1_hit") and t.get("tp1"):
+                    tp1_hit = (d == "long"  and tp_price >= t["tp1"]) or \
+                              (d == "short" and tp_price <= t["tp1"])
+                    if tp1_hit:
+                        self._partial_close(t, t["tp1"], _TP1_PCT, "tp1")
+                        t["tp1_hit"] = True
+                        _pair = t.get("pair", "")
+                        _be_on = config.BREAKEVEN_PER_PAIR.get(_pair, config.BREAKEVEN_ENABLED)
+                        if _be_on:
+                            _pip  = 0.01 if "JPY" in _pair else 0.0001
+                            _buf  = config.BREAKEVEN_BUFFER_PIPS * _pip
+                            _mult = 1 if d == "long" else -1
+                            t["sl"]            = round(t["entry"] + _mult * _buf, 5)
+                            t["breakeven_set"] = True
+                        dirty = True
+
+                if t.get("tp1_hit") and not t.get("tp2_hit") and t.get("tp2"):
+                    tp2_hit = (d == "long"  and tp_price >= t["tp2"]) or \
+                              (d == "short" and tp_price <= t["tp2"])
+                    if tp2_hit:
+                        self._partial_close(t, t["tp2"], _TP2_PCT, "tp2")
+                        t["tp2_hit"] = True
+                        dirty = True
+
+                if t.get("tp2_hit") and not t.get("tp3_hit") and t.get("tp3"):
+                    tp3_hit = (d == "long"  and tp_price >= t["tp3"]) or \
+                              (d == "short" and tp_price <= t["tp3"])
+                    if tp3_hit:
+                        self._close_remaining(t, t["tp3"], "tp3")
+                        closed_ids.append(t["id"])
+                        dirty = True
+                        continue
+
+                still_open.append(t)
+
+            self.open_trades = still_open
+            if dirty:
+                self._save_state()
+            return closed_ids
 
     # ── Trade modification (dashboard edit form) ──────────────────────────────
 
@@ -436,3 +593,27 @@ class PaperTrader:
             return 0.0
         wins = sum(1 for t in trades if t.get("realised_pnl", 0) > 0)
         return round(wins / len(trades), 4)
+
+    def profit_factor(self, last_n: int = 0) -> float:
+        """Gross profit / gross loss. > 1.0 = profitable. Returns 0.0 if no losses."""
+        trades = self.closed_trades[-last_n:] if last_n else self.closed_trades
+        gross_profit = sum(t.get("realised_pnl", 0) for t in trades if t.get("realised_pnl", 0) > 0)
+        gross_loss   = abs(sum(t.get("realised_pnl", 0) for t in trades if t.get("realised_pnl", 0) < 0))
+        if gross_loss == 0:
+            return round(gross_profit, 2) if gross_profit else 0.0
+        return round(gross_profit / gross_loss, 2)
+
+    def expectancy(self, last_n: int = 0) -> float:
+        """Average P&L per trade = (Win% × Avg win) − (Loss% × Avg loss)."""
+        trades = self.closed_trades[-last_n:] if last_n else self.closed_trades
+        if not trades:
+            return 0.0
+        pnls = [t.get("realised_pnl", 0) for t in trades]
+        return round(sum(pnls) / len(pnls), 2)
+
+    def avg_latency_ms(self) -> float | None:
+        """Mean signal-to-fill latency in milliseconds from closed trades."""
+        lats = [t.get("latency_ms") for t in self.closed_trades if t.get("latency_ms") is not None]
+        if not lats:
+            return None
+        return round(sum(lats) / len(lats), 1)

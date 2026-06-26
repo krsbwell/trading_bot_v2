@@ -1,0 +1,292 @@
+/* ── Apex Indicator Settings Panel ────────────────────────────────────────── */
+
+#apex-ind-panel {
+    position: fixed;
+    top: 80px;
+    right: 20px;
+    width: 460px;
+    max-height: 82vh;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    z-index: 9999;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.78rem;
+    color: #e6edf3;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Header */
+.aip-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px 8px;
+    background: #0d1117;
+    border-bottom: 1px solid #30363d;
+    cursor: move;
+    user-select: none;
+}
+
+.aip-title {
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: #38b6ff;
+    letter-spacing: 0.03em;
+}
+
+.aip-close {
+    background: transparent;
+    border: none;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0 4px;
+    line-height: 1;
+}
+.aip-close:hover { color: #e6edf3; }
+
+/* Tab bar */
+.aip-tabs {
+    display: flex;
+    background: #0d1117;
+    border-bottom: 1px solid #30363d;
+    padding: 0 6px;
+    gap: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.aip-tabs::-webkit-scrollbar { display: none; }
+
+.aip-tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #8b949e;
+    cursor: pointer;
+    padding: 7px 9px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    transition: color 0.15s;
+    white-space: nowrap;
+}
+.aip-tab:hover { color: #e6edf3; }
+.aip-tab.aip-active {
+    color: #38b6ff;
+    border-bottom-color: #38b6ff;
+}
+
+/* Body / scroll area */
+.aip-body {
+    overflow-y: auto;
+    padding: 8px 14px 14px;
+    flex: 1;
+}
+
+/* Scrollbar */
+.aip-body::-webkit-scrollbar { width: 5px; }
+.aip-body::-webkit-scrollbar-track { background: #0d1117; }
+.aip-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+/* Section heading */
+.aip-section {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 12px 0 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #21262d;
+}
+.aip-section:first-child { margin-top: 4px; }
+
+/* Row layout */
+.aip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+
+.aip-label {
+    color: #8b949e;
+    font-size: 0.74rem;
+    min-width: 88px;
+}
+
+.aip-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    flex-wrap: wrap;
+}
+
+/* Inputs */
+.aip-select, .aip-num {
+    background: #21262d;
+    color: #e6edf3;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 0.75rem;
+    height: 26px;
+    outline: none;
+}
+.aip-select { min-width: 80px; cursor: pointer; }
+.aip-num    { width: 68px; }
+.aip-select:focus, .aip-num:focus { border-color: #38b6ff; }
+
+.aip-color {
+    width: 28px;
+    height: 26px;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 2px;
+    background: #21262d;
+}
+
+/* Range slider */
+.aip-range {
+    -webkit-appearance: none;
+    width: 100px;
+    height: 4px;
+    background: #30363d;
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+.aip-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #38b6ff;
+    cursor: pointer;
+    border: none;
+}
+
+/* Toggle switch */
+.aip-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+}
+.aip-toggle input { display: none; }
+.aip-toggle-track {
+    width: 32px;
+    height: 16px;
+    background: #30363d;
+    border-radius: 8px;
+    position: relative;
+    transition: background 0.15s;
+    flex-shrink: 0;
+}
+.aip-toggle-track::after {
+    content: '';
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background: #8b949e;
+    border-radius: 50%;
+    top: 2px;
+    left: 2px;
+    transition: left 0.15s, background 0.15s;
+}
+.aip-toggle input:checked + .aip-toggle-track { background: rgba(56,182,255,0.3); }
+.aip-toggle input:checked + .aip-toggle-track::after { left: 18px; background: #38b6ff; }
+.aip-toggle-lbl { font-size: 0.72rem; color: #8b949e; }
+
+/* Colour swatches */
+.aip-swatches {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.aip-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+    transition: border-color 0.1s, transform 0.1s;
+}
+.aip-swatch:hover { transform: scale(1.2); }
+.aip-swatch.aip-swatch-active { border-color: #fff; }
+.aip-swatch-custom {
+    width: 22px;
+    height: 18px;
+    border: 1px solid #30363d;
+    border-radius: 3px;
+    cursor: pointer;
+    padding: 1px;
+    background: #21262d;
+}
+
+/* Hint text */
+.aip-hint {
+    color: #8b949e;
+    font-size: 0.72rem;
+    font-style: italic;
+    padding: 4px 0;
+}
+
+/* Profile list */
+.aip-profile-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 8px;
+}
+.aip-profile-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #21262d;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+.aip-profile-name {
+    flex: 1;
+    font-weight: 600;
+    color: #e6edf3;
+    font-size: 0.78rem;
+}
+
+/* Buttons */
+.aip-btn {
+    background: #21262d;
+    color: #e6edf3;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.aip-btn:hover { background: #30363d; }
+
+.aip-btn-sm {
+    background: transparent;
+    border: 1px solid #30363d;
+    border-radius: 3px;
+    padding: 2px 7px;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.aip-btn-blue  { color: #38b6ff; border-color: #38b6ff; }
+.aip-btn-blue:hover  { background: rgba(56,182,255,0.12); }
+.aip-btn-red   { color: #ff3366; border-color: #ff3366; }
+.aip-btn-red:hover   { background: rgba(255,51,102,0.12); }
+.aip-btn-grey  { color: #8b949e; border-color: #30363d; }
+.aip-btn-grey:hover  { background: #30363d; }

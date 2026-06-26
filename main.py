@@ -8,6 +8,7 @@ Dashboard opens at:     http://localhost:8050
 """
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -16,6 +17,8 @@ from apscheduler.triggers.cron import CronTrigger
 import config
 from connectors.oanda_connector import OandaConnector
 from connectors.alpaca_connector import AlpacaConnector
+from connectors.news_connector import is_news_blackout
+from connectors.forexfactory_connector import is_news_blackout as ff_is_news_blackout
 from engine.signal_engine import SignalEngine
 from trade.paper_trader import PaperTrader
 from trade.trade_manager import TradeManager
@@ -35,6 +38,7 @@ from alerts.telegram_alert import (
     is_configured as tg_enabled,
 )
 from dashboard import state
+from engine.signal_audit import log_signal as _audit_blocked
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +57,7 @@ _crypto_engine     = None
 _pattern_learner   = PatternLearner()
 _trade_manager_fx  = None
 _trade_manager_cx  = None
+_last_candle_hour  = None   # UTC hour of last on_candle_close() run (prevents restart duplicates)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -70,8 +75,23 @@ def on_candle_close() -> None:
     6. Refresh suggestion cards if due
     7. Midnight UTC: reset daily drawdown counter
     """
+    global _last_candle_hour
+    now_close = datetime.now(timezone.utc)
+    current_hour = now_close.replace(minute=0, second=0, microsecond=0)
+
+    # Guard against restart duplicates: if this hour was already fully processed
+    # (e.g. bot restarted mid-hour), skip to avoid duplicate audit entries + double alerts.
+    if _last_candle_hour is not None and current_hour <= _last_candle_hour:
+        logger.info(
+            "Candle close %s skipped — hour already processed (last=%s)",
+            current_hour.strftime("%H:%M UTC"), _last_candle_hour.strftime("%H:%M UTC"),
+        )
+        return
+    _last_candle_hour = current_hour
+
     logger.info("── Candle close %s ──────────────────────────────────────────",
-                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+                now_close.strftime("%Y-%m-%d %H:%M UTC"))
+    state.update(last_scan_time=now_close)
 
     # ── Account refresh ───────────────────────────────────────────────────────
     _refresh_account()
@@ -94,7 +114,7 @@ def on_candle_close() -> None:
     if _forex_engine:
         for pair in watch_pairs:
             try:
-                sig = _forex_engine.run(pair, "forex")
+                sig = _forex_engine.run(pair, "forex", no_audit=True)
                 if sig is None:
                     state.update_signal(pair, 0, "—")
                 elif sig.get("no_signal"):
@@ -149,11 +169,21 @@ def _process_pair(pair: str, market: str, engine) -> None:
     if engine is None:
         return
 
-    # ML win-prob is only useful after 50 closed trades; dummy features before that
-    ml_prob = (_pattern_learner.predict_win_prob(_dummy_features())
-               if _pattern_learner else None)
+    _t_signal_start = time.perf_counter()
+    # Run signal engine first (no ML yet — features come from the signal itself)
+    signal = engine.run(pair, market, ml_win_prob=None)
 
-    signal = engine.run(pair, market, ml_win_prob=ml_prob)
+    # After signal is generated, compute ML win-prob from real features
+    ml_prob = None
+    if signal and not signal.get("no_signal") and _pattern_learner:
+        try:
+            from learning.pattern_learner import FEATURES
+            features = {f: (signal.get(f) or 0) for f in FEATURES}
+            ml_prob = _pattern_learner.predict_win_prob(features)
+            if ml_prob is not None:
+                signal["ml_win_prob"] = ml_prob
+        except Exception as _ml_exc:
+            logger.debug("ML prediction failed: %s", _ml_exc)
 
     if signal is None:
         state.update_signal(pair, 0, "—")
@@ -181,8 +211,12 @@ def _process_pair(pair: str, market: str, engine) -> None:
         f"{ml_prob:.2f}" if ml_prob is not None else "n/a",
     )
 
-    # Watching / scanning signal — threshold is adjustable from the dashboard slider
-    effective_min = state.get_key("min_score", config.MIN_CONFLUENCE_SCORE)
+    # Slider can go lower than the config floor now that H4/ATR/news gates are active.
+    # The floor is still enforced at the config minimum to prevent reckless lowering.
+    effective_min = max(
+        state.get_key("min_score", config.MIN_CONFLUENCE_SCORE),
+        40,   # hard floor — never trade below 40 regardless of slider
+    )
     if score < effective_min:
         if signal.get("watching"):
             # Send Telegram notification for WATCHING signals too
@@ -195,17 +229,118 @@ def _process_pair(pair: str, market: str, engine) -> None:
             record_skip(signal)
         return
 
+    def _block(reason: str) -> None:
+        """Stamp the signal detail with a trade_blocked_reason for the dashboard."""
+        state.update_signal_detail(pair, {**signal, "trade_blocked_reason": reason})
+
+    # ── Gate-blocked signals (H4 counter-trend / ATR out of range) ──────────
+    if signal.get("gate_blocked"):
+        logger.info(
+            "GATE BLOCKED: %s %s score=%d — %s (signal visible, no trade)",
+            pair, signal["direction"], score, signal["gate_blocked"],
+        )
+        _block(f"Gate: {signal['gate_blocked']}")
+        return
+
     # ── Session filter: only open trades during London / NY overlap ──────────
     now_utc = datetime.now(timezone.utc)
     in_session = config.SESSION_START_UTC <= now_utc.hour < config.SESSION_END_UTC
     if not in_session:
-        logger.info(
-            "Session filter: %s %s score=%d signal visible but NO TRADE (outside %02d:00–%02d:00 UTC)",
-            pair, signal["direction"], score,
-            config.SESSION_START_UTC, config.SESSION_END_UTC,
+        _sess_reason = (
+            f"Out of session ({now_utc.strftime('%H:%M')} UTC, "
+            f"window {config.SESSION_START_UTC:02d}:00–{config.SESSION_END_UTC:02d}:00)"
         )
-        # Still show the signal on the dashboard — just don't open a trade
+        logger.info("Session filter: %s %s score=%d — %s", pair, signal["direction"], score, _sess_reason)
+        _audit_blocked(
+            pair=pair, timeframe=signal.get("timeframe", "H1"),
+            direction=signal["direction"],
+            ema_score=signal.get("ema_score", 0),
+            structure_score=signal.get("structure_score", 0),
+            pa_score=signal.get("pa_score", 0),
+            confluence_score=score,
+            result="BLOCKED", reject_reason=_sess_reason,
+        )
+        _block(_sess_reason)
         return
+
+    # ── News blackout filter ──────────────────────────────────────────────────
+    # ForexFactory: free XML feed, no API key required — always active
+    _ff_blocked, _ff_event = ff_is_news_blackout(pair)
+    if _ff_blocked:
+        logger.info("NEWS BLOCKED (FF): %s — '%s'", pair, _ff_event)
+        _block(f"News: {_ff_event}")
+        return
+    # Finnhub: supplement if API key is configured
+    if config.FINNHUB_API_KEY:
+        _news_blocked, _event_name = is_news_blackout(pair)
+        if _news_blocked:
+            logger.info("NEWS BLOCKED (Finnhub): %s — '%s'", pair, _event_name)
+            _block(f"News: {_event_name}")
+            return
+
+    # ── Duplicate / pre-trade guard ──────────────────────────────────────────
+    # This is the PRIMARY duplicate-prevention layer. PaperTrader.open_trade()
+    # has a secondary guard as a last resort.
+    if config.MODE == "paper" and _paper_trader:
+        # 1. Check for existing open trade on this pair
+        existing = _paper_trader.get_open_trade(pair)
+        if existing and not config.ALLOW_MULTIPLE_PER_PAIR:
+            logger.info(
+                "DUPLICATE BLOCKED: %s already has open %s trade (id=%s entry=%.5f)",
+                pair, existing["direction"], existing["id"], existing["entry"],
+            )
+            _audit_blocked(
+                pair=pair, timeframe=signal.get("timeframe", "H1"),
+                direction=signal["direction"],
+                ema_score=signal.get("ema_score", 0),
+                structure_score=signal.get("structure_score", 0),
+                pa_score=signal.get("pa_score", 0),
+                confluence_score=score,
+                result="BLOCKED",
+                reject_reason=f"Pair already has open trade id={existing['id']}",
+            )
+            _block(f"Duplicate: already open ({existing['direction']})")
+            return
+
+        # 2. Check max-open-trades and halt flag via validate_pre_trade
+        open_pairs = [t.get("pair") for t in _paper_trader.open_trades]
+        ok, reason = validate_pre_trade(score, len(_paper_trader.open_trades), pair, open_pairs)
+        if not ok:
+            logger.info("PRE-TRADE BLOCKED: %s — %s", pair, reason)
+            _audit_blocked(
+                pair=pair, timeframe=signal.get("timeframe", "H1"),
+                direction=signal["direction"],
+                ema_score=signal.get("ema_score", 0),
+                structure_score=signal.get("structure_score", 0),
+                pa_score=signal.get("pa_score", 0),
+                confluence_score=score,
+                result="BLOCKED", reject_reason=reason,
+            )
+            _block(reason)
+            return
+
+        # 3. Cooldown check — prevent re-entry within TRADE_COOLDOWN_HOURS of last close
+        cooldowns = state.get_key("trade_cooldowns", {})
+        last_close = cooldowns.get(pair)
+        if last_close:
+            elapsed_h = (datetime.now(timezone.utc) - last_close).total_seconds() / 3600
+            if elapsed_h < config.TRADE_COOLDOWN_HOURS:
+                logger.info(
+                    "COOLDOWN BLOCKED: %s last closed %.1fh ago (cooldown=%dh)",
+                    pair, elapsed_h, config.TRADE_COOLDOWN_HOURS,
+                )
+                _audit_blocked(
+                    pair=pair, timeframe=signal.get("timeframe", "H1"),
+                    direction=signal["direction"],
+                    ema_score=signal.get("ema_score", 0),
+                    structure_score=signal.get("structure_score", 0),
+                    pa_score=signal.get("pa_score", 0),
+                    confluence_score=score,
+                    result="BLOCKED",
+                    reject_reason=f"Cooldown: last close {elapsed_h:.1f}h ago < {config.TRADE_COOLDOWN_HOURS}h",
+                )
+                _block(f"Cooldown {elapsed_h:.1f}h / {config.TRADE_COOLDOWN_HOURS}h")
+                return
 
     # ≥ threshold + in session: fire alert + open trade
     try:
@@ -233,16 +368,22 @@ def _process_pair(pair: str, market: str, engine) -> None:
 
     actual_id = None   # guard against UnboundLocalError if manager is absent
     if config.MODE == "paper" and _paper_trader:
-        tp        = signal["tp_levels"]
-        actual_id = _paper_trader.open_trade(
-            pair=pair,
-            direction=signal["direction"],
-            entry_price=signal["entry"],
-            sl=signal["stop_loss"],
-            tp_levels=tp,
-            size=size,
-        )
-        _sync_paper_state()
+        tp         = signal["tp_levels"]
+        latency_ms = round((time.perf_counter() - _t_signal_start) * 1000, 1)
+        try:
+            actual_id  = _paper_trader.open_trade(
+                pair=pair,
+                direction=signal["direction"],
+                entry_price=signal["entry"],
+                sl=signal["stop_loss"],
+                tp_levels=tp,
+                size=size,
+                extra={"latency_ms": latency_ms},
+            )
+            _sync_paper_state()
+            logger.debug("Latency %s → %.1f ms", pair, latency_ms)
+        except Exception as _open_exc:
+            logger.error("TRADE OPEN FAILED for %s: %s", pair, _open_exc, exc_info=True)
         # Telegram: trade opened
         try:
             if tg_enabled() and actual_id:
@@ -260,6 +401,9 @@ def _process_pair(pair: str, market: str, engine) -> None:
 
     if actual_id:
         logger.info("Trade opened: %s", actual_id)
+    elif config.MODE == "paper":
+        # open_trade returned None — PaperTrader's secondary duplicate guard fired
+        logger.warning("PAPER TRADER rejected trade for %s (secondary duplicate guard)", pair)
 
 
 def _tick_paper_trades() -> None:
@@ -271,7 +415,11 @@ def _tick_paper_trades() -> None:
         if connector is None:
             continue
         try:
-            gran    = config.TIMEFRAMES["primary"]
+            gran = config.TIMEFRAMES["primary"]
+            # Alpaca uses different TF strings ("1Hour" not "H1")
+            if "_" not in pair:
+                _tf_map = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}
+                gran = _tf_map.get(gran, "1Hour")
             df      = connector.get_candles(pair, gran, 2)
             if df is None or len(df) < 1:
                 continue
@@ -279,14 +427,24 @@ def _tick_paper_trades() -> None:
             closed_before = {t["id"] for t in _paper_trader.closed_trades}
             _paper_trader.update(pair, last["high"], last["low"], last["close"])
             _sync_paper_state()
-            # Detect newly closed trades for Telegram notification
+            # Detect newly closed trades: update cooldown + Telegram
+            newly_closed = [t for t in _paper_trader.closed_trades
+                            if t["id"] not in closed_before]
+            if newly_closed:
+                cooldowns = dict(state.get_key("trade_cooldowns", {}))
+                for t in newly_closed:
+                    cooldowns[t["pair"]] = datetime.now(timezone.utc)
+                    logger.info(
+                        "Cooldown started for %s (trade %s closed, %dh cooldown)",
+                        t["pair"], t["id"], config.TRADE_COOLDOWN_HOURS,
+                    )
+                state.update(trade_cooldowns=cooldowns)
             if tg_enabled():
-                for t in _paper_trader.closed_trades:
-                    if t["id"] not in closed_before:
-                        try:
-                            tg_trade_closed(t)
-                        except Exception:
-                            pass
+                for t in newly_closed:
+                    try:
+                        tg_trade_closed(t)
+                    except Exception:
+                        pass
         except Exception as exc:
             logger.error("Paper tick failed for %s: %s", pair, exc)
 
@@ -299,6 +457,8 @@ def _refresh_account() -> None:
             "nav":              acc.get("nav", acc["balance"]),
             "unrealized_pnl":   acc.get("unrealized_pnl", 0),
             "open_trade_count": len(_paper_trader.open_trades),
+            "profit_factor":    _paper_trader.profit_factor(),
+            "avg_latency_ms":   _paper_trader.avg_latency_ms(),
         })
         state.append_equity(acc["balance"], acc.get("nav", acc["balance"]))
         return
@@ -364,9 +524,31 @@ def _update_ml_stats() -> None:
     state.update(ml_stats={"accuracy": None, "top_features": top, "n_samples": n})
 
 
-def _dummy_features() -> dict:
-    from learning.pattern_learner import FEATURES
-    return {f: 0 for f in FEATURES}
+def _diagnostic_scan() -> None:
+    """
+    Runs between H1 closes (:15, :30, :45) to refresh dashboard signal state.
+    Updates scores and rejection reasons for all pairs — NEVER opens trades.
+    """
+    now_utc = datetime.now(timezone.utc)
+    state.update(last_scan_time=now_utc)
+    logger.info("Diagnostic scan %s", now_utc.strftime("%H:%M UTC"))
+    if not _forex_engine:
+        return
+    all_pairs = config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", [])
+    for pair in all_pairs:
+        try:
+            sig = _forex_engine.run(pair, "forex", no_audit=True)
+            if sig is None:
+                continue
+            tf = sig.get("timeframe", config.TIMEFRAMES["primary"])
+            if sig.get("no_signal"):
+                state.update_signal(pair, 0, "—", timeframe=tf)
+                state.update_signal_detail(pair, sig)
+            else:
+                state.update_signal(pair, sig["score"], sig["direction"], timeframe=tf)
+                state.update_signal_detail(pair, sig)
+        except Exception as exc:
+            logger.debug("Diagnostic scan %s: %s", pair, exc)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -391,21 +573,23 @@ def _init_connectors() -> tuple:
         state.update(oanda_ok=False)
         logger.warning("✗ Oanda  credentials missing in .env — forex disabled")
 
-    if config.ALPACA_API_KEY and config.ALPACA_SECRET:
+    if config.CRYPTO_PAIRS and config.ALPACA_API_KEY and config.ALPACA_SECRET:
         try:
             alpaca = AlpacaConnector()
-            # Quick connectivity test — fetch 1 BTC/USD bar
-            test_df = alpaca.get_candles("BTC/USD", "1Hour", 1)
+            test_df = alpaca.get_candles(config.CRYPTO_PAIRS[0], "1Hour", 1)
             state.update(alpaca_ok=True)
-            logger.info("✓ Alpaca connected (paper=%s)  last BTC/USD close=%.2f",
-                        config.MODE == "paper",
+            logger.info("✓ Alpaca connected (paper=%s)  last %s close=%.2f",
+                        config.MODE == "paper", config.CRYPTO_PAIRS[0],
                         test_df["close"].iloc[-1] if not test_df.empty else 0)
         except Exception as exc:
             state.update(alpaca_ok=False)
             logger.error("✗ Alpaca connection FAILED: %s", exc)
     else:
         state.update(alpaca_ok=False)
-        logger.warning("✗ Alpaca credentials missing in .env — crypto disabled")
+        if not config.CRYPTO_PAIRS:
+            logger.info("Alpaca skipped — CRYPTO_PAIRS is empty")
+        else:
+            logger.warning("✗ Alpaca credentials missing in .env — crypto disabled")
 
     return oanda, alpaca
 
@@ -446,7 +630,11 @@ def main() -> None:
     if config.MODE == "paper":
         _paper_trader = PaperTrader(starting_balance=500.0)
         state.update(paper_trader=_paper_trader)   # expose to dashboard quick-trade
-        logger.info("Paper trader: balance $%.2f", _paper_trader.balance)
+        _sync_paper_state()   # push loaded trades into state["open_trades"] immediately
+        _refresh_account()    # push correct balance into state["account"] immediately
+        logger.info("Paper trader: balance $%.2f  open_trades=%d  closed=%d",
+                    _paper_trader.balance, len(_paper_trader.open_trades),
+                    len(_paper_trader.closed_trades))
     else:
         if _oanda_connector:
             _trade_manager_fx = TradeManager(_oanda_connector, "forex")
@@ -477,11 +665,56 @@ def main() -> None:
     t.start()
     logger.info("Dashboard: http://localhost:8050")
 
+    # ── OANDA price stream — real-time SL/TP monitoring ──────────────────────
+    if config.MODE == "paper" and _oanda_connector and _paper_trader:
+        forex_pairs = config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", [])
+        if forex_pairs:
+            import time as _time
+
+            def _on_stream_price(instrument: str, bid: float, ask: float) -> None:
+                """Called on every tick from the OANDA stream."""
+                if not _paper_trader or not _paper_trader.get_open_trade(instrument):
+                    return
+                try:
+                    closed = _paper_trader.tick_check(instrument, bid, ask)
+                    if closed:
+                        _sync_paper_state()
+                        logger.info(
+                            "STREAM: SL/TP closed %d trade(s) on %s  bid=%.5f ask=%.5f",
+                            len(closed), instrument, bid, ask,
+                        )
+                except Exception as exc:
+                    logger.error("Stream tick_check error: %s", exc)
+
+            def _run_price_stream() -> None:
+                """Daemon thread: stream OANDA prices, reconnect on any error."""
+                while True:
+                    try:
+                        logger.info(
+                            "Price stream: connecting for %d pairs: %s",
+                            len(forex_pairs), forex_pairs,
+                        )
+                        _oanda_connector.stream_prices(forex_pairs, _on_stream_price)
+                    except Exception as exc:
+                        logger.warning(
+                            "Price stream disconnected (%s) — reconnecting in 5 s", exc
+                        )
+                        _time.sleep(5)
+
+            stream_thread = threading.Thread(
+                target=_run_price_stream, daemon=True, name="price-stream"
+            )
+            stream_thread.start()
+            logger.info("Real-time price stream started for %s", forex_pairs)
+
     # ── Scheduler ─────────────────────────────────────────────────────────────
     scheduler = BlockingScheduler(timezone="UTC")
-    # H1 candle closes on the hour
+    # H1 candle closes on the hour — full scan + trade evaluation
     scheduler.add_job(on_candle_close, CronTrigger(minute=0), id="h1_close")
-    logger.info("Scheduler ready — next trigger at the top of the hour")
+    # Between-close diagnostic scans — update dashboard state only, no trades
+    scheduler.add_job(_diagnostic_scan, CronTrigger(minute="15,30,45"), id="diag_scan")
+    state.update(last_scan_time=datetime.now(timezone.utc))
+    logger.info("Scheduler ready — H1 close on :00, diagnostics at :15/:30/:45")
     logger.info("Press Ctrl+C to stop.\n")
 
     # Optionally run immediately on startup (useful for testing)

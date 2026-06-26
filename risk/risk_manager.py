@@ -28,13 +28,26 @@ def calculate_position_size(account_balance: float, entry: float,
 
 
 def get_tp_levels(entry: float, stop_loss: float, direction: str) -> dict:
-    """Return TP1/TP2/TP3 at 1:1, 1:2, 1:3 RR."""
+    """
+    Return TP1/TP2/TP3 at 1.0R / 2.5R / 4.0R.
+
+    TP1 at 1.0R (changed from 1.5R):
+      Hitting TP1 more reliably is more important than squeezing extra ticks from
+      it. At 1.0R, TP1 fires before most reversals, banks 40% of the position,
+      and moves the SL to breakeven+buffer — protecting capital while leaving
+      the majority of the position open for the TP2/TP3 continuation move.
+
+    TP2 at 2.5R / TP3 at 4.0R (tightened from 3R / 5R):
+      Keeps meaningful R:R while being more achievable in a trending session,
+      increasing the frequency of TP2 and TP3 hits and reducing reliance on the
+      rare 5R home-run trades that were the only way to stay positive before.
+    """
     dist = abs(entry - stop_loss)
     mult = 1 if direction == "long" else -1
     return {
-        "tp1": entry + mult * dist * 1.0,   # 1:1 RR, close 40%
-        "tp2": entry + mult * dist * 2.0,   # 1:2 RR, close 35%
-        "tp3": entry + mult * dist * 3.0,   # 1:3 RR, close 25%
+        "tp1": round(entry + mult * dist * 1.0, 5),   # 1.0:1 RR, close 40%
+        "tp2": round(entry + mult * dist * 2.5, 5),   # 2.5:1 RR, close 35%
+        "tp3": round(entry + mult * dist * 4.0, 5),   # 4.0:1 RR, close 25%
     }
 
 

@@ -60,7 +60,9 @@ def run_backtest(
         logger.warning("Backtest %s: insufficient data (%d H1, %d H4)", pair, len(df_h1), len(df_h4))
         return {"error": "insufficient_data"}
 
-    pt          = PaperTrader(starting_balance, save_path=Path("data/_bt_tmp_state.json"))
+    _BT_STATE = Path("data/_bt_tmp_state.json")
+    _BT_STATE.unlink(missing_ok=True)  # always start fresh — never inherit a previous run's state
+    pt          = PaperTrader(starting_balance, save_path=_BT_STATE)
     equity      = []
     signal_log  = []
     peak        = starting_balance
@@ -178,6 +180,145 @@ def run_backtest(
         "trades":         closed,
         "equity_curve":   equity,
         "signal_log":     signal_log,
+    }
+
+
+def _calc_profit_factor(trades: list) -> float:
+    """Gross profit / gross loss from a list of closed trade dicts."""
+    gross_profit = sum(t.get("realised_pnl", 0) for t in trades if t.get("realised_pnl", 0) > 0)
+    gross_loss   = abs(sum(t.get("realised_pnl", 0) for t in trades if t.get("realised_pnl", 0) < 0))
+    if gross_loss == 0:
+        return round(gross_profit, 2) if gross_profit else 0.0
+    return round(gross_profit / gross_loss, 2)
+
+
+def run_walk_forward(
+    pair: str,
+    df_h1: pd.DataFrame,
+    df_h4: pd.DataFrame,
+    train_bars: int = 1500,
+    test_bars: int  = 750,
+    step_bars: int  = 500,
+    starting_balance: float = 500.0,
+    market: str = "forex",
+    param_grid: dict | None = None,
+) -> dict:
+    """
+    Sliding-window walk-forward optimisation.
+
+    For each window:
+      1. Train  = df_h1[i : i+train_bars]  — grid-search min_score by IS profit factor
+      2. Test   = df_h1[i+train_bars : i+train_bars+test_bars]  — evaluate best params OOS
+      3. Advance i by step_bars
+
+    Returns:
+        {
+          "pair": ...,
+          "windows": [
+            {
+              "window": 1,
+              "train_range": ("2024-01-01", "2024-04-01"),
+              "test_range":  ("2024-04-01", "2024-07-01"),
+              "best_params": {"min_score": 55},
+              "pf_is":  1.8,
+              "pf_oos": 1.4,
+              "win_rate_oos": 0.56,
+              "trade_count_oos": 12,
+              "stability": 0.78,       # oos/is — closer to 1.0 = less overfit
+            }, ...
+          ],
+          "avg_pf_oos":   ...,
+          "avg_stability": ...,
+          "best_global_params": {"min_score": ...},
+        }
+    """
+    if param_grid is None:
+        param_grid = {"min_score": [50, 58, 65]}   # 3 values keeps total runs ~< 25
+
+    total_needed = train_bars + test_bars
+    if len(df_h1) < total_needed:
+        return {"error": f"Need at least {total_needed} H1 bars, got {len(df_h1)}"}
+
+    max_windows = 6   # cap to keep runtime under ~60 s in a sync Dash callback
+    windows_out = []
+    i = 0
+    window_num = 0
+
+    while i + total_needed <= len(df_h1) and window_num < max_windows:
+        window_num += 1
+        train_df = df_h1.iloc[i : i + train_bars]
+        test_df  = df_h1.iloc[i + train_bars : i + train_bars + test_bars]
+
+        # Align H4 data for each window (approx 1/4 the H1 bars)
+        train_h4 = df_h4.iloc[i // 4 : (i + train_bars) // 4] if len(df_h4) > (i + train_bars) // 4 else df_h4
+        test_h4  = df_h4.iloc[(i + train_bars) // 4 : (i + total_needed) // 4] if len(df_h4) > (i + total_needed) // 4 else df_h4
+
+        # ── In-sample grid search ─────────────────────────────────────────────
+        best_is_pf    = -1.0
+        best_params   = {"min_score": param_grid["min_score"][0]}
+
+        for score_thresh in param_grid["min_score"]:
+            res = run_backtest(pair, train_df, train_h4,
+                               starting_balance=starting_balance,
+                               min_score=score_thresh,
+                               market=market)
+            if "error" in res or res.get("total_trades", 0) < 3:
+                continue
+            pf = _calc_profit_factor(res.get("trades", []))
+            if pf > best_is_pf:
+                best_is_pf  = pf
+                best_params = {"min_score": score_thresh}
+
+        # ── Out-of-sample evaluation ──────────────────────────────────────────
+        oos_res = run_backtest(pair, test_df, test_h4,
+                               starting_balance=starting_balance,
+                               min_score=best_params["min_score"],
+                               market=market)
+        if "error" in oos_res:
+            i += step_bars
+            continue
+
+        pf_oos     = _calc_profit_factor(oos_res.get("trades", []))
+        stability  = round(pf_oos / best_is_pf, 3) if best_is_pf > 0 else 0.0
+
+        try:
+            train_start = str(train_df.index[0].date())
+            train_end   = str(train_df.index[-1].date())
+            test_start  = str(test_df.index[0].date())
+            test_end    = str(test_df.index[-1].date())
+        except Exception:
+            train_start = train_end = test_start = test_end = ""
+
+        windows_out.append({
+            "window":         window_num,
+            "train_range":    (train_start, train_end),
+            "test_range":     (test_start,  test_end),
+            "best_params":    best_params,
+            "pf_is":          round(best_is_pf, 2),
+            "pf_oos":         round(pf_oos, 2),
+            "win_rate_oos":   round(oos_res.get("win_rate", 0), 3),
+            "trade_count_oos": oos_res.get("total_trades", 0),
+            "stability":      stability,
+        })
+
+        i += step_bars
+
+    if not windows_out:
+        return {"pair": pair, "windows": [], "error": "No valid windows produced"}
+
+    avg_pf_oos  = round(sum(w["pf_oos"]    for w in windows_out) / len(windows_out), 2)
+    avg_stab    = round(sum(w["stability"]  for w in windows_out) / len(windows_out), 3)
+    # Best global params = most frequently selected min_score across windows
+    from collections import Counter
+    score_counts = Counter(w["best_params"]["min_score"] for w in windows_out)
+    best_global  = {"min_score": score_counts.most_common(1)[0][0]}
+
+    return {
+        "pair":              pair,
+        "windows":           windows_out,
+        "avg_pf_oos":        avg_pf_oos,
+        "avg_stability":     avg_stab,
+        "best_global_params": best_global,
     }
 
 

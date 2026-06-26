@@ -11,7 +11,7 @@ from datetime import datetime as _dt
 
 import pandas as pd
 from dash import (
-    Dash, Input, Output, State, ALL,
+    Dash, Input, Output, State, ALL, ctx,
     callback_context, html, dcc, no_update,
 )
 
@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 # ── Style helpers ─────────────────────────────────────────────────────────────
 
-_TF_LABELS = {"H1": "1H", "H4": "4H", "D": "D"}
+_TF_LABELS = {"M5": "5m", "M15": "15m", "M30": "30m", "H1": "1H", "H4": "4H", "D": "D", "W": "W"}
+_ALL_TFS   = ["M5", "M15", "M30", "H1", "H4", "D", "W"]
 
 def _tf_btn_style(active: bool = False) -> dict:
     return {
@@ -42,13 +43,27 @@ def _tf_btn_style(active: bool = False) -> dict:
 # ── Drawing constants ─────────────────────────────────────────────────────────
 
 _DRAW_TOOL_META = [
-    ("h-line",    "—",    "Horizontal line — click chart to place"),
-    ("trend",     "╱",    "Trend line — click 2 points; drag endpoints to edit"),
-    ("pips",      "📏",   "Measure — click and drag to measure price range"),
-    ("box",       "Rect", "Rectangle — click and drag to draw"),
-    ("square",    "Sqr",  "Square — click and drag (equal sides)"),
-    ("long-pos",  "↑ L",  "Long Position — click chart to place entry"),
-    ("short-pos", "↓ S",  "Short Position — click chart to place entry"),
+    ("h-line",    "—",   "Horizontal line — click chart to place"),
+    ("trend",     "╱",   "Trend line — click 2 points; drag endpoints to edit"),
+    ("pips",
+     html.Img(
+         src=(
+             "data:image/svg+xml,%3Csvg xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'"
+             " viewBox%3D'0 0 16 16' width%3D'13' height%3D'13'%3E"
+             "%3Ccircle cx%3D'3.5' cy%3D'3.5' r%3D'3' fill%3D'%238b949e'%2F%3E"
+             "%3Ccircle cx%3D'12.5' cy%3D'12.5' r%3D'3' fill%3D'%238b949e'%2F%3E"
+             "%3Cline x1%3D'6' y1%3D'6' x2%3D'10' y2%3D'10'"
+             " stroke%3D'%238b949e' stroke-width%3D'1.5'%2F%3E%3C%2Fsvg%3E"
+         ),
+         style={"width": "13px", "height": "13px", "verticalAlign": "middle"},
+     ),
+     "Measure — click and drag to measure price range"),
+    ("box",       "▭",   "Rectangle — click and drag to draw"),
+    ("square",    "□",   "Square — click and drag (equal sides)"),
+    ("fib",       "φ",   "Fibonacci retracement — drag from swing high to low"),
+    ("circle",    "○",   "Circle — click center and drag to set radius"),
+    ("long-pos",  "↑ L", "Long Position — click chart to place entry"),
+    ("short-pos", "↓ S", "Short Position — click chart to place entry"),
 ]
 _DRAW_TOOL_MODES = [m for m, _, _ in _DRAW_TOOL_META]
 
@@ -251,6 +266,10 @@ app.layout = html.Div(
                             style={"background": "#21262d", "color": "#38b6ff",
                                    "border": "1px solid #30363d", "borderRadius": "4px",
                                    "padding": "0.35rem 0.75rem", "cursor": "pointer"}),
+                html.Button("Signals", id="sig-quality-btn", n_clicks=0,
+                            style={"background": "#21262d", "color": "#ffd700",
+                                   "border": "1px solid #30363d", "borderRadius": "4px",
+                                   "padding": "0.35rem 0.75rem", "cursor": "pointer"}),
                 html.Button("Trade Log", id="drawer-toggle-btn",
                             style={"background": "#21262d", "color": "#e6edf3",
                                    "border": "1px solid #30363d", "borderRadius": "4px",
@@ -263,25 +282,54 @@ app.layout = html.Div(
         html.Div([
             # Left (25%)
             html.Div([
-                # Adjustable signal threshold slider
+                # ── Adjustable signal threshold — compact control row ─────
                 html.Div([
-                    html.Span("Min Score Threshold:",
-                              style={"color": "#8b949e", "fontSize": "0.7rem"}),
-                    html.Span(id="min-score-label",
-                              style={"color": "#ffd700", "fontSize": "0.7rem",
-                                     "fontWeight": 700, "marginLeft": "6px"}),
-                    dcc.Slider(
+                    html.Div([
+                        html.Span("Min Score",
+                                  style={"color": "#8b949e", "fontSize": "0.7rem",
+                                         "marginRight": "6px"}),
+                        html.Button("▼", id="min-score-dec", n_clicks=0,
+                                    title="Decrease by 1",
+                                    style={"background": "#21262d", "color": "#e6edf3",
+                                           "border": "1px solid #30363d", "borderRadius": "3px",
+                                           "padding": "1px 6px", "cursor": "pointer",
+                                           "fontSize": "0.7rem", "lineHeight": "1.4",
+                                           "marginRight": "2px"}),
+                        dcc.Input(
+                            id="min-score-input",
+                            type="number", min=1, max=100,
+                            value=config.MIN_CONFLUENCE_SCORE,
+                            debounce=True,
+                            style={"width": "46px", "background": "#0d1117",
+                                   "color": "#ffd700", "fontWeight": 700,
+                                   "border": "1px solid #30363d", "borderRadius": "3px",
+                                   "textAlign": "center", "fontSize": "0.8rem",
+                                   "padding": "2px 4px"},
+                        ),
+                        html.Button("▲", id="min-score-inc", n_clicks=0,
+                                    title="Increase by 1",
+                                    style={"background": "#21262d", "color": "#e6edf3",
+                                           "border": "1px solid #30363d", "borderRadius": "3px",
+                                           "padding": "1px 6px", "cursor": "pointer",
+                                           "fontSize": "0.7rem", "lineHeight": "1.4",
+                                           "marginLeft": "2px", "marginRight": "6px"}),
+                        html.Span(id="min-score-label",
+                                  style={"color": "#8b949e", "fontSize": "0.68rem"}),
+                    ], style={"display": "flex", "alignItems": "center",
+                              "gap": "0px"}),
+                    # Hidden slider kept for backward compat with existing callbacks
+                    html.Div(dcc.Slider(
                         id="min-score-slider",
-                        min=40, max=90, step=5,
+                        min=1, max=100, step=1,
                         value=config.MIN_CONFLUENCE_SCORE,
-                        marks={40: "40", 50: "50", 60: "60", 70: "70", 80: "80", 90: "90"},
-                        tooltip={"always_visible": False},
+                        marks={}, tooltip={"always_visible": False},
                         className="apex-slider",
-                    ),
+                    ), style={"display": "none"}),
                 ], style={"background": "#161b22", "borderRadius": "4px",
                            "padding": "0.5rem 0.75rem", "marginBottom": "0.5rem"}),
                 html.Div(id="signal-monitor"),
                 html.Div(id="open-trades"),
+                html.Div(id="news-panel", style={"marginTop": "0.5rem"}),
 
                 # ── Edit Trade panel (hidden until EDIT clicked) ───────────
                 html.Div(
@@ -343,9 +391,10 @@ app.layout = html.Div(
                         value=config.FOREX_PAIRS[0], clearable=False,
                         style={"width": "170px", "fontSize": "0.85rem"},
                     ),
-                    *[html.Button(_TF_LABELS[tf], id=f"tf-btn-{tf}", n_clicks=0,
+                    *[html.Button(_TF_LABELS[tf],
+                                  id={"type": "tf-btn", "index": tf}, n_clicks=0,
                                   style=_tf_btn_style(tf == "H1"))
-                      for tf in ["H1", "H4", "D"]],
+                      for tf in _ALL_TFS],
                     _sep(),
                     html.Button("MA", id="ma-settings-btn", n_clicks=0,
                                 title="Moving Average Settings", style=_tf_btn_style()),
@@ -354,6 +403,11 @@ app.layout = html.Div(
                     html.Button("Style ▾", id="draw-style-panel-btn", n_clicks=0,
                                 title="Drawing style settings",
                                 style=_tf_btn_style()),
+                    html.Button("⚙ Indicators", id="ind-settings-btn", n_clicks=0,
+                                title="Indicator settings (CCI / MACD)",
+                                style={**_tf_btn_style(),
+                                       "color": "#38b6ff",
+                                       "border": "1px solid #38b6ff"}),
                     _sep(),
                     # Drawing tool toggles
                     *[html.Button(lbl,
@@ -379,6 +433,13 @@ app.layout = html.Div(
                     html.Button("🗑", id="draw-clear-btn", n_clicks=0,
                                 title="Clear all drawings",
                                 style={**_tf_btn_style(), "fontSize": "0.85rem"}),
+                    _sep(),
+                    html.Button("Candles", id="chart-type-candle-btn", n_clicks=0,
+                                title="Candlestick chart",
+                                style=_tf_btn_style(True)),
+                    html.Button("HA", id="chart-type-ha-btn", n_clicks=0,
+                                title="Heikin-Ashi chart",
+                                style=_tf_btn_style(False)),
                     html.Div(style={"marginLeft": "auto"}),
                     html.Button("⏻", id="shutdown-toggle-btn", n_clicks=0,
                                 title="Auto-shutdown settings",
@@ -524,100 +585,120 @@ app.layout = html.Div(
                         # TradingView chart
                         html.Div(id="tvlw-chart",
                                  style={"height": "680px", "width": "100%",
-                                        "background": "#0d1117", "borderRadius": "4px"}),
+                                        "background": "#0d1117", "borderRadius": "4px",
+                                        "overflow": "hidden"}),
 
-                        # ── Floating Quick Trade Panel ─────────────────────
+                        # ── Floating Quick Trade Widget (TradingView-style) ──
                         html.Div(
                             id="quick-trade-panel",
                             style={
                                 "position": "absolute",
                                 "top": "8px", "left": "8px",
                                 "zIndex": "50",
-                                "background": "rgba(22,27,34,0.90)",
-                                "backdropFilter": "blur(6px)",
-                                "WebkitBackdropFilter": "blur(6px)",
-                                "border": "1px solid rgba(48,54,61,0.85)",
-                                "borderRadius": "7px",
-                                "padding": "0.45rem 0.6rem",
-                                "minWidth": "200px",
-                                "boxShadow": "0 4px 16px rgba(0,0,0,0.55)",
+                                "background": "rgba(13,17,23,0.82)",
+                                "backdropFilter": "blur(8px)",
+                                "WebkitBackdropFilter": "blur(8px)",
+                                "border": "1px solid rgba(48,54,61,0.6)",
+                                "borderRadius": "6px",
+                                "padding": "6px 8px 8px",
                                 "userSelect": "none",
+                                "boxShadow": "0 4px 20px rgba(0,0,0,0.6)",
+                                "minWidth": "0",
                             },
                             children=[
-                                # Drag handle bar
+                                # Thin drag handle at top
+                                html.Div(
+                                    "⠿",
+                                    **{"className": "apex-drag-handle"},
+                                    style={
+                                        "textAlign": "center", "color": "#444",
+                                        "fontSize": "13px", "lineHeight": "1",
+                                        "cursor": "grab", "marginBottom": "5px",
+                                        "letterSpacing": "2px",
+                                    },
+                                ),
+                                # SELL price | BUY price
                                 html.Div([
-                                    html.Span("⠿", **{"className": "apex-drag-handle"},
-                                              style={"color": "#555", "fontSize": "15px",
-                                                     "cursor": "grab", "lineHeight": "1",
-                                                     "marginRight": "6px"}),
-                                    html.Span("TRADE",
-                                              style={"color": "#555", "fontSize": "0.62rem",
-                                                     "fontWeight": 700,
-                                                     "letterSpacing": "0.12em"}),
-                                ], **{"className": "apex-drag-handle"},
-                                   style={"display": "flex", "alignItems": "center",
-                                          "marginBottom": "0.4rem", "cursor": "grab"}),
-
-                                # BUY | Spread/Lot | SELL | result
-                                html.Div([
-                                    html.Button(
-                                        "▼ SELL", id="quick-sell-btn", n_clicks=0,
-                                        style={"background": "#3d0010", "color": "#ff3366",
-                                               "border": "1px solid #ff3366", "borderRadius": "4px",
-                                               "padding": "0.3rem 0.85rem", "cursor": "pointer",
-                                               "fontSize": "0.82rem", "fontWeight": 700},
-                                    ),
-                                    # Center: spread + lot
+                                    # SELL side
                                     html.Div([
-                                        html.Div([
-                                            html.Span("SPREAD", style={
-                                                "color": "#8b949e", "fontSize": "0.58rem",
-                                                "letterSpacing": "0.08em", "fontWeight": 700,
-                                                "display": "block", "textAlign": "center",
-                                            }),
-                                            html.Span(id="spread-display", children="—", style={
-                                                "color": "#e6edf3",
+                                        html.Div(
+                                            id="quick-bid-price",
+                                            children="—",
+                                            style={
                                                 "fontFamily": "'JetBrains Mono', monospace",
+                                                "fontSize": "0.78rem", "fontWeight": 700,
+                                                "color": "#ff3366", "textAlign": "center",
+                                                "lineHeight": "1.2", "marginBottom": "3px",
+                                            },
+                                        ),
+                                        html.Button(
+                                            "▼ SELL", id="quick-sell-btn", n_clicks=0,
+                                            style={
+                                                "background": "#3d0010", "color": "#ff3366",
+                                                "border": "1px solid #ff3366",
+                                                "borderRadius": "4px",
+                                                "padding": "5px 14px",
+                                                "cursor": "pointer",
                                                 "fontSize": "0.8rem", "fontWeight": 700,
-                                                "display": "block", "textAlign": "center",
-                                            }),
-                                        ]),
-                                        html.Div([
-                                            html.Span("Lot", style={
-                                                "color": "#8b949e", "fontSize": "0.65rem",
-                                                "marginRight": "0.25rem",
-                                            }),
-                                            dcc.Input(
-                                                id="lot-size-input", type="number",
-                                                value=0.01, min=0.001, step=0.001, debounce=False,
-                                                style={
-                                                    "width": "60px", "background": "#21262d",
-                                                    "color": "#e6edf3",
-                                                    "border": "1px solid #30363d",
-                                                    "borderRadius": "3px",
-                                                    "padding": "0.12rem 0.3rem",
-                                                    "fontSize": "0.78rem",
-                                                },
-                                            ),
-                                        ], style={"display": "flex", "alignItems": "center",
-                                                  "justifyContent": "center",
-                                                  "marginTop": "0.2rem"}),
-                                    ], style={"padding": "0 0.6rem", "textAlign": "center"}),
+                                                "width": "100%",
+                                            },
+                                        ),
+                                    ], style={"textAlign": "center"}),
 
-                                    html.Button(
-                                        "▲ BUY", id="quick-buy-btn", n_clicks=0,
-                                        style={"background": "#003d1f", "color": "#00ff88",
-                                               "border": "1px solid #00ff88", "borderRadius": "4px",
-                                               "padding": "0.3rem 0.85rem", "cursor": "pointer",
-                                               "fontSize": "0.82rem", "fontWeight": 700},
+                                    # Tiny spread between buttons
+                                    html.Div(
+                                        id="spread-display",
+                                        children="—",
+                                        style={
+                                            "color": "#555", "fontSize": "0.6rem",
+                                            "textAlign": "center", "padding": "0 5px",
+                                            "alignSelf": "center", "whiteSpace": "nowrap",
+                                        },
                                     ),
-                                ], style={"display": "flex", "alignItems": "center",
-                                          "marginBottom": "0.3rem"}),
+
+                                    # BUY side
+                                    html.Div([
+                                        html.Div(
+                                            id="quick-ask-price",
+                                            children="—",
+                                            style={
+                                                "fontFamily": "'JetBrains Mono', monospace",
+                                                "fontSize": "0.78rem", "fontWeight": 700,
+                                                "color": "#00ff88", "textAlign": "center",
+                                                "lineHeight": "1.2", "marginBottom": "3px",
+                                            },
+                                        ),
+                                        html.Button(
+                                            "▲ BUY", id="quick-buy-btn", n_clicks=0,
+                                            style={
+                                                "background": "#003d1f", "color": "#00ff88",
+                                                "border": "1px solid #00ff88",
+                                                "borderRadius": "4px",
+                                                "padding": "5px 14px",
+                                                "cursor": "pointer",
+                                                "fontSize": "0.8rem", "fontWeight": 700,
+                                                "width": "100%",
+                                            },
+                                        ),
+                                    ], style={"textAlign": "center"}),
+
+                                ], style={
+                                    "display": "flex", "alignItems": "flex-end",
+                                    "gap": "4px",
+                                }),
 
                                 # Trade result message
                                 html.Div(id="quick-trade-result",
-                                         style={"color": "#e6edf3", "fontSize": "0.72rem",
-                                                "marginTop": "0.15rem", "lineHeight": "1.3"}),
+                                         style={"color": "#e6edf3", "fontSize": "0.7rem",
+                                                "marginTop": "4px", "lineHeight": "1.3",
+                                                "textAlign": "center"}),
+
+                                # Hidden lot-size-input kept for backward compat with callbacks
+                                dcc.Input(
+                                    id="lot-size-input", type="number",
+                                    value=0.01, min=0.001, step=0.001,
+                                    style={"display": "none"},
+                                ),
 
                                 # Order confirmation form (hidden until BUY/SELL clicked)
                                 html.Div(
@@ -713,27 +794,34 @@ app.layout = html.Div(
         html.Div(id="account-stats"),
         html.Div(id="trade-log-drawer",
                  children=trade_log_drawer([], [], {}, visible=False)),
+        html.Div(id="drawer-backdrop", n_clicks=0,
+                 style={"display": "none", "position": "fixed", "top": 0, "left": 0,
+                        "width": "100%", "height": "100%",
+                        "background": "rgba(0,0,0,0.35)", "zIndex": 999}),
         html.Div(id="alert-overlay-container", children=[
             html.Button(id="alert-cancel-btn",  style={"display": "none"}),
             html.Button(id="alert-confirm-btn", style={"display": "none"}),
         ]),
 
         # Intervals
-        dcc.Interval(id="interval-1s",  interval=1_000,  n_intervals=0),
-        dcc.Interval(id="interval-5s",  interval=5_000,  n_intervals=0),
-        dcc.Interval(id="interval-60s", interval=60_000, n_intervals=0),
+        dcc.Interval(id="interval-1s",   interval=1_000,   n_intervals=0),
+        dcc.Interval(id="interval-5s",   interval=5_000,   n_intervals=0),
+        dcc.Interval(id="interval-60s",  interval=60_000,  n_intervals=0),
+        dcc.Interval(id="interval-5min", interval=300_000, n_intervals=0),
 
         # Stores
         dcc.Store(id="drawer-visible",    data=False),
         dcc.Store(id="selected-tf",       data="H1"),
+        dcc.Store(id="chart-type-store",  data="candlestick"),
         dcc.Store(id="alert-action",      data=None),
         dcc.Store(id="chart-data-store",  data=None),
         dcc.Store(id="draw-mode-store",   data=None),
         dcc.Store(id="draw-color-store",  data=_DRAW_DEFAULT_COLOR),
         dcc.Store(id="draw-width-store",  data=1),
         dcc.Store(id="draw-style-store",  data="solid"),
-        dcc.Store(id="open-trades-store", data=[]),
-        dcc.Store(id="edit-trade-store",     data=None),
+        dcc.Store(id="open-trades-store",     data=[]),
+        dcc.Store(id="edit-trade-store",      data=None),
+        dcc.Store(id="trade-modify-store",    data=None),
         dcc.Store(id="backtest-result-store", data=None),
 
         # Backtest panel (hidden overlay)
@@ -754,7 +842,15 @@ app.layout = html.Div(
                                        "fontSize": "1.3rem", "marginLeft": "auto",
                                        "padding": "0"}),
                 ], style={"display": "flex", "alignItems": "center",
-                           "marginBottom": "1rem"}),
+                           "marginBottom": "0.75rem"}),
+                # Tab row
+                html.Div([
+                    html.Button("Backtest", id="bt-tab-bt",  n_clicks=0,
+                                style={**_tf_btn_style(True), "fontSize": "0.8rem"}),
+                    html.Button("Walk-Forward", id="bt-tab-wf", n_clicks=0,
+                                style={**_tf_btn_style(False), "fontSize": "0.8rem"}),
+                ], style={"display": "flex", "gap": "0.4rem", "marginBottom": "1rem"}),
+                dcc.Store(id="bt-mode-store", data="backtest"),
                 # Config row
                 html.Div([
                     html.Span("Pair:", style={"color": "#8b949e", "fontSize": "0.8rem",
@@ -778,13 +874,235 @@ app.layout = html.Div(
                                        "fontSize": "0.82rem", "fontWeight": 700,
                                        "marginLeft": "auto"}),
                 ], style={"display": "flex", "gap": "0.4rem", "alignItems": "center",
-                           "marginBottom": "1rem", "flexWrap": "wrap"}),
+                           "marginBottom": "0.5rem", "flexWrap": "wrap"}),
+                # Walk-forward extra config (shown only in WF mode via JS/display)
+                html.Div(id="wf-config-row", style={"display": "none"}, children=[
+                    html.Span("Train:", style={"color": "#8b949e", "fontSize": "0.8rem",
+                                               "alignSelf": "center"}),
+                    dcc.Input(id="wf-train-input", type="number", value=1500,
+                              min=500, max=4000, step=250, debounce=True,
+                              style={"width": "65px", "background": "#21262d",
+                                     "color": "#e6edf3", "border": "1px solid #30363d",
+                                     "borderRadius": "3px", "padding": "0.2rem 0.4rem",
+                                     "fontSize": "0.8rem"}),
+                    html.Span("Test:", style={"color": "#8b949e", "fontSize": "0.8rem",
+                                              "alignSelf": "center", "marginLeft": "0.3rem"}),
+                    dcc.Input(id="wf-test-input", type="number", value=750,
+                              min=250, max=2000, step=250, debounce=True,
+                              style={"width": "65px", "background": "#21262d",
+                                     "color": "#e6edf3", "border": "1px solid #30363d",
+                                     "borderRadius": "3px", "padding": "0.2rem 0.4rem",
+                                     "fontSize": "0.8rem"}),
+                    html.Span("Step:", style={"color": "#8b949e", "fontSize": "0.8rem",
+                                              "alignSelf": "center", "marginLeft": "0.3rem"}),
+                    dcc.Input(id="wf-step-input", type="number", value=500,
+                              min=250, max=1000, step=250, debounce=True,
+                              style={"width": "65px", "background": "#21262d",
+                                     "color": "#e6edf3", "border": "1px solid #30363d",
+                                     "borderRadius": "3px", "padding": "0.2rem 0.4rem",
+                                     "fontSize": "0.8rem"}),
+                ], ),
                 html.Div(id="backtest-status",
                          style={"color": "#8b949e", "fontSize": "0.8rem",
-                                "marginBottom": "0.5rem"}),
-                html.Div(id="backtest-results"),
+                                "marginBottom": "0.5rem", "marginTop": "0.5rem"}),
+                dcc.Loading(
+                    id="backtest-loading",
+                    type="circle",
+                    color="#38b6ff",
+                    children=html.Div(id="backtest-results"),
+                ),
             ],
         ),
+        html.Div(id="backtest-backdrop", n_clicks=0,
+                 style={"display": "none", "position": "fixed", "top": 0, "left": 0,
+                        "width": "100%", "height": "100%",
+                        "background": "rgba(0,0,0,0.45)", "zIndex": 1999}),
+
+        # Signal Quality panel (hidden overlay)
+        html.Div(
+            id="sig-quality-panel",
+            style={"display": "none", "position": "fixed", "top": "60px",
+                   "left": "50%", "transform": "translateX(-50%)",
+                   "width": "700px", "maxHeight": "82vh", "overflowY": "auto",
+                   "background": "#161b22", "border": "1px solid #30363d",
+                   "borderRadius": "8px", "padding": "1.5rem", "zIndex": 2000,
+                   "boxShadow": "0 8px 32px rgba(0,0,0,0.6)"},
+            children=[
+                html.Div([
+                    html.H4("Signal Quality", style={"color": "#ffd700", "margin": 0}),
+                    html.Button("×", id="sig-quality-close-btn", n_clicks=0,
+                                style={"background": "transparent", "border": "none",
+                                       "color": "#8b949e", "cursor": "pointer",
+                                       "fontSize": "1.3rem", "marginLeft": "auto",
+                                       "padding": "0"}),
+                ], style={"display": "flex", "alignItems": "center",
+                           "marginBottom": "1rem"}),
+                dcc.Loading(type="circle", color="#ffd700",
+                            children=html.Div(id="sig-quality-content")),
+            ],
+        ),
+        html.Div(id="sig-quality-backdrop", n_clicks=0,
+                 style={"display": "none", "position": "fixed", "top": 0, "left": 0,
+                        "width": "100%", "height": "100%",
+                        "background": "rgba(0,0,0,0.45)", "zIndex": 1999}),
+
+        # ── Close Trade Confirmation Modal ────────────────────────────────────
+        html.Div(
+            id="close-trade-modal",
+            style={
+                "display": "none",
+                "position": "fixed",
+                "top": "50%", "left": "50%",
+                "transform": "translate(-50%, -50%)",
+                "background": "#161b22",
+                "border": "1px solid #ff3366",
+                "borderRadius": "8px",
+                "padding": "1.25rem 1.5rem",
+                "zIndex": 3000,
+                "minWidth": "320px",
+                "boxShadow": "0 8px 32px rgba(0,0,0,0.7)",
+            },
+            children=[
+                html.Div([
+                    html.Span("Close Trade", style={"color": "#ff3366", "fontWeight": 700,
+                                                     "fontSize": "1rem"}),
+                    html.Button("×", id="close-modal-cancel-btn", n_clicks=0,
+                                style={"background": "transparent", "border": "none",
+                                       "color": "#8b949e", "cursor": "pointer",
+                                       "fontSize": "1.3rem", "marginLeft": "auto",
+                                       "padding": "0"}),
+                ], style={"display": "flex", "alignItems": "center",
+                           "marginBottom": "0.85rem"}),
+                html.Div(id="close-modal-details",
+                         style={"marginBottom": "1rem", "fontSize": "0.82rem",
+                                "lineHeight": "1.6"}),
+                html.Div([
+                    html.Button("✓ Confirm Close", id="close-modal-confirm-btn", n_clicks=0,
+                                style={"background": "#3d0010", "color": "#ff3366",
+                                       "border": "1px solid #ff3366", "borderRadius": "4px",
+                                       "padding": "0.4rem 1rem", "cursor": "pointer",
+                                       "fontSize": "0.85rem", "fontWeight": 700,
+                                       "marginRight": "0.5rem"}),
+                    html.Button("Cancel", id="close-modal-cancel-btn-2", n_clicks=0,
+                                style={"background": "#21262d", "color": "#e6edf3",
+                                       "border": "1px solid #30363d", "borderRadius": "4px",
+                                       "padding": "0.4rem 1rem", "cursor": "pointer",
+                                       "fontSize": "0.85rem"}),
+                ], style={"display": "flex", "alignItems": "center"}),
+                # Semi-transparent backdrop
+            ],
+        ),
+        # Backdrop for close modal
+        html.Div(
+            id="close-modal-backdrop",
+            n_clicks=0,
+            style={"display": "none", "position": "fixed", "top": 0, "left": 0,
+                   "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.5)",
+                   "zIndex": 2999},
+        ),
+        dcc.Store(id="close-trade-store", data=None),
+
+        # ── Edit Trade Floating Modal ─────────────────────────────────────────
+        html.Div(
+            id="edit-trade-modal",
+            style={
+                "display": "none",
+                "position": "fixed",
+                "top": "50%", "left": "50%",
+                "transform": "translate(-50%, -50%)",
+                "background": "#161b22",
+                "border": "1px solid #ffd700",
+                "borderRadius": "8px",
+                "padding": "1.25rem 1.5rem",
+                "zIndex": 3000,
+                "minWidth": "340px",
+                "boxShadow": "0 8px 32px rgba(0,0,0,0.7)",
+            },
+            children=[
+                html.Div([
+                    html.Span(id="edit-modal-title",
+                              style={"color": "#ffd700", "fontWeight": 700,
+                                     "fontSize": "0.95rem"}),
+                    html.Button("×", id="edit-modal-cancel-btn", n_clicks=0,
+                                style={"background": "transparent", "border": "none",
+                                       "color": "#8b949e", "cursor": "pointer",
+                                       "fontSize": "1.3rem", "marginLeft": "auto",
+                                       "padding": "0"}),
+                ], style={"display": "flex", "alignItems": "center",
+                           "marginBottom": "0.85rem"}),
+                html.Div([
+                    _order_field("Stop Loss", "edit-modal-sl-input",   "#ff3366"),
+                    _order_field("TP 1",      "edit-modal-tp1-input",  "#00ff88"),
+                    _order_field("TP 2",      "edit-modal-tp2-input",  "#00ff88"),
+                    _order_field("TP 3",      "edit-modal-tp3-input",  "#00ff88"),
+                ], style={"display": "grid", "gridTemplateColumns": "repeat(2, 1fr)",
+                           "gap": "0.4rem", "marginBottom": "0.6rem"}),
+                html.Button("↑ Move SL to Breakeven",
+                            id="edit-modal-breakeven-btn", n_clicks=0,
+                            style={"width": "100%", "background": "#21262d",
+                                   "color": "#ffd700", "border": "1px solid #ffd700",
+                                   "borderRadius": "3px", "padding": "0.3rem",
+                                   "cursor": "pointer", "fontSize": "0.78rem",
+                                   "marginBottom": "0.4rem"}),
+                html.Button("✓ Update Trade",
+                            id="edit-modal-confirm-btn", n_clicks=0,
+                            style={"width": "100%", "background": "#003d1f",
+                                   "color": "#00ff88", "border": "1px solid #00ff88",
+                                   "borderRadius": "3px", "padding": "0.3rem",
+                                   "cursor": "pointer", "fontSize": "0.82rem",
+                                   "fontWeight": 700}),
+                html.Div(id="edit-modal-result",
+                         style={"color": "#8b949e", "fontSize": "0.75rem",
+                                "marginTop": "0.3rem"}),
+            ],
+        ),
+        html.Div(
+            id="edit-modal-backdrop",
+            n_clicks=0,
+            style={"display": "none", "position": "fixed", "top": 0, "left": 0,
+                   "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.4)",
+                   "zIndex": 2999},
+        ),
+
+        # ── News Event Detail Modal ───────────────────────────────────────────
+        html.Div(
+            id="news-event-modal",
+            style={
+                "display": "none", "position": "fixed",
+                "top": "50%", "left": "50%",
+                "transform": "translate(-50%, -50%)",
+                "background": "#161b22", "border": "1px solid #30363d",
+                "borderRadius": "8px", "padding": "1.25rem 1.5rem",
+                "zIndex": 3001, "minWidth": "420px", "maxWidth": "540px",
+                "boxShadow": "0 8px 32px rgba(0,0,0,0.75)",
+                "fontFamily": "'IBM Plex Sans', sans-serif",
+            },
+            children=[
+                html.Div([
+                    html.Span(id="news-modal-title",
+                              style={"color": "#e6edf3", "fontWeight": 700,
+                                     "fontSize": "0.92rem", "flex": 1}),
+                    html.Button("×", id="news-modal-close-btn", n_clicks=0,
+                                style={"background": "transparent", "border": "none",
+                                       "color": "#8b949e", "cursor": "pointer",
+                                       "fontSize": "1.4rem", "padding": "0",
+                                       "lineHeight": 1}),
+                ], style={"display": "flex", "alignItems": "center",
+                           "marginBottom": "0.25rem"}),
+                html.Span(id="news-modal-time",
+                          style={"color": "#8b949e", "fontSize": "0.73rem",
+                                 "display": "block", "marginBottom": "1rem"}),
+                html.Div(id="news-modal-content"),
+            ],
+        ),
+        html.Div(
+            id="news-event-modal-backdrop",
+            n_clicks=0,
+            style={"display": "none", "position": "fixed", "top": 0, "left": 0,
+                   "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.5)",
+                   "zIndex": 3000},
+        ),
+
         dcc.Store(id="shutdown-config",
                   data={"enabled": False, "time": "16:00", "warn_minutes": 5}),
         # EMA settings: current active settings for the visible chart
@@ -793,9 +1111,15 @@ app.layout = html.Div(
         dcc.Store(id="ema-per-pair-store", storage_type="local", data={}),
         # Order form: holds {direction, pair} while confirmation form is open
         dcc.Store(id="order-form-store", data=None),
+        # ── Indicator settings ─────────────────────────────────────────────
+        # Computational params only (CCI length/source, MACD fast/slow/signal)
+        # per pair key — updating this triggers chart rebuild
+        dcc.Store(id="ind-comp-store", data={}),
+        dcc.Store(id="news-events-store", data=[]),
 
         # Dummy targets for clientside callbacks
-        html.Div(id="trades-chart-dummy", style={"display": "none"}),
+        html.Div(id="trades-chart-dummy",  style={"display": "none"}),
+        html.Div(id="trade-modify-dummy", style={"display": "none"}),
         html.Div(id="chart-dummy",        style={"display": "none"}),
         html.Div(id="draw-dummy",        style={"display": "none"}),
         html.Div(id="draw-color-dummy",  style={"display": "none"}),
@@ -803,6 +1127,7 @@ app.layout = html.Div(
         html.Div(id="draw-style-dummy",  style={"display": "none"}),
         html.Div(id="draw-lock-dummy",   style={"display": "none"}),
         html.Div(id="draw-dup-dummy",    style={"display": "none"}),
+        html.Div(id="ind-panel-dummy",   style={"display": "none"}),
     ],
 )
 
@@ -811,7 +1136,7 @@ app.layout = html.Div(
 # Callbacks
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_CANDLE_COUNT = {"H1": 4500, "H4": 1500, "D": 500}
+_CANDLE_COUNT = {"M5": 500, "M15": 500, "M30": 500, "H1": 500, "H4": 500, "D": 365, "W": 104}
 
 
 # ── Chart data → store ────────────────────────────────────────────────────────
@@ -822,14 +1147,20 @@ _CANDLE_COUNT = {"H1": 4500, "H4": 1500, "D": 500}
     Input("pair-select",         "value"),
     Input("selected-tf",         "data"),
     Input("ema-settings-store",  "data"),
+    Input("ind-comp-store",      "data"),   # fires when JS changes CCI/MACD params
+    Input("chart-type-store",    "data"),
     prevent_initial_call=False,
 )
-def update_chart(n_intervals, pair, tf, ema_settings):
+def update_chart(n_intervals, pair, tf, ema_settings, ind_comp, chart_type):
     if not pair or not tf:
         return {"candlestick": [], "emas": [], "cci": [], "macd": [],
                 "pair": "", "tf": ""}
 
     state.update(chart_pair=pair, chart_tf=tf)
+    # Candle granularity in seconds — used to floor trade timestamps so markers
+    # land exactly on the candle that contains the trade event.
+    _tf_secs = {"M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D": 86400, "W": 604800}
+    _cand_secs = _tf_secs.get(tf, 3600)
 
     ctx         = callback_context
     by_interval = bool(
@@ -841,15 +1172,28 @@ def update_chart(n_intervals, pair, tf, ema_settings):
     connector = (state.get_key("forex_connector") if is_forex
                  else state.get_key("crypto_connector"))
 
-    # Granularity: OANDA uses "H1"/"H4"/"D"; Alpaca uses "1Hour"/"4Hour"/"1Day"
+    # Granularity: OANDA uses "M5"/"M15"/"M30"/"H1"/"H4"/"D"/"W"; Alpaca differs
     if is_forex:
-        gran = tf                                     # "H1", "H4", "D"
+        gran = tf                                     # OANDA accepts TF keys directly
     else:
-        gran = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}.get(tf, "1Hour")
+        gran = {"M5": "5Min", "M15": "15Min", "M30": "30Min",
+                "H1": "1Hour", "H4": "4Hour", "D": "1Day", "W": "1Week"}.get(tf, "1Hour")
 
     df = state.get_candles(pair, tf)
 
-    if df is None:
+    # Force a fresh fetch when pair/TF was just selected (not a background interval tick).
+    # This ensures stale cached data from previous sessions is replaced immediately.
+    by_pair_change = bool(
+        ctx.triggered and
+        ctx.triggered[0]["prop_id"].split(".")[0] in ("pair-select", "selected-tf")
+    )
+
+    if by_pair_change:
+        # Evict stale cache entry so the fetch below always runs
+        state.cache_candles(pair, tf, None)
+        df = None
+
+    if df is None or by_pair_change:
         if connector is not None:
             try:
                 df = connector.get_candles(pair, gran, _CANDLE_COUNT.get(tf, 500))
@@ -876,38 +1220,96 @@ def update_chart(n_intervals, pair, tf, ema_settings):
     else:
         ema_periods, ema_colors, ema_widths = (), [], []
 
-    result = build_chart_data(df, pair, tf=tf,
-                              ema_periods=ema_periods,
-                              ema_colors=ema_colors,
-                              ema_widths=ema_widths)
+    # Extract per-chart indicator params from the comp store (keyed by pair)
+    _ind = (ind_comp or {}).get(pair, {})
+    result = build_chart_data(
+        df, pair, tf=tf,
+        ema_periods=ema_periods,
+        ema_colors=ema_colors,
+        ema_widths=ema_widths,
+        cci_length   = _ind.get("cci_length"),
+        cci_src      = _ind.get("cci_src"),
+        macd_fast    = _ind.get("macd_fast"),
+        macd_slow    = _ind.get("macd_slow"),
+        macd_signal_ = _ind.get("macd_signal"),
+        show_rsi     = bool(_ind.get("show_rsi",    False)),
+        rsi_period   = int(_ind.get("rsi_period",   14)),
+        show_bb      = bool(_ind.get("show_bb",     False)),
+        bb_period    = int(_ind.get("bb_period",    20)),
+        bb_mult      = float(_ind.get("bb_mult",    2.0)),
+        show_volume  = bool(_ind.get("show_volume", False)),
+        show_stoch   = bool(_ind.get("show_stoch",  False)),
+        stoch_k      = int(_ind.get("stoch_k",      14)),
+        stoch_d      = int(_ind.get("stoch_d",      3)),
+        stoch_smooth = int(_ind.get("stoch_smooth", 3)),
+        chart_type   = chart_type or "candlestick",
+    )
     # Expose account balance so the position tool can compute position size in JS
     acct = state.get_key("account", {})
     result["accountBalance"] = acct.get("balance") or acct.get("cash", 500.0)
 
-    # Open trades for this pair → chart draws Entry/SL/TP price lines
+    # Open trades for this pair → chart draws Entry/SL/TP1/TP2/TP3 price lines
     all_trades = state.get_key("open_trades", []) or []
     result["open_trades"] = [
         {
+            "id":        t.get("id", ""),
             "direction": t.get("direction", "long"),
             "entry":     float(t.get("entry", 0) or 0),
             "sl":        float(t.get("sl", 0) or 0),
-            "tp":        float(t.get("tp1", 0) or t.get("tp", 0) or 0),
+            "tp1":       float(t.get("tp1", 0) or 0),
+            "tp2":       float(t.get("tp2", 0) or 0),
+            "tp3":       float(t.get("tp3", 0) or 0),
+            "open_time": (int(t["open_time"].timestamp()) // _cand_secs * _cand_secs)
+                         if t.get("open_time") and hasattr(t["open_time"], "timestamp") else 0,
         }
         for t in all_trades
         if t.get("pair") == pair and t.get("entry")
     ]
 
-    # Signal levels overlay — entry/SL/TP from the last qualifying signal for this pair
+    # Closed trades for this pair → chart draws historical entry/exit arrows
+    all_closed = state.get_key("closed_trades", []) or []
+    result["closed_trades"] = [
+        {
+            "direction":   t.get("direction", "long"),
+            "entry":       float(t.get("entry", 0) or 0),
+            "exit_price":  float(t.get("exit_price", 0) or 0),
+            "realised_pnl": float(t.get("realised_pnl", 0) or 0),
+            "open_time":  (int(t["open_time"].timestamp())  // _cand_secs * _cand_secs)
+                          if t.get("open_time")  and hasattr(t["open_time"],  "timestamp") else 0,
+            "close_time": (int(t["close_time"].timestamp()) // _cand_secs * _cand_secs)
+                          if t.get("close_time") and hasattr(t["close_time"], "timestamp") else 0,
+            "close_reason": t.get("close_reason", ""),
+        }
+        for t in all_closed
+        if t.get("pair") == pair and t.get("entry") and t.get("exit_price")
+    ][-50:]  # last 50 closed trades max
+
+    # Signal levels overlay — entry/SL/TP from the last qualifying signal for this pair.
+    # Suppressed if the signal was stored before the last closed trade on this pair
+    # (prevents stale TP/SL lines from persisting after a trade exits).
     sig = (state.get_key("signal_details") or {}).get(pair)
     if sig and sig.get("score", 0) >= 50:
-        result["signal_levels"] = {
-            "entry":     sig.get("entry"),
-            "sl":        sig.get("stop_loss"),
-            "tp1":       (sig.get("tp_levels") or {}).get("tp1"),
-            "tp2":       (sig.get("tp_levels") or {}).get("tp2"),
-            "tp3":       (sig.get("tp_levels") or {}).get("tp3"),
-            "direction": sig.get("direction"),
-        }
+        sig_time  = sig.get("_stored_at")   # datetime set by update_signal_detail()
+        last_close_time = None
+        for t in reversed(all_closed):
+            if t.get("pair") == pair and t.get("close_time"):
+                last_close_time = t["close_time"]
+                break
+        show_sig = True
+        if sig_time and last_close_time:
+            from datetime import timezone as _tz
+            st = sig_time   if sig_time.tzinfo   else sig_time.replace(tzinfo=_tz.utc)
+            lt = last_close_time if last_close_time.tzinfo else last_close_time.replace(tzinfo=_tz.utc)
+            show_sig = st > lt
+        if show_sig:
+            result["signal_levels"] = {
+                "entry":     sig.get("entry"),
+                "sl":        sig.get("stop_loss"),
+                "tp1":       (sig.get("tp_levels") or {}).get("tp1"),
+                "tp2":       (sig.get("tp_levels") or {}).get("tp2"),
+                "tp3":       (sig.get("tp_levels") or {}).get("tp3"),
+                "direction": sig.get("direction"),
+            }
 
     return result
 
@@ -942,28 +1344,39 @@ app.clientside_callback(
 
 @app.callback(
     Output("selected-tf", "data"),
-    Input("tf-btn-H1", "n_clicks"),
-    Input("tf-btn-H4", "n_clicks"),
-    Input("tf-btn-D",  "n_clicks"),
+    Input({"type": "tf-btn", "index": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
-def select_tf(h1, h4, d):
-    ctx = callback_context
+def select_tf(clicks):
     if not ctx.triggered:
         return no_update
-    return ctx.triggered[0]["prop_id"].split(".")[0].replace("tf-btn-", "")
+    prop = ctx.triggered[0]["prop_id"]
+    return json.loads(prop.split(".")[0])["index"]
 
 
 @app.callback(
-    Output("tf-btn-H1", "style"),
-    Output("tf-btn-H4", "style"),
-    Output("tf-btn-D",  "style"),
+    Output({"type": "tf-btn", "index": ALL}, "style"),
     Input("selected-tf", "data"),
 )
 def highlight_active_tf(tf):
-    return (_tf_btn_style(tf == "H1"),
-            _tf_btn_style(tf == "H4"),
-            _tf_btn_style(tf == "D"))
+    return [_tf_btn_style(t == (tf or "H1")) for t in _ALL_TFS]
+
+
+# ── Chart type (Candles / Heikin-Ashi) ───────────────────────────────────────
+
+@app.callback(
+    Output("chart-type-store",      "data"),
+    Output("chart-type-candle-btn", "style"),
+    Output("chart-type-ha-btn",     "style"),
+    Input("chart-type-candle-btn",  "n_clicks"),
+    Input("chart-type-ha-btn",      "n_clicks"),
+    prevent_initial_call=True,
+)
+def select_chart_type(n_candle, n_ha):
+    triggered = ctx.triggered_id if ctx.triggered else "chart-type-candle-btn"
+    is_ha = triggered == "chart-type-ha-btn"
+    ct = "heikin_ashi" if is_ha else "candlestick"
+    return ct, _tf_btn_style(not is_ha), _tf_btn_style(is_ha)
 
 
 # ── MA settings panel toggle ──────────────────────────────────────────────────
@@ -1019,7 +1432,7 @@ def update_and_save_ema_settings(periods, _cc, _wc, _vc,
 
     # ── Pair or TF changed → load saved settings ──────────────────────────
     if triggered in ("pair-select", "selected-tf"):
-        key      = f"{pair}|{tf}" if pair and tf else None
+        key      = pair if pair else None
         settings = per_pair.get(key, _ema_defaults()) if key else _ema_defaults()
         return settings, no_update   # don't overwrite per_pair on load
 
@@ -1060,8 +1473,8 @@ def update_and_save_ema_settings(periods, _cc, _wc, _vc,
         if i < len(settings):
             settings[i]["visible"] = not settings[i].get("visible", True)
 
-    # Persist under current pair+TF key
-    key = f"{pair}|{tf}" if pair and tf else None
+    # Persist under current pair key (shared across all TFs for this pair)
+    key = pair if pair else None
     if key:
         per_pair[key] = settings
 
@@ -1282,7 +1695,22 @@ app.clientside_callback(
 # ── Lock selected drawing ─────────────────────────────────────────────────────
 
 app.clientside_callback(
-    "function(n){ if(n && window._apexLockSelected) window._apexLockSelected(); return ''; }",
+    """function(n){
+        if (!n) return '';
+        if (window._apexLockSelected) {
+            var ok = window._apexLockSelected();
+            if (!ok) {
+                var btn = document.getElementById('draw-lock-btn');
+                if (btn) {
+                    var orig = btn.textContent;
+                    btn.textContent = 'Select first';
+                    btn.style.color = '#ff3366';
+                    setTimeout(function(){ btn.textContent = orig; btn.style.color = ''; }, 1800);
+                }
+            }
+        }
+        return '';
+    }""",
     Output("draw-lock-dummy", "children"),
     Input("draw-lock-btn", "n_clicks"),
     prevent_initial_call=True,
@@ -1295,6 +1723,30 @@ app.clientside_callback(
     "function(n){ if(n && window._apexDuplicateSelected) window._apexDuplicateSelected(); return ''; }",
     Output("draw-dup-dummy", "children"),
     Input("draw-dup-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
+# ── Indicator settings panel toggle ──────────────────────────────────────────
+
+app.clientside_callback(
+    """
+    function(n) {
+        if (!n) return '';
+        if (window._apexShowIndPanel) {
+            // Toggle: hide if already visible, show if hidden
+            var el = document.getElementById('apex-ind-panel');
+            if (el && el.style.display !== 'none') {
+                if (window._apexHideIndPanel) window._apexHideIndPanel();
+            } else {
+                window._apexShowIndPanel();
+            }
+        }
+        return '';
+    }
+    """,
+    Output("ind-panel-dummy", "children"),
+    Input("ind-settings-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 
@@ -1394,14 +1846,16 @@ def _do_shutdown():
 # ── Spread display ────────────────────────────────────────────────────────────
 
 @app.callback(
-    Output("spread-display",  "children"),
-    Output("quick-buy-btn",   "children"),
-    Output("quick-sell-btn",  "children"),
+    Output("spread-display",   "children"),
+    Output("quick-bid-price",  "children"),
+    Output("quick-ask-price",  "children"),
+    Output("quick-buy-btn",    "children"),
+    Output("quick-sell-btn",   "children"),
     Input("interval-5s",  "n_intervals"),
     Input("pair-select",  "value"),
 )
 def update_spread(_, pair):
-    blank = "—", "▲ BUY", "▼ SELL"
+    blank = "—", "—", "—", "▲ BUY", "▼ SELL"
     if not pair:
         return blank
     is_forex  = "_" in pair
@@ -1415,11 +1869,22 @@ def update_spread(_, pair):
         sp  = q.get("spread_pips", 0)
         if not ask:
             return blank
+
+        # ── Real-time SL/TP check for paper trades ────────────────────────────
+        if state.get_key("mode") == "paper":
+            pt = state.get_key("paper_trader")
+            if pt and bid and ask:
+                try:
+                    closed = pt.tick_check(pair, float(bid), float(ask))
+                    if closed:
+                        state.update(open_trades=list(pt.open_trades),
+                                     closed_trades=list(pt.closed_trades))
+                except Exception:
+                    pass
+
         dec        = 3 if "JPY" in pair else 5
-        spread_txt = f"{sp} pips" if is_forex else f"${sp}"
-        buy_lbl    = f"▲ BUY  {ask:.{dec}f}"
-        sell_lbl   = f"▼ SELL  {bid:.{dec}f}"
-        return spread_txt, buy_lbl, sell_lbl
+        spread_txt = f"{sp:.1f}p" if is_forex else f"${sp:.4f}"
+        return spread_txt, f"{bid:.{dec}f}", f"{ask:.{dec}f}", "▲ BUY", "▼ SELL"
     except Exception:
         return blank
 
@@ -1428,7 +1893,7 @@ def update_spread(_, pair):
 # BUY or SELL clicked → store direction+pair; Cancel/Confirm → clear store.
 
 @app.callback(
-    Output("order-form-store", "data"),
+    Output("order-form-store", "data", allow_duplicate=True),
     Input("quick-buy-btn",     "n_clicks"),
     Input("quick-sell-btn",    "n_clicks"),
     Input("order-cancel-btn",  "n_clicks"),
@@ -1626,6 +2091,335 @@ def confirm_order(n, form_data, entry, sl, tp1, tp2, tp3, lot):
     return msg, {"color": clr, "fontSize": "0.78rem"}
 
 
+# ── Close trade: CLOSE button → show modal ───────────────────────────────────
+
+@app.callback(
+    Output("close-trade-store",    "data"),
+    Output("close-trade-modal",    "style"),
+    Output("close-modal-backdrop", "style"),
+    Output("close-modal-details",  "children"),
+    Input({"type": "close-trade-btn", "index": ALL}, "n_clicks"),
+    Input("close-modal-cancel-btn",   "n_clicks"),
+    Input("close-modal-cancel-btn-2", "n_clicks"),
+    Input("close-modal-confirm-btn",  "n_clicks"),
+    Input("close-modal-backdrop",     "n_clicks"),
+    State("pair-select", "value"),
+    prevent_initial_call=True,
+)
+def toggle_close_modal(close_clicks, cancel1, cancel2, confirm, backdrop_n, pair):
+    _modal_show = {
+        "display": "block", "position": "fixed",
+        "top": "50%", "left": "50%",
+        "transform": "translate(-50%, -50%)",
+        "background": "#161b22", "border": "1px solid #ff3366",
+        "borderRadius": "8px", "padding": "1.25rem 1.5rem",
+        "zIndex": 3000, "minWidth": "320px",
+        "boxShadow": "0 8px 32px rgba(0,0,0,0.7)",
+    }
+    _modal_hide   = {**_modal_show, "display": "none"}
+    _back_show    = {"display": "block", "position": "fixed", "top": 0, "left": 0,
+                     "width": "100%", "height": "100%",
+                     "background": "rgba(0,0,0,0.5)", "zIndex": 2999}
+    _back_hide    = {**_back_show, "display": "none"}
+
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update, no_update, no_update, no_update
+
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    # Cancel, confirm, or backdrop click → close modal
+    if triggered in ("close-modal-cancel-btn", "close-modal-cancel-btn-2",
+                     "close-modal-confirm-btn", "close-modal-backdrop"):
+        return None, _modal_hide, _back_hide, no_update
+
+    # CLOSE button on a trade card clicked
+    try:
+        tid_data = json.loads(triggered)
+    except (json.JSONDecodeError, AttributeError):
+        return no_update, no_update, no_update, no_update
+
+    if tid_data.get("type") != "close-trade-btn":
+        return no_update, no_update, no_update, no_update
+
+    # Find the trade that was clicked
+    n_vals = ctx.triggered[0].get("value", 0)
+    if not n_vals:
+        return no_update, no_update, no_update, no_update
+
+    tid    = tid_data.get("index", "")
+    trades = state.get_key("open_trades") or []
+    t      = next((x for x in trades if x.get("id") == tid), None)
+    if not t:
+        return no_update, no_update, no_update, no_update
+
+    pair_v    = t.get("pair", "")
+    direction = t.get("direction", "")
+    entry     = t.get("entry", 0)
+    dec       = 3 if "JPY" in pair_v else 5
+    dir_col   = "#00ff88" if direction == "long" else "#ff3366"
+
+    # Live price for current P&L display
+    is_forex  = "_" in pair_v
+    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
+    cur_price = t.get("last_price", entry)
+    if connector:
+        try:
+            q = connector.get_current_quote(pair_v)
+            cur_price = q.get("mid") or q.get("ask") or cur_price
+        except Exception:
+            pass
+
+    diff     = (cur_price - entry) if direction == "long" else (entry - cur_price)
+    units    = t.get("size", 0) * t.get("remaining", 1.0)
+    floating = round(diff * units, 4)
+    realised = t.get("realised_pnl", 0)
+    total_pnl = realised + floating
+    pnl_col   = "#00ff88" if total_pnl >= 0 else "#ff3366"
+
+    details = html.Div([
+        html.Div([
+            html.Span("Pair:  ",     style={"color": "#8b949e", "fontSize": "0.78rem"}),
+            html.Span(pair_v.replace("_", "/"),
+                      style={"color": "#e6edf3", "fontWeight": 700,
+                             "fontSize": "0.82rem", "fontFamily": "monospace"}),
+        ]),
+        html.Div([
+            html.Span("Direction:  ", style={"color": "#8b949e", "fontSize": "0.78rem"}),
+            html.Span(direction.upper(),
+                      style={"color": dir_col, "fontWeight": 700, "fontSize": "0.82rem"}),
+        ]),
+        html.Div([
+            html.Span("Entry:  ",    style={"color": "#8b949e", "fontSize": "0.78rem"}),
+            html.Span(f"{entry:.{dec}f}",
+                      style={"color": "#38b6ff", "fontFamily": "monospace",
+                             "fontSize": "0.82rem"}),
+        ]),
+        html.Div([
+            html.Span("Current:  ", style={"color": "#8b949e", "fontSize": "0.78rem"}),
+            html.Span(f"{cur_price:.{dec}f}",
+                      style={"color": "#e6edf3", "fontFamily": "monospace",
+                             "fontSize": "0.82rem"}),
+        ]),
+        html.Div([
+            html.Span("P&L:  ",     style={"color": "#8b949e", "fontSize": "0.78rem"}),
+            html.Span(f"${total_pnl:+.2f}",
+                      style={"color": pnl_col, "fontWeight": 700, "fontFamily": "monospace",
+                             "fontSize": "0.9rem"}),
+        ]),
+    ])
+
+    return {"id": tid}, _modal_show, _back_show, details
+
+
+# ── Close trade: Confirm → execute manual_close ───────────────────────────────
+
+@app.callback(
+    Output("open-trades",  "children", allow_duplicate=True),
+    Output("account-stats","children", allow_duplicate=True),
+    Input("close-modal-confirm-btn", "n_clicks"),
+    State("close-trade-store",       "data"),
+    State("pair-select",             "value"),
+    prevent_initial_call=True,
+)
+def confirm_close_trade(n, store, pair):
+    if not n or not store:
+        return no_update, no_update
+
+    tid = store.get("id", "")
+    pt  = state.get_key("paper_trader")
+    if not pt:
+        return no_update, no_update
+
+    # Find current price for the exit
+    trades = state.get_key("open_trades") or []
+    t      = next((x for x in trades if x.get("id") == tid), None)
+    if not t:
+        return no_update, no_update
+
+    pair_v    = t.get("pair", "")
+    is_forex  = "_" in pair_v
+    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
+    exit_price = t.get("last_price", t.get("entry", 0))
+    if connector:
+        try:
+            q = connector.get_current_quote(pair_v)
+            exit_price = q.get("mid") or q.get("ask") or exit_price
+        except Exception:
+            pass
+
+    ok = pt.manual_close(tid, float(exit_price))
+    state.update(
+        open_trades   = list(pt.open_trades),
+        closed_trades = list(pt.closed_trades),
+    )
+
+    # Update cooldown for this pair
+    from datetime import datetime as _dt_now, timezone as _tz
+    cooldowns = dict(state.get_key("trade_cooldowns", {}))
+    cooldowns[pair_v] = _dt_now.now(_tz.utc)
+    state.update(trade_cooldowns=cooldowns)
+
+    import config as _cfg
+    s = state.get()
+    trades_now = list(s.get("open_trades", []))
+    account    = s.get("account", {})
+    closed_all = s.get("closed_trades", [])
+    mode       = s.get("mode", "paper")
+
+    from datetime import date, datetime as _dt2
+    from dashboard.panels import open_trades_panel, account_stats_bar
+    today     = date.today()
+    daily_pnl = sum(t.get("realised_pnl", 0) for t in closed_all
+                    if isinstance(t.get("close_time"), _dt2)
+                    and t["close_time"].date() == today)
+    wr_all = (sum(1 for t in closed_all if t.get("realised_pnl", 0) > 0) / len(closed_all)
+              if closed_all else 0.0)
+    last20 = closed_all[-20:]
+    wr_20  = (sum(1 for t in last20 if t.get("realised_pnl", 0) > 0) / len(last20)
+              if last20 else 0.0)
+    t_today = sum(1 for t in closed_all
+                  if isinstance(t.get("close_time"), _dt2) and t["close_time"].date() == today)
+
+    return (
+        open_trades_panel(trades_now, mode),
+        account_stats_bar(account, daily_pnl, wr_all, wr_20, t_today, mode,
+                          profit_factor  = account.get("profit_factor", 0.0),
+                          avg_latency_ms = account.get("avg_latency_ms")),
+    )
+
+
+# ── Edit trade modal: EDIT button → show floating modal ──────────────────────
+
+@app.callback(
+    Output("edit-trade-store",    "data"),
+    Output("edit-trade-modal",    "style"),
+    Output("edit-modal-backdrop", "style"),
+    Output("edit-modal-title",    "children"),
+    Output("edit-modal-sl-input",  "value"),
+    Output("edit-modal-tp1-input", "value"),
+    Output("edit-modal-tp2-input", "value"),
+    Output("edit-modal-tp3-input", "value"),
+    Input({"type": "edit-trade-btn", "index": ALL}, "n_clicks"),
+    Input("edit-modal-cancel-btn",  "n_clicks"),
+    Input("edit-modal-confirm-btn", "n_clicks"),
+    Input("edit-modal-breakeven-btn","n_clicks"),
+    Input("edit-modal-backdrop",    "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_edit_modal(edit_clicks, cancel_n, confirm_n, be_n, backdrop_n):
+    _show = {
+        "display": "block", "position": "fixed",
+        "top": "50%", "left": "50%",
+        "transform": "translate(-50%, -50%)",
+        "background": "#161b22", "border": "1px solid #ffd700",
+        "borderRadius": "8px", "padding": "1.25rem 1.5rem",
+        "zIndex": 3000, "minWidth": "340px",
+        "boxShadow": "0 8px 32px rgba(0,0,0,0.7)",
+    }
+    _hide     = {**_show, "display": "none"}
+    _back_show = {"display": "block", "position": "fixed", "top": 0, "left": 0,
+                   "width": "100%", "height": "100%",
+                   "background": "rgba(0,0,0,0.4)", "zIndex": 2999}
+    _back_hide = {**_back_show, "display": "none"}
+    _blank = (None, _hide, _back_hide, "", None, None, None, None)
+
+    ctx = callback_context
+    if not ctx.triggered:
+        return (no_update,) * 8
+
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    tval      = ctx.triggered[0].get("value")
+
+    # Cancel/confirm/breakeven/backdrop → close modal (only when actually clicked, i.e. value > 0)
+    if triggered in ("edit-modal-cancel-btn", "edit-modal-confirm-btn",
+                     "edit-modal-breakeven-btn", "edit-modal-backdrop"):
+        return _blank if tval else (no_update,) * 8
+
+    # Pattern-matched edit button fired with n_clicks=0 (DOM rebuild by interval) → ignore
+    if not tval:
+        return (no_update,) * 8
+
+    try:
+        tid_data = json.loads(triggered)
+    except (json.JSONDecodeError, AttributeError):
+        return (no_update,) * 8
+
+    if tid_data.get("type") != "edit-trade-btn":
+        return _blank
+
+    tid    = tid_data.get("index", "")
+    trades = state.get_key("open_trades") or []
+    t      = next((x for x in trades if x.get("id") == tid), None)
+    if not t:
+        return _blank
+
+    pair  = t.get("pair", "")
+    dec   = 3 if "JPY" in pair else 5
+    title = f"Edit  {pair.replace('_', '/')}  {t.get('direction','').upper()}"
+    return (
+        {"id": tid},
+        _show, _back_show, title,
+        round(float(t.get("sl",  0)), dec),
+        round(float(t.get("tp1", 0)), dec),
+        round(float(t.get("tp2", 0)), dec),
+        round(float(t.get("tp3", 0)), dec),
+    )
+
+
+@app.callback(
+    Output("edit-modal-result",  "children"),
+    Output("open-trades",  "children", allow_duplicate=True),
+    Input("edit-modal-confirm-btn",    "n_clicks"),
+    Input("edit-modal-breakeven-btn",  "n_clicks"),
+    State("edit-trade-store",          "data"),
+    State("edit-modal-sl-input",       "value"),
+    State("edit-modal-tp1-input",      "value"),
+    State("edit-modal-tp2-input",      "value"),
+    State("edit-modal-tp3-input",      "value"),
+    prevent_initial_call=True,
+)
+def confirm_edit_modal(confirm_n, be_n, store, sl, tp1, tp2, tp3):
+    ctx = callback_context
+    if not ctx.triggered or not store:
+        return no_update, no_update
+
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    if not ctx.triggered[0].get("value"):
+        return no_update, no_update
+
+    tid = store.get("id", "")
+    pt  = state.get_key("paper_trader")
+    if not pt:
+        return "✗ Paper trader unavailable", no_update
+
+    from dashboard.panels import open_trades_panel
+
+    if triggered == "edit-modal-breakeven-btn":
+        ok = pt.move_to_breakeven(tid)
+        state.update(open_trades=list(pt.open_trades),
+                     closed_trades=list(pt.closed_trades))
+        trades = state.get_key("open_trades") or []
+        return ("✓ SL moved to breakeven" if ok else "✗ Trade not found",
+                open_trades_panel(trades, state.get_key("mode", "paper")))
+
+    if triggered == "edit-modal-confirm-btn":
+        ok = pt.modify_trade(
+            tid,
+            sl  = float(sl)  if sl  is not None else None,
+            tp1 = float(tp1) if tp1 is not None else None,
+            tp2 = float(tp2) if tp2 is not None else None,
+            tp3 = float(tp3) if tp3 is not None else None,
+        )
+        state.update(open_trades=list(pt.open_trades),
+                     closed_trades=list(pt.closed_trades))
+        trades = state.get_key("open_trades") or []
+        return ("✓ Trade updated" if ok else "✗ Trade not found",
+                open_trades_panel(trades, state.get_key("mode", "paper")))
+
+    return no_update, no_update
+
+
 # ── Sync open trades to chart (immediate on trade placed + every 5 s) ────────
 
 @app.callback(
@@ -1639,10 +2433,13 @@ def sync_trades_store(_, __, pair):
     all_trades = state.get_key("open_trades", []) or []
     return [
         {
+            "id":        t.get("id", ""),
             "direction": t.get("direction", "long"),
             "entry":     float(t.get("entry", 0) or 0),
             "sl":        float(t.get("sl", 0) or 0),
-            "tp":        float(t.get("tp1", 0) or t.get("tp", 0) or 0),
+            "tp1":       float(t.get("tp1", 0) or 0),
+            "tp2":       float(t.get("tp2", 0) or 0),
+            "tp3":       float(t.get("tp3", 0) or 0),
         }
         for t in all_trades
         if t.get("pair") == pair and t.get("entry")
@@ -1660,6 +2457,38 @@ app.clientside_callback(
     Input("open-trades-store", "data"),
     prevent_initial_call=True,
 )
+
+
+# ── Chart-drag SL/TP modification ────────────────────────────────────────────
+
+@app.callback(
+    Output("trade-modify-dummy", "children"),
+    Input("trade-modify-store",  "data"),
+    prevent_initial_call=True,
+)
+def handle_chart_trade_modify(data):
+    """Receives SL/TP drag events from chart.js and persists via paper_trader."""
+    if not data:
+        return no_update
+    pt = state.get_key("paper_trader")
+    if not pt:
+        return no_update
+    tid = data.get("id", "")
+    sl  = data.get("sl")
+    tp1 = data.get("tp1")
+    tp2 = data.get("tp2")
+    tp3 = data.get("tp3")
+    ok = pt.modify_trade(
+        tid,
+        sl  = float(sl)  if sl  is not None else None,
+        tp1 = float(tp1) if tp1 is not None else None,
+        tp2 = float(tp2) if tp2 is not None else None,
+        tp3 = float(tp3) if tp3 is not None else None,
+    )
+    if ok:
+        state.update(open_trades=list(pt.open_trades),
+                     closed_trades=list(pt.closed_trades))
+    return ""
 
 
 # ── Connector health pills (5 s) ─────────────────────────────────────────────
@@ -1689,14 +2518,41 @@ def update_connector_status(_):
     ]
 
 
-# ── Signal monitor ────────────────────────────────────────────────────────────
+# ── Min-score threshold control (▼ / input / ▲ buttons) ─────────────────────
 
 @app.callback(
-    Output("min-score-label", "children"),
-    Input("min-score-slider", "value"),
+    Output("min-score-input",  "value"),
+    Output("min-score-slider", "value"),
+    Output("min-score-label",  "children"),
+    Input("min-score-dec",   "n_clicks"),
+    Input("min-score-inc",   "n_clicks"),
+    Input("min-score-input", "value"),
+    State("min-score-input", "value"),
+    prevent_initial_call=True,
 )
-def update_score_label(v):
-    return f"{v}/100"
+def update_min_score(dec_n, inc_n, inp_val, cur_val):
+    triggered = ctx.triggered_id
+    try:
+        base = int(cur_val or config.MIN_CONFLUENCE_SCORE)
+    except (TypeError, ValueError):
+        base = config.MIN_CONFLUENCE_SCORE
+
+    if triggered == "min-score-dec":
+        new_val = max(1, base - 1)
+    elif triggered == "min-score-inc":
+        new_val = min(100, base + 1)
+    else:
+        # Input box changed — validate
+        try:
+            new_val = max(1, min(100, int(inp_val or base)))
+        except (TypeError, ValueError):
+            new_val = base
+
+    state.update(min_score=new_val)
+    return new_val, new_val, f"/ 100"
+
+
+# ── Signal monitor ────────────────────────────────────────────────────────────
 
 
 # ── Scan Now: trigger a full signal scan without waiting for the hourly tick ──
@@ -1734,6 +2590,11 @@ def trigger_scan(n):
                 eng_c = SignalEngine(_alpaca_get)
                 tasks += [(p, "crypto", eng_c) for p in config.CRYPTO_PAIRS]
 
+            effective_min = max(
+                state.get_key("min_score", config.MIN_CONFLUENCE_SCORE),
+                config.MIN_CONFLUENCE_SCORE,
+            )
+
             for pair, market, engine in tasks:
                 try:
                     sig = engine.run(pair, market)
@@ -1745,10 +2606,57 @@ def trigger_scan(n):
                                             timeframe=sig.get("timeframe", "H1"))
                         state.update_signal_detail(pair, sig)
                         continue
+
                     score = sig["score"]
                     state.update_signal(pair, score, sig["direction"],
                                         timeframe=sig.get("timeframe", "H1"))
                     state.update_signal_detail(pair, sig)
+
+                    # ── Fire alert + open trade if signal qualifies ──────────
+                    if (score >= effective_min
+                            and sig.get("entry") and sig.get("stop_loss")
+                            and sig.get("tp_levels")
+                            and config.MODE == "paper"):
+                        pt = state.get_key("paper_trader")
+                        if pt:
+                            existing = pt.get_open_trade(pair)
+                            if not existing or config.ALLOW_MULTIPLE_PER_PAIR:
+                                from risk.risk_manager import calculate_position_size
+                                acct    = state.get_key("account", {})
+                                balance = acct.get("balance") or 500.0
+                                inst    = "forex" if "_" in pair else "crypto"
+                                size    = calculate_position_size(
+                                    balance, sig["entry"], sig["stop_loss"], inst, pair)
+                                sig["size"]         = size
+                                sig["risk_dollar"]  = round(balance * 0.01, 2)
+                                state.set_pending_alert(sig)
+                                try:
+                                    from alerts.audio_alert import play_alert
+                                    play_alert(sig["direction"])
+                                except Exception:
+                                    pass
+                                pt.open_trade(
+                                    pair=pair,
+                                    direction=sig["direction"],
+                                    entry_price=sig["entry"],
+                                    sl=sig["stop_loss"],
+                                    tp_levels=sig["tp_levels"],
+                                    size=size,
+                                )
+                                state.update(
+                                    open_trades   = list(pt.open_trades),
+                                    closed_trades = list(pt.closed_trades),
+                                )
+                                logger.info(
+                                    "Scan Now triggered trade: %s %s score=%d",
+                                    pair, sig["direction"], score,
+                                )
+                            else:
+                                logger.info(
+                                    "Scan Now: %s qualifies (score=%d) but trade already open",
+                                    pair, score,
+                                )
+
                 except Exception as exc:
                     logger.warning("Scan failed for %s: %s", pair, exc)
 
@@ -1763,23 +2671,89 @@ def trigger_scan(n):
             {"color": "#ffd700", "fontSize": "0.75rem"})
 
 
-# ── Backtest panel show / hide ────────────────────────────────────────────────
+# ── Backtest tab switcher ─────────────────────────────────────────────────────
 
 @app.callback(
-    Output("backtest-panel", "style"),
-    Input("backtest-btn",       "n_clicks"),
-    Input("backtest-close-btn", "n_clicks"),
-    State("backtest-panel",     "style"),
+    Output("bt-mode-store",    "data"),
+    Output("bt-tab-bt",        "style"),
+    Output("bt-tab-wf",        "style"),
+    Output("wf-config-row",    "style"),
+    Input("bt-tab-bt",         "n_clicks"),
+    Input("bt-tab-wf",         "n_clicks"),
     prevent_initial_call=True,
 )
-def toggle_backtest_panel(open_n, close_n, current_style):
+def switch_bt_tab(n_bt, n_wf):
     ctx = callback_context
     if not ctx.triggered:
-        return no_update
+        return no_update, no_update, no_update, no_update
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    _wf_mode  = triggered == "bt-tab-wf"
+    _s_active = {**_tf_btn_style(True),  "fontSize": "0.8rem"}
+    _s_idle   = {**_tf_btn_style(False), "fontSize": "0.8rem"}
+    wf_row_style = {"display": "flex", "gap": "0.4rem",
+                    "alignItems": "center", "marginBottom": "0.5rem",
+                    "flexWrap": "wrap"} if _wf_mode else {"display": "none"}
+    return (
+        "walk_forward" if _wf_mode else "backtest",
+        _s_idle   if _wf_mode else _s_active,
+        _s_active if _wf_mode else _s_idle,
+        wf_row_style,
+    )
+
+
+# ── Signal Quality panel show / hide + data load ─────────────────────────────
+
+@app.callback(
+    Output("sig-quality-panel",    "style"),
+    Output("sig-quality-content",  "children"),
+    Output("sig-quality-backdrop", "style"),
+    Input("sig-quality-btn",          "n_clicks"),
+    Input("sig-quality-close-btn",    "n_clicks"),
+    Input("sig-quality-backdrop",     "n_clicks"),
+    State("sig-quality-panel",        "style"),
+    prevent_initial_call=True,
+)
+def toggle_sig_quality_panel(open_n, close_n, backdrop_n, current_style):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update, no_update, no_update
     triggered = ctx.triggered[0]["prop_id"].split(".")[0]
     _show = {**(current_style or {}), "display": "block"}
     _hide = {**(current_style or {}), "display": "none"}
-    return _show if triggered == "backtest-btn" else _hide
+    if triggered != "sig-quality-btn":
+        return _hide, no_update, {**_BACK_HIDE, "zIndex": 1999}
+    from engine.signal_audit import signal_quality_analysis
+    from dashboard.panels import signal_quality_panel
+    analysis = signal_quality_analysis()
+    return _show, signal_quality_panel(analysis), {**_BACK_SHOW, "zIndex": 1999}
+
+
+# ── Backtest panel show / hide ────────────────────────────────────────────────
+
+_BACK_SHOW = {"display": "block", "position": "fixed", "top": 0, "left": 0,
+              "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.45)"}
+_BACK_HIDE = {**_BACK_SHOW, "display": "none"}
+
+
+@app.callback(
+    Output("backtest-panel",    "style"),
+    Output("backtest-backdrop", "style"),
+    Input("backtest-btn",          "n_clicks"),
+    Input("backtest-close-btn",    "n_clicks"),
+    Input("backtest-backdrop",     "n_clicks"),
+    State("backtest-panel",        "style"),
+    prevent_initial_call=True,
+)
+def toggle_backtest_panel(open_n, close_n, backdrop_n, current_style):
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update, no_update
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    _show = {**(current_style or {}), "display": "block"}
+    _hide = {**(current_style or {}), "display": "none"}
+    if triggered == "backtest-btn":
+        return _show, {**_BACK_SHOW, "zIndex": 1999}
+    return _hide, {**_BACK_HIDE, "zIndex": 1999}
 
 
 # ── Backtest run ──────────────────────────────────────────────────────────────
@@ -1790,30 +2764,66 @@ def toggle_backtest_panel(open_n, close_n, current_style):
     Input("backtest-run-btn",  "n_clicks"),
     State("bt-pair-select",    "value"),
     State("bt-bars-input",     "value"),
+    State("bt-mode-store",     "data"),
+    State("wf-train-input",    "value"),
+    State("wf-test-input",     "value"),
+    State("wf-step-input",     "value"),
     prevent_initial_call=True,
 )
-def run_backtest_callback(n, pair, bars):
+def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
     if not n or not pair:
         return no_update, no_update
 
-    bars = int(bars or 1500)
     is_forex  = "_" in pair
     connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
     if connector is None:
         return "Error: connector not available.", no_update
 
+    market   = "forex" if is_forex else "crypto"
+    gran_h1  = "H1" if is_forex else "1Hour"
+    gran_h4  = "H4" if is_forex else "4Hour"
+    balance  = state.get_key("account", {}).get("balance", 500.0)
+
+    # ── Walk-Forward mode ─────────────────────────────────────────────────────
+    if mode == "walk_forward":
+        train = int(wf_train or 1000)
+        test  = int(wf_test  or 250)
+        step  = int(wf_step  or 250)
+        total = train + test
+        try:
+            # 6 windows max, so fetch train + test + (6 × step) bars
+            fetch_bars = total + min(step * 6, 2000)
+            df_h1 = connector.get_candles(pair, gran_h1, fetch_bars)
+            df_h4 = connector.get_candles(pair, gran_h4, max(200, fetch_bars // 4))
+        except Exception as exc:
+            return f"Data fetch failed: {exc}", no_update
+
+        from backtest.runner import run_walk_forward
+        from dashboard.panels import walk_forward_results
+        wf_res = run_walk_forward(pair, df_h1, df_h4,
+                                  train_bars=train, test_bars=test,
+                                  step_bars=step,
+                                  starting_balance=balance, market=market)
+        if "error" in wf_res:
+            return f"Walk-forward error: {wf_res['error']}", no_update
+
+        n_win = len(wf_res.get("windows", []))
+        status = (f"Walk-forward complete — {n_win} windows  "
+                  f"Avg OOS PF={wf_res.get('avg_pf_oos',0):.2f}  "
+                  f"Stability={wf_res.get('avg_stability',0):.2f}")
+        return status, walk_forward_results(wf_res)
+
+    # ── Standard backtest mode ─────────────────────────────────────────────────
+    bars = int(bars or 1500)
     try:
-        gran_h1 = "H1"   if is_forex else "1Hour"
-        gran_h4 = "H4"   if is_forex else "4Hour"
         df_h1   = connector.get_candles(pair, gran_h1, bars)
         df_h4   = connector.get_candles(pair, gran_h4, max(200, bars // 4))
     except Exception as exc:
         return f"Data fetch failed: {exc}", no_update
 
     from backtest.runner import run_backtest
-    market = "forex" if is_forex else "crypto"
     res    = run_backtest(pair, df_h1, df_h4,
-                          starting_balance=state.get_key("account", {}).get("balance", 500.0),
+                          starting_balance=balance,
                           min_score=state.get_key("min_score", config.MIN_CONFLUENCE_SCORE),
                           market=market)
 
@@ -1867,13 +2877,30 @@ def run_backtest_callback(n, pair, bars):
                                 "marginBottom": "0.75rem"}) if eq else html.Div()
 
     # ── Last 20 trades ─────────────────────────────────────────────────────────
+    def _exit_label(t: dict) -> tuple[str, str]:
+        """Return (label, color) that describes how the trade actually closed."""
+        reason = (t.get("close_reason") or "?").lower()
+        tp1_hit = t.get("tp1_hit", False)
+        pnl     = t.get("realised_pnl", 0)
+        if reason == "sl":
+            if tp1_hit and pnl > 0:
+                return "BE", "#38b6ff"      # stopped at breakeven after TP1 → profit
+            if tp1_hit and pnl >= 0:
+                return "BE", "#8b949e"      # breakeven (flat)
+            return "SL", "#ff3366"          # true stop loss → loss
+        label_map = {"tp1": ("TP1", "#00ff88"), "tp2": ("TP2", "#00cc66"),
+                     "tp3": ("TP3", "#00aa44"), "manual": ("MAN", "#ffd700")}
+        return label_map.get(reason, (reason.upper(), "#8b949e"))
+
     trade_rows = []
     for t in res["trades"][-20:]:
         pnl = t.get("realised_pnl", 0)
         dec = 3 if "JPY" in pair else 5
+        lbl, lbl_color = _exit_label(t)
         trade_rows.append(html.Tr([
-            html.Td(t.get("close_reason","?").upper(),
-                    style={"padding":"0.2rem 0.4rem","fontSize":"0.72rem","color":"#8b949e"}),
+            html.Td(lbl,
+                    style={"padding":"0.2rem 0.4rem","fontSize":"0.72rem",
+                           "color": lbl_color, "fontWeight": 700}),
             html.Td(t.get("direction","?")[:1].upper(),
                     style={"padding":"0.2rem 0.4rem","fontSize":"0.72rem",
                            "color":"#00ff88" if t.get("direction")=="long" else "#ff3366"}),
@@ -1905,15 +2932,42 @@ def run_backtest_callback(n, pair, bars):
 @app.callback(
     Output("signal-monitor",  "children"),
     Input("interval-60s",     "n_intervals"),
+    Input("interval-1s",      "n_intervals"),
     Input("min-score-slider", "value"),
 )
-def update_signals(_, threshold):
+def update_signals(_, _1s, threshold):
     if threshold is not None:
         state.update(min_score=int(threshold))
-    return signal_monitor_panel(
+
+    missed = state.get_key("missed_signals", [])
+    missed_banner = []
+    if missed:
+        from datetime import datetime as _dt3
+        items = []
+        for m in reversed(missed[-3:]):   # show last 3 missed
+            at = _dt3.fromtimestamp(m["_missed_at"]).strftime("%H:%M:%S")
+            items.append(html.Div(
+                f"⚠ MISSED {m.get('direction','').upper()} {m.get('pair','—')} "
+                f"score={m.get('score',0)} @ {at}",
+                style={"fontSize": "0.78rem", "color": "#ffd700",
+                       "fontFamily": "'JetBrains Mono', monospace",
+                       "marginBottom": "2px"},
+            ))
+        missed_banner = [html.Div(
+            children=items,
+            style={
+                "background": "#2a1a00", "border": "1px solid #ffd700",
+                "borderRadius": "4px", "padding": "6px 10px",
+                "marginBottom": "8px",
+            },
+        )]
+
+    panel = signal_monitor_panel(
         state.get_key("signals", {}),
         signal_details=state.get_key("signal_details", {}),
+        last_scan_time=state.get_key("last_scan_time"),
     )
+    return missed_banner + [panel] if missed_banner else panel
 
 
 # ── Open trades + account stats ───────────────────────────────────────────────
@@ -1924,11 +2978,32 @@ def update_signals(_, threshold):
     Input("interval-5s",    "n_intervals"),
 )
 def update_trades_and_account(_):
-    s       = state.get()
-    trades  = list(s.get("open_trades",   []))
-    account = s.get("account",       {})
-    closed  = s.get("closed_trades", [])
-    mode    = s.get("mode",          "paper")
+    s = state.get()
+    pt = s.get("paper_trader")
+    try:
+        if pt is not None:
+            trades = list(pt.open_trades)
+            closed = list(pt.closed_trades)
+            state.update(open_trades=trades, closed_trades=closed)
+            acc_raw = pt.get_account()
+            account = {
+                "balance":          acc_raw["balance"],
+                "nav":              acc_raw.get("nav", acc_raw["balance"]),
+                "unrealized_pnl":   acc_raw.get("unrealized_pnl", 0),
+                "open_trade_count": acc_raw.get("open_trade_count", len(trades)),
+                "profit_factor":    pt.profit_factor(),
+                "avg_latency_ms":   pt.avg_latency_ms(),
+            }
+        else:
+            trades  = list(s.get("open_trades", []))
+            closed  = list(s.get("closed_trades", []))
+            account = s.get("account", {})
+    except Exception as _acct_exc:
+        logger.error("update_trades_and_account account read failed: %s", _acct_exc, exc_info=True)
+        trades  = list(s.get("open_trades", []))
+        closed  = list(s.get("closed_trades", []))
+        account = s.get("account", {})
+    mode    = s.get("mode",    "paper")
 
     # ── Live P&L: update last_price for each open trade via 5s quote ─────────
     current_prices = {}
@@ -1970,58 +3045,28 @@ def update_trades_and_account(_):
                     and t["close_time"].date() == today)
 
     return (open_trades_panel(trades, mode, current_prices=current_prices),
-            account_stats_bar(account, daily_pnl, wr_all, wr_20, t_today, mode))
+            account_stats_bar(account, daily_pnl, wr_all, wr_20, t_today, mode,
+                              profit_factor  = account.get("profit_factor", 0.0),
+                              avg_latency_ms = account.get("avg_latency_ms")))
 
 
-# ── Edit trade: open form on EDIT button click ───────────────────────────────
+# ── Edit trade (sidebar panel): now superseded by the floating modal.
+# This callback only handles the sidebar cancel button — the panel stays hidden.
+# All EDIT logic is in toggle_edit_modal / confirm_edit_modal above.
 
 @app.callback(
-    Output("edit-trade-store",  "data"),
     Output("edit-trade-panel",  "style"),
     Output("edit-trade-title",  "children"),
     Output("edit-sl-input",     "value"),
     Output("edit-tp1-input",    "value"),
     Output("edit-tp2-input",    "value"),
     Output("edit-tp3-input",    "value"),
-    Input({"type": "edit-trade-btn", "index": ALL}, "n_clicks"),
     Input("edit-cancel-btn",    "n_clicks"),
     prevent_initial_call=True,
 )
-def open_edit_form(edit_clicks, cancel_n):
-    _hide  = {"display": "none"}
-    _show  = {"display": "block", "background": "#161b22", "borderRadius": "4px",
-               "padding": "0.75rem", "marginTop": "0.5rem",
-               "border": "1px solid #ffd700"}
-    _blank = (None, _hide, "", None, None, None, None)
-
-    ctx = callback_context
-    if not ctx.triggered or not ctx.triggered[0].get("value"):
-        return _blank
-
-    prop_id = ctx.triggered[0]["prop_id"].split(".")[0]
-    try:
-        tid_data = json.loads(prop_id)
-    except (json.JSONDecodeError, AttributeError):
-        return _blank
-
-    if tid_data.get("type") == "edit-trade-btn":
-        tid    = tid_data.get("index", "")
-        trades = state.get_key("open_trades") or []
-        t      = next((x for x in trades if x.get("id") == tid), None)
-        if not t:
-            return _blank
-        pair  = t.get("pair", "")
-        dec   = 3 if "JPY" in pair else 5
-        title = f"Edit  {pair}  {t.get('direction','').upper()}"
-        return (
-            {"id": tid},
-            _show, title,
-            round(float(t.get("sl",  0)), dec),
-            round(float(t.get("tp1", 0)), dec),
-            round(float(t.get("tp2", 0)), dec),
-            round(float(t.get("tp3", 0)), dec),
-        )
-    return _blank
+def open_edit_form(cancel_n):
+    # Sidebar panel is permanently hidden — modal handles editing.
+    return {"display": "none"}, "", None, None, None, None
 
 
 @app.callback(
@@ -2127,7 +3172,8 @@ def update_alert(_, cancel_clicks, confirm_clicks):
             pass
 
     if countdown <= 0 and not state.get_key("alert_confirmed"):
-        state.update(alert_confirmed=True); state.clear_alert()
+        state.update(alert_confirmed=True)
+        state.clear_alert()   # trade already opened in main.py — just dismiss
         return _hidden_alert_btns()
 
     from alerts.visual_alert import build_alert_overlay
@@ -2147,14 +3193,14 @@ def toggle_expand(n):
             {"flex": "0 0 100%", "paddingLeft": 0, "minWidth": 0},
             {"display": "none"},
             {"height": "80vh", "width": "100%", "background": "#0d1117",
-             "borderRadius": "4px"},
+             "borderRadius": "4px", "overflow": "hidden"},
         )
     return (
         {"flex": "0 0 75%", "paddingLeft": "0.25rem", "minWidth": 0},
         {"flex": "0 0 25%", "overflowY": "auto",
          "maxHeight": "760px", "paddingRight": "0.5rem", "minWidth": 0},
         {"height": "680px", "width": "100%", "background": "#0d1117",
-         "borderRadius": "4px"},
+         "borderRadius": "4px", "overflow": "hidden"},
     )
 
 
@@ -2168,22 +3214,29 @@ def _hidden_alert_btns():
 @app.callback(
     Output("drawer-visible",   "data"),
     Output("trade-log-drawer", "children"),
+    Output("drawer-backdrop",  "style"),
     Input("drawer-toggle-btn", "n_clicks"),
     Input("drawer-close-btn",  "n_clicks"),
+    Input("drawer-backdrop",   "n_clicks"),
     State("drawer-visible",    "data"),
     prevent_initial_call=True,
 )
-def toggle_drawer(open_clicks, close_clicks, visible):
+def toggle_drawer(open_clicks, close_clicks, backdrop_n, visible):
     ctx = callback_context
     if not ctx.triggered:
-        return no_update, no_update
-    new_vis = not visible if "toggle" in ctx.triggered[0]["prop_id"] else False
+        return no_update, no_update, no_update
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    new_vis = not visible if triggered == "drawer-toggle-btn" else False
     s = state.get()
+    from engine.signal_audit import signal_frequency_by_week, watching_signal_stats
+    back_style = {**_BACK_SHOW, "zIndex": 999} if new_vis else {**_BACK_HIDE, "zIndex": 999}
     return new_vis, trade_log_drawer(
         s.get("closed_trades", []), s.get("suggestions", []),
         s.get("ml_stats", {}), visible=new_vis,
         equity_curve=s.get("equity_curve", []),
-    )
+        signal_freq=signal_frequency_by_week(),
+        watching_counts=watching_signal_stats(),
+    ), back_style
 
 
 @app.callback(
@@ -2211,6 +3264,263 @@ def select_pair_from_panel(sig_clicks, trade_clicks):
                 return t.get("pair", no_update)
 
     return no_update
+
+
+# ── News Events Panel ─────────────────────────────────────────────────────────
+
+_IMPACT_COLORS = {"high": "#ff4444", "medium": "#ffa500", "low": "#8b949e"}
+
+
+def _render_news_panel(events: list):
+    """Render upcoming economic events as a compact card. Returns (html.Div, serialized_events)."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    if not events:
+        return html.Div(
+            "No upcoming events in the next 24 hours",
+            style={"color": "#8b949e", "fontSize": "0.73rem",
+                   "padding": "0.4rem 0.6rem",
+                   "background": "#161b22", "borderRadius": "4px",
+                   "border": "1px solid #30363d", "marginTop": "0.3rem"},
+        ), []
+
+    sorted_events = sorted(events, key=lambda e: e["time"])[:10]
+    serialized = []
+    rows = []
+    for i, ev in enumerate(sorted_events):
+        ev_time = ev["time"]
+        delta_m = (ev_time - now).total_seconds() / 60
+        if delta_m >= 0:
+            time_label = f"in {int(delta_m)}m" if delta_m < 60 else ev_time.strftime("%H:%M")
+        else:
+            time_label = f"{int(-delta_m)}m ago"
+
+        impact   = ev.get("impact", "low")
+        color    = _IMPACT_COLORS.get(impact, "#8b949e")
+        pairs_s  = ", ".join(ev.get("pairs", [])[:2]) or ev.get("currency", "")
+        forecast = ev.get("forecast", "")
+        prev     = ev.get("previous", "")
+        extra    = f"F:{forecast}  P:{prev}" if forecast or prev else ""
+
+        serialized.append({
+            "event":     ev.get("event", ""),
+            "country":   ev.get("country", ""),
+            "currency":  ev.get("currency", ""),
+            "impact":    impact,
+            "time":      ev_time.strftime("%H:%M UTC"),
+            "pairs":     ev.get("pairs", []),
+            "forecast":  forecast,
+            "consensus": ev.get("consensus", forecast),
+            "previous":  prev,
+            "actual":    ev.get("actual", ""),
+        })
+
+        rows.append(html.Div([
+            html.Span(ev_time.strftime("%H:%M"), style={
+                "color": "#8b949e", "fontSize": "0.70rem", "minWidth": "36px"}),
+            html.Span(time_label, style={
+                "color": "#adbac7", "fontSize": "0.67rem", "minWidth": "42px"}),
+            html.Span("●", style={"color": color, "fontSize": "0.6rem", "marginRight": "2px"}),
+            html.Div([
+                html.Span(ev.get("event", "")[:32], style={
+                    "color": "#e6edf3", "fontSize": "0.72rem",
+                    "overflow": "hidden", "whiteSpace": "nowrap", "textOverflow": "ellipsis",
+                    "display": "block"}),
+                html.Span(extra, style={
+                    "color": "#8b949e", "fontSize": "0.63rem"}) if extra else None,
+            ], style={"flex": 1, "minWidth": 0}),
+            html.Span(pairs_s, style={
+                "color": "#8b949e", "fontSize": "0.64rem", "textAlign": "right",
+                "minWidth": "55px", "whiteSpace": "nowrap"}),
+        ], id={"type": "news-row", "index": i}, n_clicks=0,
+           style={"display": "flex", "gap": "5px", "alignItems": "center",
+                  "padding": "3px 0", "borderBottom": "1px solid #21262d",
+                  "cursor": "pointer", "borderRadius": "3px"})
+        )
+
+    source = events[0].get("source", "ForexFactory") if events else "ForexFactory"
+    source = events[0].get("source", "ForexFactory") if events else "ForexFactory"
+    panel = html.Div([
+        html.Div([
+            html.Span("📅 Upcoming Events", style={
+                "color": "#ffd700", "fontWeight": 700, "fontSize": "0.78rem"}),
+            html.Span(f"via {source}", style={
+                "color": "#30363d", "fontSize": "0.65rem", "marginLeft": "6px"}),
+        ], style={"display": "flex", "alignItems": "baseline",
+                  "marginBottom": "0.3rem"}),
+        html.Div(rows),
+    ], style={
+        "background": "#0d1117", "borderRadius": "4px",
+        "border": "1px solid #30363d", "padding": "0.5rem 0.6rem",
+    })
+    return panel, serialized
+
+
+@app.callback(
+    Output("news-panel",        "children"),
+    Output("news-events-store", "data"),
+    Input("interval-5min", "n_intervals"),
+    Input("interval-60s",  "n_intervals"),
+    prevent_initial_call=False,
+)
+def update_news_panel(_5min, _60s):
+    _empty_store = []
+    # Primary: ForexFactory public XML feed (no API key needed)
+    try:
+        from connectors.forexfactory_connector import get_upcoming_events as ff_events
+        events = ff_events(hours=24)
+        if events:
+            panel, store = _render_news_panel(events)
+            return panel, store
+    except Exception as exc:
+        logger.warning("ForexFactory news fetch failed: %s", exc)
+
+    # Fallback: Finnhub (requires paid plan — will show error if free tier)
+    if config.FINNHUB_API_KEY:
+        try:
+            from connectors.news_connector import _fetch_events
+            raw = _fetch_events()
+            if raw:
+                traded = set(config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", []))
+                events = [e for e in raw if any(p in traded for p in e.get("pairs", []))]
+                panel, store = _render_news_panel(events)
+                return panel, store
+        except Exception:
+            pass
+
+    return html.Div(
+        "No upcoming events — ForexFactory calendar unavailable",
+        style={"color": "#8b949e", "fontSize": "0.72rem",
+               "padding": "0.4rem 0.6rem", "background": "#161b22",
+               "borderRadius": "4px", "border": "1px solid #30363d",
+               "marginTop": "0.3rem"},
+    ), _empty_store
+
+
+# ── News event detail modal ───────────────────────────────────────────────────
+
+_COUNTRY_NAMES = {
+    "USD": "United States", "EUR": "Europe",     "GBP": "United Kingdom",
+    "JPY": "Japan",         "CAD": "Canada",      "AUD": "Australia",
+    "NZD": "New Zealand",   "CHF": "Switzerland",
+}
+_COUNTRY_FLAGS = {
+    "USD": "🇺🇸", "EUR": "🇪🇺", "GBP": "🇬🇧", "JPY": "🇯🇵",
+    "CAD": "🇨🇦", "AUD": "🇦🇺", "NZD": "🇳🇿", "CHF": "🇨🇭",
+}
+
+
+def _news_detail_row(label: str, value):
+    return html.Div([
+        html.Span(label, style={"color": "#8b949e", "fontSize": "0.76rem",
+                                "minWidth": "90px", "display": "inline-block"}),
+        html.Span(value) if isinstance(value, str) else value,
+    ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.45rem"})
+
+
+@app.callback(
+    Output("news-event-modal",         "style"),
+    Output("news-event-modal-backdrop","style"),
+    Output("news-modal-title",         "children"),
+    Output("news-modal-time",          "children"),
+    Output("news-modal-content",       "children"),
+    Input({"type": "news-row", "index": ALL}, "n_clicks"),
+    Input("news-modal-close-btn",           "n_clicks"),
+    Input("news-event-modal-backdrop",      "n_clicks"),
+    State("news-events-store", "data"),
+    prevent_initial_call=True,
+)
+def show_news_event_detail(row_clicks, _close, _backdrop, events):
+    _show = {
+        "display": "block", "position": "fixed",
+        "top": "50%", "left": "50%",
+        "transform": "translate(-50%, -50%)",
+        "background": "#161b22", "border": "1px solid #30363d",
+        "borderRadius": "8px", "padding": "1.25rem 1.5rem",
+        "zIndex": 3001, "minWidth": "420px", "maxWidth": "540px",
+        "boxShadow": "0 8px 32px rgba(0,0,0,0.75)",
+        "fontFamily": "'IBM Plex Sans', sans-serif",
+    }
+    _hide      = {**_show, "display": "none"}
+    _back_show = {"display": "block", "position": "fixed", "top": 0, "left": 0,
+                  "width": "100%", "height": "100%",
+                  "background": "rgba(0,0,0,0.5)", "zIndex": 3000}
+    _back_hide = {**_back_show, "display": "none"}
+
+    ctx = callback_context
+    if not ctx.triggered:
+        return no_update, no_update, no_update, no_update, no_update
+
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    if triggered in ("news-modal-close-btn", "news-event-modal-backdrop"):
+        return _hide, _back_hide, no_update, no_update, no_update
+
+    # News row clicked — identify index
+    try:
+        tid = json.loads(triggered)
+        idx = int(tid.get("index", 0))
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return no_update, no_update, no_update, no_update, no_update
+
+    if not any(row_clicks):
+        return no_update, no_update, no_update, no_update, no_update
+
+    ev_list = events or []
+    if idx >= len(ev_list):
+        return no_update, no_update, no_update, no_update, no_update
+
+    ev     = ev_list[idx]
+    impact = ev.get("impact", "low")
+    impact_col = _IMPACT_COLORS.get(impact, "#8b949e")
+    imp_text_col = "#000" if impact == "medium" else "#fff"
+    country  = ev.get("country", "") or ev.get("currency", "")
+    flag     = _COUNTRY_FLAGS.get(country, "")
+    cname    = _COUNTRY_NAMES.get(country, country)
+    currency = ev.get("currency", country)
+    previous = ev.get("previous", "") or "—"
+    consensus = ev.get("consensus", "") or ev.get("forecast", "") or "—"
+    actual   = ev.get("actual", "") or "—"
+
+    actual_style = {"color": "#e6edf3", "fontSize": "0.80rem"}
+    if ev.get("actual"):
+        actual_style = {**actual_style,
+                        "background": "rgba(255,100,100,0.18)",
+                        "padding": "1px 7px", "borderRadius": "3px"}
+
+    content = html.Div([
+        # Details column
+        html.Div([
+            html.Div("Details", style={"color": "#adbac7", "fontWeight": 700,
+                                        "fontSize": "0.80rem", "marginBottom": "0.6rem",
+                                        "borderBottom": "1px solid #21262d",
+                                        "paddingBottom": "0.3rem"}),
+            _news_detail_row("Impact:", html.Span(impact.upper(), style={
+                "background": impact_col, "color": imp_text_col,
+                "padding": "2px 8px", "borderRadius": "3px",
+                "fontSize": "0.72rem", "fontWeight": 700})),
+            _news_detail_row("Country:", f"{cname} {flag}"),
+            _news_detail_row("Currency:", currency),
+        ], style={"flex": 1, "background": "#0d1117", "borderRadius": "6px",
+                  "padding": "0.75rem 0.9rem", "border": "1px solid #21262d"}),
+
+        # Latest Release column
+        html.Div([
+            html.Div("Latest Release", style={"color": "#adbac7", "fontWeight": 700,
+                                               "fontSize": "0.80rem", "marginBottom": "0.6rem",
+                                               "borderBottom": "1px solid #21262d",
+                                               "paddingBottom": "0.3rem"}),
+            _news_detail_row("Previous:", html.Span(previous, style={
+                "color": "#e6edf3", "fontSize": "0.80rem"})),
+            _news_detail_row("Consensus:", html.Span(consensus, style={
+                "color": "#e6edf3", "fontSize": "0.80rem"})),
+            _news_detail_row("Actual:", html.Span(actual, style=actual_style)),
+        ], style={"flex": 1, "background": "#0d1117", "borderRadius": "6px",
+                  "padding": "0.75rem 0.9rem", "border": "1px solid #21262d"}),
+    ], style={"display": "flex", "gap": "0.75rem"})
+
+    return _show, _back_show, ev.get("event", ""), ev.get("time", ""), content
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

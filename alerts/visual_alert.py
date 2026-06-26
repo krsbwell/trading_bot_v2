@@ -54,10 +54,17 @@ def build_alert_overlay(signal: dict, countdown: int) -> html.Div:
     }
     mono = {"fontFamily": "'JetBrains Mono', monospace"}
 
+    # Browser-side audio — plays in the browser regardless of server pygame state.
+    # autoPlay fires when the component first mounts (i.e. when the overlay appears).
+    audio_file = "/assets/alert_long.wav" if is_long else "/assets/alert_short.wav"
+
     return html.Div(
         id="alert-overlay",
         style=overlay_style,
         children=[
+            # Hidden audio element — browser plays this automatically
+            html.Audio(src=audio_file, autoPlay=True, style={"display": "none"}),
+
             html.Div(style=card_style, children=[
 
                 # ── Header ────────────────────────────────────────────────
