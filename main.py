@@ -597,10 +597,11 @@ def _init_connectors() -> tuple:
         try:
             oanda = OandaConnector()
             # Quick connectivity test — fetch 1 candle
-            test_df = oanda.get_candles("EUR_USD", "H1", 1)
+            _test_pair = config.FOREX_PAIRS[0]
+            test_df = oanda.get_candles(_test_pair, "H1", 1)
             state.update(oanda_ok=True)
-            logger.info("✓ Oanda  connected (%s)  last EUR_USD close=%.5f",
-                        config.OANDA_ENV, test_df["close"].iloc[-1] if not test_df.empty else 0)
+            logger.info("✓ Oanda  connected (%s)  last %s close=%.5f",
+                        config.OANDA_ENV, _test_pair, test_df["close"].iloc[-1] if not test_df.empty else 0)
         except Exception as exc:
             state.update(oanda_ok=False)
             logger.error("✗ Oanda  connection FAILED: %s", exc)

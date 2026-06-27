@@ -1186,5 +1186,3 @@ def learning_panel(
         ))
 
     return html.Div(sections)
-
-    return html.Div([summary, chart, table])

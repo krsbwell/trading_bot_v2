@@ -52,6 +52,10 @@
     let circleDrag = null;   // { type:'move'|'resize', idx, ... } — while editing
     let _circlePreviewEl = null;
 
+    /* ── text label tool ────────────────────────────────────────────────── */
+    let textDrawings = [], textIdCtr = 0, selectedText = -1;
+    let textOverlay = null, textMove = null, _textInput = null;
+
     /* ── box / consolidation tools ───────────────────────────────────────── */
     let boxes = [], boxIdCtr = 0, boxOverlay = null;
     let boxDraw = null, boxResize = null, boxMove = null, selectedBox = -1;
@@ -265,7 +269,7 @@
         trendOverlay.style.cssText =
             'position:absolute;top:0;left:0;z-index:13;pointer-events:none;overflow:hidden;';
         trendOverlay.setAttribute('width', '100%');
-        trendOverlay.setAttribute('height', MAIN_H + 'px');
+        trendOverlay.setAttribute('height', TOTAL_H + 'px');
         el.style.position = 'relative';
         el.appendChild(trendOverlay);
         return trendOverlay;
@@ -451,7 +455,7 @@
     function updateAllTrendlines() { trendlines.forEach(updateTrendline); }
 
     function _selectTrend(idx) {
-        _deselectFib(); _deselectPos(); _deselectBox();
+        _deselectFib(); _deselectPos(); _deselectBox(); _deselectText();
         selectedTrend = idx;
         trendlines.forEach(updateTrendline);
     }
@@ -659,13 +663,14 @@
             var idx = boxes.findIndex(function(b) { return String(b.id) === String(wrap.dataset.boxId); });
             if (idx < 0) return;
             var b = boxes[idx];
+            _selectBox(idx);
+            _deselectTrend();
+            e.stopPropagation();
             if (b.locked) return;
-            e.stopPropagation(); e.preventDefault();
+            e.preventDefault();
             var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
             var r   = chartEl.getBoundingClientRect();
             var cX  = e.clientX - r.left, cY = e.clientY - r.top;
-            _selectBox(idx);
-            _deselectTrend();
             boxMove = { idx, startX:cX, startY:cY,
                 startTime:  _xToTimeExtrap(cX) || b.t1,
                 startPrice: _yToPrice(cY)       || b.p1,
@@ -884,17 +889,17 @@
     }
 
     function updateAllBoxes() { boxes.forEach(updateBox); }
-    function _selectBox(idx) { _deselectFib(); _deselectPos(); _deselectTrend(); selectedBox = idx; boxes.forEach(updateBox); }
+    function _selectBox(idx) { _deselectFib(); _deselectPos(); _deselectTrend(); _deselectText(); selectedBox = idx; boxes.forEach(updateBox); }
     function _deselectBox()  { selectedBox = -1;  boxes.forEach(updateBox); }
 
     function _selectFib(idx) {
-        _deselectBox(); _deselectTrend(); selectedPos = -1;
+        _deselectBox(); _deselectTrend(); _deselectText(); selectedPos = -1;
         selectedFib = idx; fibs.forEach(updateFib);
     }
     function _deselectFib() { if (selectedFib < 0) return; selectedFib = -1; fibs.forEach(updateFib); }
 
     function _selectPos(idx) {
-        _deselectBox(); _deselectTrend(); selectedFib = -1;
+        _deselectBox(); _deselectTrend(); _deselectText(); selectedFib = -1;
         selectedPos = idx; positions.forEach(updatePos);
     }
     function _deselectPos() { if (selectedPos < 0) return; selectedPos = -1; positions.forEach(updatePos); }
@@ -1097,7 +1102,7 @@
         posOverlay.id = 'apex-pos-overlay';
         posOverlay.style.cssText =
             'position:absolute;top:0;left:0;pointer-events:none;z-index:15;' +
-            'width:100%;height:' + MAIN_H + 'px;overflow:visible;';
+            'width:100%;height:' + TOTAL_H + 'px;overflow:visible;';
         el.style.position = 'relative';
         el.appendChild(posOverlay);
         return posOverlay;
@@ -1147,8 +1152,8 @@
         wrap.className = 'apex-pos';
         wrap.dataset.posId = pos.id;
         wrap.style.cssText =
-            'position:absolute;top:0;height:' + MAIN_H + 'px;' +
-            'pointer-events:none;overflow:hidden;';
+            'position:absolute;top:0;height:' + TOTAL_H + 'px;' +
+            'pointer-events:none;overflow:visible;';
 
         var pZone  = document.createElement('div');
         pZone.style.cssText = 'position:absolute;left:0;right:0;pointer-events:none;box-sizing:border-box;';
@@ -1718,6 +1723,227 @@
         } catch(e) {}
     }
 
+    /* ═══════════════════════════════════════════════════════════════════════
+       TEXT LABEL TOOL
+       ═══════════════════════════════════════════════════════════════════════ */
+
+    function _textKey() { return 'apex_texts_' + _currentPair; }
+
+    function saveTexts() {
+        try {
+            localStorage.setItem(_textKey(), JSON.stringify(
+                textDrawings.map(function(t) {
+                    return { time:t.time, price:t.price, content:t.content,
+                             color:t.color, fontSize:t.fontSize, bold:t.bold, locked:t.locked||false };
+                })
+            ));
+        } catch(e) {}
+    }
+
+    function loadTexts() {
+        try {
+            var raw = localStorage.getItem(_textKey()); if (!raw) return;
+            JSON.parse(raw).forEach(function(d) {
+                try {
+                    var obj = { id:textIdCtr++, time:d.time, price:d.price,
+                                content:d.content||'', color:d.color||'#ffffff',
+                                fontSize:d.fontSize||14, bold:d.bold||false, locked:d.locked||false };
+                    textDrawings.push(obj);
+                    buildTextEl(obj);
+                } catch(e) {}
+            });
+        } catch(e) {}
+    }
+
+    function ensureTextOverlay() {
+        var el = document.getElementById('tvlw-chart'); if (!el) return null;
+        if (textOverlay && textOverlay.parentNode === el) return textOverlay;
+        textOverlay = document.createElement('div');
+        textOverlay.id = 'apex-text-overlay';
+        textOverlay.style.cssText =
+            'position:absolute;top:0;left:0;pointer-events:none;z-index:16;' +
+            'width:100%;height:100%;overflow:visible;';
+        el.appendChild(textOverlay);
+        return textOverlay;
+    }
+
+    function buildTextEl(t) {
+        var ov = ensureTextOverlay(); if (!ov) return;
+
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'position:absolute;pointer-events:none;';
+
+        var textEl = document.createElement('div');
+        textEl.className = 'apex-text-label';
+        textEl.style.cssText =
+            'display:inline-block;pointer-events:auto;cursor:move;white-space:pre;' +
+            'font-family:sans-serif;padding:2px 5px;border-radius:2px;' +
+            'text-shadow:0 1px 3px rgba(0,0,0,0.9);user-select:none;';
+
+        textEl.addEventListener('mousedown', function(e) {
+            if (drawMode) return;
+            var idx = textDrawings.indexOf(t); if (idx < 0) return;
+            _selectText(idx);
+            e.stopPropagation();
+            if (t.locked) return;
+            e.preventDefault();
+            var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
+            var r = chartEl.getBoundingClientRect();
+            textMove = { idx:idx,
+                startX: e.clientX - r.left, startY: e.clientY - r.top,
+                origTime: t.time, origPrice: t.price };
+            try { chart.applyOptions({ handleScroll:false, handleScale:false }); } catch(ex) {}
+        });
+        textEl.addEventListener('dblclick', function(e) {
+            e.stopPropagation();
+            var idx = textDrawings.indexOf(t); if (idx < 0) return;
+            _startTextEdit(t, e.clientX, e.clientY);
+        });
+
+        var delBtn = document.createElement('div');
+        delBtn.textContent = '×';
+        delBtn.style.cssText =
+            'position:absolute;top:-8px;right:-8px;z-index:22;color:#ccc;font-size:13px;' +
+            'cursor:pointer;pointer-events:auto;background:rgba(13,17,23,0.88);' +
+            'width:16px;height:16px;line-height:16px;text-align:center;' +
+            'border-radius:50%;border:1px solid #555;display:none;';
+        delBtn.addEventListener('mousedown', function(e) { e.stopImmediatePropagation(); e.preventDefault(); });
+        delBtn.addEventListener('mouseup', function(e) {
+            e.stopImmediatePropagation(); e.preventDefault();
+            var idx = textDrawings.indexOf(t);
+            if (idx >= 0) delText(idx);
+        });
+
+        wrap.appendChild(textEl); wrap.appendChild(delBtn);
+        ov.appendChild(wrap);
+        t.el = wrap; t.textEl = textEl; t.delBtn = delBtn;
+        updateText(t);
+    }
+
+    function updateText(t) {
+        if (!t.el || !chart || !S.candle) return;
+        var x = _timeToXExtrap(t.time);
+        var y = _priceToY(t.price);
+        if (x == null || y == null) { t.el.style.display = 'none'; return; }
+        var chartEl = document.getElementById('tvlw-chart');
+        var chartW  = chartEl ? chartEl.clientWidth - psWidth() : 800;
+        if (x < -200 || x > chartW + 200) { t.el.style.display = 'none'; return; }
+        t.el.style.display = 'block';
+        t.el.style.left = x + 'px';
+        t.el.style.top  = y + 'px';
+        t.textEl.textContent  = t.content || '';
+        t.textEl.style.color      = t.color || '#ffffff';
+        t.textEl.style.fontSize   = (t.fontSize || 14) + 'px';
+        t.textEl.style.fontWeight = t.bold ? '700' : '400';
+        var isSel = (selectedText === textDrawings.indexOf(t));
+        t.textEl.style.cursor     = t.locked ? 'default' : 'move';
+        t.textEl.style.outline    = isSel ? '1px dashed ' + (t.color || '#ffffff') : 'none';
+        t.textEl.style.background = isSel ? 'rgba(255,255,255,0.07)' : 'none';
+        if (t.delBtn) t.delBtn.style.display = (isSel && !t.locked) ? '' : 'none';
+    }
+
+    function updateAllTexts() { textDrawings.forEach(updateText); }
+
+    function _selectText(idx) {
+        _deselectBox(); _deselectTrend(); _deselectFib(); _deselectPos(); _deselectCircle();
+        deselectDrawing();
+        selectedText = idx;
+        textDrawings.forEach(updateText);
+    }
+    function _deselectText() {
+        if (selectedText < 0) return;
+        selectedText = -1;
+        textDrawings.forEach(updateText);
+    }
+
+    function delText(idx) {
+        var t = textDrawings[idx]; if (!t) return;
+        if (t.el && t.el.parentNode) t.el.parentNode.removeChild(t.el);
+        textDrawings.splice(idx, 1);
+        if (selectedText === idx) selectedText = -1;
+        else if (selectedText > idx) selectedText--;
+        saveTexts();
+    }
+
+    function addText(time, price, content, color, fontSize, bold, existingId) {
+        var ov = ensureTextOverlay(); if (!ov) return;
+        var id = (existingId != null) ? existingId : textIdCtr++;
+        if (id >= textIdCtr) textIdCtr = id + 1;
+        var t = { id:id, time:time, price:price, content:content||'',
+                  color:color||drawColor||'#ffffff', fontSize:fontSize||14,
+                  bold:bold||false, locked:false };
+        textDrawings.push(t);
+        buildTextEl(t);
+        _selectText(textDrawings.length - 1);
+        saveTexts();
+    }
+
+    /* ── Inline text input ───────────────────────────────────────────────── */
+    function _startTextInput(time, price, screenX, screenY) {
+        _commitTextInput();
+        var inp = document.createElement('textarea');
+        inp.rows = 1;
+        inp.placeholder = 'Type text… Enter to place, Shift+Enter for new line';
+        inp.style.cssText =
+            'position:fixed;z-index:99999;resize:both;min-width:180px;max-width:420px;' +
+            'left:' + screenX + 'px;top:' + (screenY - 12) + 'px;' +
+            'font-family:sans-serif;font-size:14px;color:#ffffff;' +
+            'background:rgba(13,17,23,0.94);border:1px solid #ffd700;' +
+            'border-radius:4px;padding:5px 9px;outline:none;';
+        document.body.appendChild(inp);
+        inp.focus();
+        _textInput = { inp:inp, time:time, price:price, editing:null };
+        inp.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') { _cancelTextInput(); return; }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _commitTextInput(); }
+        });
+        inp.addEventListener('blur', function() { setTimeout(_commitTextInput, 150); });
+    }
+
+    function _startTextEdit(t, screenX, screenY) {
+        _commitTextInput();
+        var inp = document.createElement('textarea');
+        inp.value = t.content || '';
+        inp.rows = Math.max(1, (t.content || '').split('\n').length);
+        inp.style.cssText =
+            'position:fixed;z-index:99999;resize:both;min-width:180px;max-width:420px;' +
+            'left:' + screenX + 'px;top:' + (screenY - 12) + 'px;' +
+            'font-family:sans-serif;font-size:' + (t.fontSize||14) + 'px;' +
+            'color:' + (t.color||'#ffffff') + ';' +
+            'background:rgba(13,17,23,0.94);border:1px solid #ffd700;' +
+            'border-radius:4px;padding:5px 9px;outline:none;';
+        document.body.appendChild(inp);
+        inp.focus(); inp.select();
+        _textInput = { inp:inp, time:t.time, price:t.price, editing:t };
+        inp.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') { _cancelTextInput(); return; }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _commitTextInput(); }
+        });
+        inp.addEventListener('blur', function() { setTimeout(_commitTextInput, 150); });
+    }
+
+    function _cancelTextInput() {
+        if (!_textInput) return;
+        if (_textInput.inp && _textInput.inp.parentNode)
+            _textInput.inp.parentNode.removeChild(_textInput.inp);
+        _textInput = null;
+    }
+
+    function _commitTextInput() {
+        if (!_textInput) return;
+        var content  = (_textInput.inp ? _textInput.inp.value : '').trim();
+        var time     = _textInput.time, price = _textInput.price;
+        var editing  = _textInput.editing;
+        _cancelTextInput();
+        if (editing) {
+            if (content) { editing.content = content; updateText(editing); saveTexts(); }
+            else { var idx = textDrawings.indexOf(editing); if (idx >= 0) delText(idx); }
+            return;
+        }
+        if (!content) return;
+        addText(time, price, content, drawColor, 14, false);
+    }
+
     function buildCircleEl(c) {
         var svg = ensureTrendOverlay(); if (!svg) return;
         var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
@@ -1869,6 +2095,7 @@
 
     function _selectCircle(idx) {
         if (selectedCircle >= 0) _deselectCircle();
+        _deselectText();
         selectedCircle = idx;
         updateCircle(circles[idx]);
     }
@@ -1984,6 +2211,7 @@
 
     function selectDrawing(idx) {
         if (selectedIdx >= 0) deselectDrawing();
+        _deselectText();
         var d = drawings[idx]; selectedIdx = idx; d._selected = true;
         if (d.type === 'h-line') updateHLine(d);
     }
@@ -2660,7 +2888,7 @@
     function _startAutoSave() {
         _stopAutoSave();
         _autoSaveTimer = setInterval(function() {
-            saveDrawings(); saveTrendlines(); saveBoxes(); savePos(); saveFibs();
+            saveDrawings(); saveTrendlines(); saveBoxes(); savePos(); saveFibs(); saveTexts();
         }, 60000);
     }
 
@@ -2720,6 +2948,13 @@
         /* Circles — stored in trend overlay (removed above with trendOverlay) */
         circles = []; selectedCircle = -1; circleDraw = null; circleDrag = null;
         _circlePreviewEl = null;
+
+        /* Text labels */
+        _cancelTextInput();
+        textDrawings.forEach(function(t){ if (t.el&&t.el.parentNode) t.el.parentNode.removeChild(t.el); });
+        textDrawings = []; selectedText = -1; textMove = null;
+        if (textOverlay && textOverlay.parentNode) textOverlay.parentNode.removeChild(textOverlay);
+        textOverlay = null;
 
         /* Trade SVG lines — also in trend overlay */
         _tradeSvgLines = []; _liveTradeData = []; tradeDrag = null;
@@ -2806,13 +3041,13 @@
             });
         } catch(e) {}
 
-        loadDrawings(); loadTrendlines(); loadPos(); loadBoxes(); loadFibs(); loadCircles();
+        loadDrawings(); loadTrendlines(); loadPos(); loadBoxes(); loadFibs(); loadCircles(); loadTexts();
         _startAutoSave();
 
         try {
             chart.timeScale().subscribeVisibleLogicalRangeChange(function() {
                 updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines();
-                updateAllCircles(); _updateAllTradeSvgLines();
+                updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts();
             });
             /* Save zoom (time range) whenever the user scrolls/zooms, keyed per pair+TF */
             chart.timeScale().subscribeVisibleTimeRangeChange(function(range) {
@@ -2830,6 +3065,7 @@
                 if (drawings.length > 0)        updateAllHLines();
                 if (circles.length > 0)         updateAllCircles();
                 if (_tradeSvgLines.length > 0)  _updateAllTradeSvgLines();
+                if (textDrawings.length > 0)    updateAllTexts();
             });
         } catch(e) {}
 
@@ -2934,6 +3170,15 @@
                 return;
             }
 
+            /* Text label — single click to place */
+            if (drawMode === 'text') {
+                var tTime = _xToTimeExtrap(chartX), tPrice = _yToPrice(chartY);
+                if (!tTime || !tPrice) return;
+                e.stopPropagation(); e.preventDefault();
+                _startTextInput(tTime, tPrice, e.clientX, e.clientY);
+                return;
+            }
+
             if (drawMode) return;
 
             /* Deselect all overlays when clicking neutral area */
@@ -2942,6 +3187,7 @@
             _deselectFib();
             _deselectPos();
             _deselectCircle();
+            _deselectText();
 
             var price=null, time=null;
             try { price = S.candle.coordinateToPrice(chartY); } catch(err) {}
@@ -2960,6 +3206,16 @@
         };
 
         var _onMove = function(e) {
+            if (textMove) {
+                var rtm = el.getBoundingClientRect();
+                var cxm = e.clientX - rtm.left, cym = e.clientY - rtm.top;
+                var t = textDrawings[textMove.idx]; if (!t) return;
+                var newTime  = _xToTimeExtrap(cxm) || textMove.origTime;
+                var newPrice = _yToPrice(cym)       || textMove.origPrice;
+                t.time = newTime; t.price = newPrice;
+                updateText(t);
+                e.stopPropagation(); e.preventDefault(); return;
+            }
             if (posDrag || boxResize || boxMove || trendResize || trendMove) return;
             if (boxDraw) {
                 var r0 = el.getBoundingClientRect();
@@ -3036,6 +3292,12 @@
         };
 
         var _onUp = function(e) {
+            if (textMove) {
+                var t = textDrawings[textMove.idx];
+                if (t) saveTexts();
+                textMove = null;
+                try { chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex) {}
+            }
             if (isDragging) {
                 saveDrawings();
                 try { chart.applyOptions({ handleScroll:true, handleScale:true }); } catch(ex) {}
@@ -3116,7 +3378,7 @@
                     }
                 } catch(e) {}
                 updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs();
-                updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines();
+                updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts();
             }
         }).observe(el);
 
@@ -3356,7 +3618,7 @@
         }
 
         _rebuildDetachedOverlays();
-        requestAnimationFrame(function(){ updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines(); });
+        requestAnimationFrame(function(){ updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts(); });
 
         /* Apply saved indicator visual settings after data loads */
         try { window._apexApplyIndSettings(data.ind_params || null); } catch(e) {}
@@ -3539,7 +3801,7 @@
         if (!drawMode) { deselectDrawing(); }
         var el = document.getElementById('tvlw-chart');
         if (el) {
-            el.style.cursor = drawMode ? 'crosshair' : 'default';
+            el.style.cursor = drawMode === 'text' ? 'text' : (drawMode ? 'crosshair' : 'default');
             el.classList.toggle('apex-draw-active', !!drawMode);
         }
         /* Inject once: while a new drawing is being placed, all existing drawing
@@ -3617,6 +3879,10 @@
             var d = drawings[selectedIdx];
             if (d) { d.locked = !d.locked; if (d.type === 'h-line') updateHLine(d); saveDrawings(); return true; }
         }
+        if (selectedText >= 0) {
+            var tx = textDrawings[selectedText];
+            if (tx) { tx.locked = !tx.locked; updateText(tx); saveTexts(); return true; }
+        }
         return false;
     };
 
@@ -3625,6 +3891,7 @@
         if (selectedBox >= 0)     { _dupBox(selectedBox); return true; }
         if (selectedCircle >= 0)  { _dupCircle(selectedCircle); return true; }
         if (selectedIdx >= 0)     { _dupHLine(selectedIdx); return true; }
+        if (selectedText >= 0)    { _dupText(selectedText); return true; }
         return false;
     };
 
@@ -3647,6 +3914,9 @@
 
         circles.forEach(function(c){ if (c.el&&c.el.parentNode) c.el.parentNode.removeChild(c.el); });
         circles = []; selectedCircle = -1; saveCircles();
+
+        textDrawings.forEach(function(t){ if (t.el&&t.el.parentNode) t.el.parentNode.removeChild(t.el); });
+        textDrawings = []; selectedText = -1; saveTexts();
     };
 
     /* Re-attach any SVG/div overlay elements that were orphaned by a Dash DOM update.
@@ -3691,6 +3961,15 @@
                 });
             }
         }
+        /* Text labels */
+        if (textDrawings.length > 0) {
+            var tov = ensureTextOverlay();
+            if (tov) {
+                textDrawings.forEach(function(t) {
+                    if (!t.el || !t.el.parentNode) { buildTextEl(t); }
+                });
+            }
+        }
     }
 
     window._apexUpdateChart = function(data) {
@@ -3704,7 +3983,7 @@
         if (chart && _lastPairTf !== null && pairTf !== _lastPairTf) {
             /* Save using the OLD _currentPair key before switching — prevents drawings
                from the previous pair contaminating the new pair's localStorage slot. */
-            saveDrawings(); saveTrendlines(); saveBoxes(); savePos(); saveFibs(); saveCircles();
+            saveDrawings(); saveTrendlines(); saveBoxes(); savePos(); saveFibs(); saveCircles(); saveTexts();
             destroy();
         }
 

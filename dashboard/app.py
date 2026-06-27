@@ -64,6 +64,7 @@ _DRAW_TOOL_META = [
     ("circle",    "○",   "Circle — click center and drag to set radius"),
     ("long-pos",  "↑ L", "Long Position — click chart to place entry"),
     ("short-pos", "↓ S", "Short Position — click chart to place entry"),
+    ("text",      "T",   "Text label — click to place text on chart"),
 ]
 _DRAW_TOOL_MODES = [m for m, _, _ in _DRAW_TOOL_META]
 

@@ -333,14 +333,13 @@ def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
       1. Primary: SL = mid_ema ± 1pip
       2. Validation: SL MUST be on the loss side of entry.
          If the mid EMA is on the wrong side (inverted), fall back to 1.5×ATR14.
-      3. Minimum distance: at least 25 pips from entry to filter noise stop-outs.
-         (Raised from 20 — backtest showed 20-pip SL is inside H1 candle noise on EURUSD)
+      3. Minimum distance: config.MIN_SL_PIPS from entry to filter noise stop-outs.
     """
     _, mid, _ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
     mid_val   = float(ema(df_h1["close"], mid).iloc[-1])
     entry     = float(df_h1["close"].iloc[-1])
     pip       = _get_pip(pair)
-    min_pips  = 25                     # minimum SL distance in pips (raised from 20)
+    min_pips  = config.MIN_SL_PIPS     # minimum SL distance in pips
     min_dist  = pip * min_pips
 
     if direction == "long":

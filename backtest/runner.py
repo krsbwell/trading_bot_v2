@@ -79,7 +79,7 @@ def _bt_sig_features(
     except Exception:
         _h4_trend = "neutral"
 
-    _was_sr = any(z.get("low", 0) <= entry <= z.get("high", 0) for z in (sr_zones or []))
+    _was_sr = any(z.get("lower", 0) <= entry <= z.get("upper", 0) for z in (sr_zones or []))
 
     return {
         "pair":                pair,
@@ -434,7 +434,7 @@ if __name__ == "__main__":
                         format="%(asctime)s  %(levelname)-8s  %(message)s")
 
     parser = argparse.ArgumentParser(description="Apex backtester")
-    parser.add_argument("--pair",    default="EUR_USD")
+    parser.add_argument("--pair",    default="USD_CAD")
     parser.add_argument("--bars",    type=int, default=2000)
     parser.add_argument("--balance", type=float, default=500.0)
     parser.add_argument("--output",  default="data/backtest_results.csv")

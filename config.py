@@ -4,18 +4,24 @@ load_dotenv()
 
 MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 
-# Active trading pairs — signal_log live analysis (2026-06-25)
+# Active trading pairs — updated 2026-06-26 after backtest review
 # USD_CAD: 52% win rate  — best performer, confirmed by backtest and live data
-# GBP_USD: 33% win rate  — acceptable with R:R
-# EUR_USD: 27% win rate  — marginal, kept under review
+# USD_CHF: 42% win rate  $+37.60  2.1% DD — confirmed; excellent R:R and low drawdown
+# GBP_CHF: 50% win rate  $+40.19  2.8% DD — promoted 2026-06-26; highest WR of all pairs tested
 # AUD_USD: 12% win rate  — removed; unacceptable live performance
-FOREX_PAIRS  = ["EUR_USD", "GBP_USD", "USD_CAD"]
+FOREX_PAIRS  = ["USD_CAD", "USD_CHF", "GBP_CHF"]
 
 # Pairs under monitoring — signals shown, NO trades opened
-# EUR_AUD: 37% win rate  $+34   — profitable but volatile equity curve, 6.5% DD
+# EUR_AUD: 38% win rate  $+72.86  9.1% DD — profitable but 9.1% max DD + clustered SL runs too volatile
+# GBP_USD: 33% win rate  — below break-even threshold; watching for improvement before re-activating
+# EUR_USD: 27% win rate  — structurally mismatched with EMA-bounce; strong trend pair
+# NZD_USD: 39% win rate  $+22.68  4.6% DD — profitable but full SL hits dominate; equity underwater too long
+# AUD_NZD: 19% win rate  -$23.38  6.6% DD — rejected; EMA-bounce has no edge on this cross
+# EUR_CHF: 43% win rate  $+4.94  1.7% DD — best DD of all pairs but only 7 trades/3mo; too few signals
+# GBP_CHF: 50% win rate  $+40.19  2.8% DD — promoted to active 2026-06-26
 # GBP_JPY: 17% win rate  $-51   — removed; spike-and-revert behaviour kills R:R without BE
 # USD_JPY: 48% win rate  $+1    — EMA-bounce doesn't suit JPY momentum
-FOREX_WATCH  = ["EUR_AUD"]
+FOREX_WATCH  = ["EUR_AUD", "GBP_USD", "EUR_USD", "NZD_USD", "EUR_CHF"]
 CRYPTO_PAIRS = []   # EMA-bounce is a forex mean-reversion strategy — does not suit crypto trending behaviour
                     # BTC: 19% win rate, -$149 P&L, 29.6% DD | ETH: -$6.96 | both removed after backtest
 
@@ -50,7 +56,7 @@ ATR_MAX_PIPS = 35    # Skip signals during extreme volatility (ATR > 35 pips)
 H4_GATE_BLOCKING = True   # Hard-block counter-trend signals (True) vs diagnostic-only (False)
 
 # ── Minimum SL distance ───────────────────────────────────────────────────────
-MIN_SL_PIPS = 8     # Widen SL to this minimum if strategy places it tighter
+MIN_SL_PIPS = 25    # Minimum SL distance in pips — 25 validated by backtest (20 caught H1 noise)
 
 # ── Breakeven buffer ──────────────────────────────────────────────────────────
 # After TP1 is hit, SL moves to entry + this many pips in profit direction.

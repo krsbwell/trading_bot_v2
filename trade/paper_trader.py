@@ -414,6 +414,7 @@ class PaperTrader:
             label.upper(), t["direction"].upper(), t["pair"],
             price, units, pnl, self.balance,
         )
+        self._save_state()
 
     def _close_remaining(self, t: dict, price: float, reason: str) -> bool:
         if t["remaining"] > 0:
@@ -549,12 +550,13 @@ class PaperTrader:
     # ── Manual close (dashboard CLOSE button) ─────────────────────────────────
 
     def manual_close(self, trade_id: str, exit_price: float) -> bool:
-        for i, t in enumerate(self.open_trades):
-            if t["id"] == trade_id:
-                self._close_remaining(t, exit_price, "manual")
-                self.open_trades.pop(i)
-                self._save_state()
-                return True
+        with self._lock:
+            for i, t in enumerate(self.open_trades):
+                if t["id"] == trade_id:
+                    self._close_remaining(t, exit_price, "manual")
+                    self.open_trades.pop(i)
+                    self._save_state()
+                    return True
         return False
 
     # ── Account ───────────────────────────────────────────────────────────────
