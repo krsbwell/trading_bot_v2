@@ -238,6 +238,17 @@ def _process_pair(pair: str, market: str, engine) -> None:
         """Stamp the signal detail with a trade_blocked_reason for the dashboard."""
         state.update_signal_detail(pair, {**signal, "trade_blocked_reason": reason})
 
+    # ── ML tiered gate ───────────────────────────────────────────────────────
+    # Signals scoring 55–64 are marginal — only trade when ML backs them up.
+    # Signals 65+ have demonstrated edge regardless of ML probability.
+    # Gate is skipped when ML model hasn't trained yet (ml_prob is None).
+    if score < 65 and ml_prob is not None:
+        if ml_prob < 0.50:
+            _ml_reason = f"ML gate: P(win)={ml_prob:.2f} below 0.50 for score {score}"
+            logger.info("ML GATE BLOCKED: %s %s — %s", pair, signal["direction"], _ml_reason)
+            _block(_ml_reason)
+            return
+
     # ── Gate-blocked signals (H4 counter-trend / ATR out of range) ──────────
     if signal.get("gate_blocked"):
         logger.info(
@@ -245,6 +256,25 @@ def _process_pair(pair: str, market: str, engine) -> None:
             pair, signal["direction"], score, signal["gate_blocked"],
         )
         _block(f"Gate: {signal['gate_blocked']}")
+        return
+
+    # ── Trending structure filter ─────────────────────────────────────────────
+    # EMA bounce is a mean-reversion strategy — it has 0% historical WR in
+    # trending markets (uptrend: 0/9, downtrend: 0/3 in signal_log).
+    _mkt_struct = signal.get("market_structure", "")
+    if _mkt_struct in ("uptrend", "downtrend"):
+        _struct_reason = f"Trending structure ({_mkt_struct}) — EMA bounce has no edge in trends"
+        logger.info("STRUCTURE BLOCKED: %s %s score=%d — %s", pair, signal["direction"], score, _struct_reason)
+        _audit_blocked(
+            pair=pair, timeframe=signal.get("timeframe", "H1"),
+            direction=signal["direction"],
+            ema_score=signal.get("ema_score", 0),
+            structure_score=signal.get("structure_score", 0),
+            pa_score=signal.get("pa_score", 0),
+            confluence_score=score,
+            result="BLOCKED", reject_reason=_struct_reason,
+        )
+        _block(_struct_reason)
         return
 
     # ── Session filter: only open trades during London / NY overlap ──────────

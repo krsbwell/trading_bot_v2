@@ -76,14 +76,20 @@ def generate_suggestions(
 
     # ── 2. Pair win rate ──────────────────────────────────────────────────────
     if "pair" in df.columns:
+        from engine.adaptive_params import adaptive_params as _ap
         for pair, group in df.groupby("pair"):
             if len(group) < min_trades:
                 continue
             wr = (group["outcome"] == "win").mean()
             if wr < 0.40:
+                # Auto-tighten signal thresholds for this pair via force_tier.
+                # This closes the loop: signal_log insight → adaptive params update,
+                # without waiting for enough trade_close events.
+                changed = _ap.force_tier(pair, wr)
+                auto_note = " Auto-tightened signal thresholds." if changed else ""
                 suggestions.append(_card(
                     "warning",
-                    f"{pair} has only {wr:.0%} win rate over {len(group)} trades — consider pausing or reducing size.",
+                    f"{pair} has only {wr:.0%} win rate over {len(group)} trades — consider pausing or reducing size.{auto_note}",
                 ))
 
     # ── 3. CCI threshold optimisation ────────────────────────────────────────

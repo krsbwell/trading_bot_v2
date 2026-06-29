@@ -35,7 +35,7 @@ NUMERIC_FEATURES = [
     "candle_body_ratio", "upper_wick_ratio", "lower_wick_ratio",
     "cci_at_signal", "macd_hist_at_signal",
     "was_at_sr_zone", "bos_confirmed",
-    "atr_pips",
+    "atr_pips", "hour_utc",
 ]
 
 # Categorical features — label-encoded at training/prediction time

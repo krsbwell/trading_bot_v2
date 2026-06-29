@@ -116,6 +116,38 @@ class AdaptiveParams:
         )
         return changed
 
+    def force_tier(self, pair: str, win_rate: float) -> bool:
+        """
+        Apply the appropriate tier for `pair` based on `win_rate` without
+        requiring closed trades. Called by the feedback loop when signal_log
+        data reveals a clear win-rate pattern before enough trade_closes exist.
+        Returns True if params changed.
+        """
+        params = dict(BASE_PARAMS)
+        for lo, hi, tier_params in _TIERS:
+            if lo <= win_rate < hi:
+                params = dict(tier_params)
+                break
+
+        prev = self._state.get(pair, {}).get("params", BASE_PARAMS)
+        changed = params != prev
+
+        entry = self._state.get(pair, {})
+        entry["params"] = params
+        entry["win_rate"] = round(win_rate, 4)
+        entry.setdefault("n_recent", 0)
+        entry.setdefault("n_trades_at_last_fit", 0)
+        self._state[pair] = entry
+        self._save()
+
+        if changed:
+            logger.info(
+                "AdaptiveParams.force_tier %s  wr=%.0f%%  cci=±%d  band=%.2f×ATR  macd=%d-of-3  [feedback-driven]",
+                pair, win_rate * 100, params["cci_threshold"],
+                params["touch_band_mult"], params["macd_bars_needed"],
+            )
+        return changed
+
     def summary(self) -> dict:
         """All pairs' current adaptive state — for dashboard display."""
         return {

@@ -33,7 +33,7 @@ SIGNAL_FIELDS = [
     "atr_pips", "h4_trend", "d_trend",
     "market_structure", "was_at_sr_zone", "bos_confirmed",
     "ml_win_prob_at_entry", "outcome", "pnl_pips", "pnl_dollar",
-    "hold_hours", "session",
+    "hold_hours", "session", "hour_utc",
 ]
 
 # In-memory store: trade_id → {signal, position_size, risk_dollar, open_time}
@@ -184,6 +184,7 @@ def _build_row(
         "pnl_dollar":           round(pnl_dollar, 2),
         "hold_hours":           round(hold_hours, 2),
         "session":              _get_session(timestamp),
+        "hour_utc":             timestamp.hour,
     }
 
 

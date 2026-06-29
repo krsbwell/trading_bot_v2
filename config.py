@@ -12,7 +12,6 @@ MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 FOREX_PAIRS  = ["USD_CAD", "USD_CHF", "GBP_CHF"]
 
 # Pairs under monitoring — signals shown, NO trades opened
-# EUR_AUD: 38% win rate  $+72.86  9.1% DD — profitable but 9.1% max DD + clustered SL runs too volatile
 # GBP_USD: 33% win rate  — below break-even threshold; watching for improvement before re-activating
 # EUR_USD: 27% win rate  — structurally mismatched with EMA-bounce; strong trend pair
 # NZD_USD: 39% win rate  $+22.68  4.6% DD — profitable but full SL hits dominate; equity underwater too long
@@ -21,7 +20,8 @@ FOREX_PAIRS  = ["USD_CAD", "USD_CHF", "GBP_CHF"]
 # GBP_CHF: 50% win rate  $+40.19  2.8% DD — promoted to active 2026-06-26
 # GBP_JPY: 17% win rate  $-51   — removed; spike-and-revert behaviour kills R:R without BE
 # USD_JPY: 48% win rate  $+1    — EMA-bounce doesn't suit JPY momentum
-FOREX_WATCH  = ["EUR_AUD", "GBP_USD", "EUR_USD", "NZD_USD", "EUR_CHF"]
+# EUR_AUD: removed 2026-06-29 — 9.1% max DD too volatile; signals were watch-only and scoring below threshold
+FOREX_WATCH  = ["GBP_USD", "EUR_USD", "NZD_USD", "EUR_CHF"]
 CRYPTO_PAIRS = []   # EMA-bounce is a forex mean-reversion strategy — does not suit crypto trending behaviour
                     # BTC: 19% win rate, -$149 P&L, 29.6% DD | ETH: -$6.96 | both removed after backtest
 
