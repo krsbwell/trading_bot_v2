@@ -2,7 +2,7 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
 body {
-    background-color: #DBDBDB;
+    background-color: #0d1117;
     color: #e6edf3;
     font-family: 'IBM Plex Sans', sans-serif;
     margin: 0;
@@ -141,6 +141,30 @@ body {
 #draw-style-panel input[type="color"]::-webkit-color-swatch {
     border: none;
     border-radius: 2px;
+}
+
+/* ── Drawing settings modal ─────────────────────────────────────── */
+#apex-drawing-settings {
+    user-select: none;
+}
+#apex-drawing-settings button {
+    font-family: 'IBM Plex Sans', sans-serif;
+    cursor: pointer;
+}
+#apex-drawing-settings input[type="color"] {
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0;
+    border-radius: 3px;
+    cursor: pointer;
+}
+#apex-drawing-settings input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+#apex-drawing-settings input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
+#apex-drawing-settings input[type="range"] { cursor: pointer; }
+#apex-drawing-settings input[type="text"]:focus,
+#apex-drawing-settings input[type="number"]:focus {
+    border-color: #58a6ff !important;
+    box-shadow: 0 0 0 2px rgba(88,166,255,0.2);
 }
 
 /* ── Shutdown panel ─────────────────────────────────────────────── */

@@ -373,6 +373,9 @@
 
     function updateTrendline(t) {
         if (!t.el || !chart || !S.candle) return;
+        if (t.visibility && t.visibility.length > 0 && t.visibility.indexOf(_currentTf) < 0) {
+            t.el.setAttribute('display', 'none'); return;
+        }
         /* Keep the SVG viewport clipped to the chart area, excluding the price scale */
         var _tEl = document.getElementById('tvlw-chart');
         if (_tEl && trendOverlay) {
@@ -582,7 +585,8 @@
             localStorage.setItem(_trendKey(), JSON.stringify(
                 trendlines.map(function(t) {
                     return { id:t.id, t1:t.t1, p1:t.p1, t2:t.t2, p2:t.p2,
-                             color:t.color, width:t.width, style:t.style, locked:t.locked };
+                             color:t.color, width:t.width, style:t.style, locked:t.locked,
+                             customLabel:t.customLabel||'', visibility:t.visibility||[] };
                 })
             ));
         } catch(e) {}
@@ -608,8 +612,9 @@
                 return;
             }
             JSON.parse(raw).forEach(function(d) {
-                addTrendline(d.t1, d.p1, d.t2, d.p2,
+                var t = addTrendline(d.t1, d.p1, d.t2, d.p2,
                              d.color, d.width, d.style||'solid', d.locked||false, d.id);
+                if (t) { t.customLabel = d.customLabel||''; t.visibility = d.visibility||[]; }
             });
         } catch(e) {}
     }
@@ -783,6 +788,9 @@
 
     function updateBox(box) {
         if (!box.el || !chart || !S.candle) return;
+        if (box.visibility && box.visibility.length > 0 && box.visibility.indexOf(_currentTf) < 0) {
+            box.el.style.display = 'none'; return;
+        }
         var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
 
         var x1r = _timeToXExtrap(box.t1), x2r = _timeToXExtrap(box.t2);
@@ -1075,7 +1083,7 @@
             boxes.map(function(b){ return { id:b.id, t1:b.t1, p1:b.p1, t2:b.t2, p2:b.p2,
                 color:b.color, borderWidth:b.borderWidth, fillOpacity:b.fillOpacity,
                 borderStyle:b.borderStyle||'solid', type:b.type||'rect',
-                locked: !!b.locked }; })
+                locked: !!b.locked, customLabel:b.customLabel||'', visibility:b.visibility||[] }; })
         )); } catch(e) {}
     }
 
@@ -1086,7 +1094,10 @@
             if (!raw) return;
             JSON.parse(raw).forEach(function(d){
                 var box = addBox(d.t1,d.p1,d.t2,d.p2,d.color,d.borderWidth,d.id,d.fillOpacity,null,d.borderStyle,d.type||'rect');
-                if (box && d.locked) { box.locked = true; updateBox(box); }
+                if (box) {
+                    if (d.locked) { box.locked = true; updateBox(box); }
+                    box.customLabel = d.customLabel||''; box.visibility = d.visibility||[];
+                }
             });
         } catch(e) {}
     }
@@ -1530,7 +1541,8 @@
             var data = drawings
                 .filter(function(d){ return d.type==='h-line'; })
                 .map(function(d) {
-                    return { type:'h-line', price:d.price, color:d.color, width:d.width, style:d.style, locked:d.locked||false };
+                    return { type:'h-line', price:d.price, color:d.color, width:d.width, style:d.style,
+                             locked:d.locked||false, customLabel:d.customLabel||'', visibility:d.visibility||[] };
                 });
             localStorage.setItem(_hlKey(), JSON.stringify(data));
         } catch(e) {}
@@ -1547,6 +1559,11 @@
         hit.setAttribute('stroke-width', '14');
         hit.setAttribute('pointer-events', 'stroke');
         hit.setAttribute('cursor', 'move');
+        hit.addEventListener('dblclick', function(e) {
+            e.stopPropagation(); e.preventDefault();
+            var idx = drawings.indexOf(d);
+            if (idx >= 0) _showDrawingSettings(e.clientX, e.clientY, 'h-line', idx);
+        });
 
         /* Visual line */
         var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -1614,13 +1631,23 @@
             if (idx >= 0) _dupHLine(idx);
         });
 
+        /* Custom text label — shown at midpoint above the line */
+        var customLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        customLbl.setAttribute('font-size', '10');
+        customLbl.setAttribute('font-family', 'monospace');
+        customLbl.setAttribute('font-weight', '600');
+        customLbl.setAttribute('dominant-baseline', 'central');
+        customLbl.setAttribute('text-anchor', 'middle');
+        customLbl.setAttribute('pointer-events', 'none');
+        customLbl.setAttribute('display', 'none');
+
         g.appendChild(hit); g.appendChild(line);
-        g.appendChild(lbl); g.appendChild(handle); g.appendChild(lockBadge);
+        g.appendChild(lbl); g.appendChild(customLbl); g.appendChild(handle); g.appendChild(lockBadge);
         g.appendChild(delBtn); g.appendChild(dupBtn);
         svg.appendChild(g);
 
         d.el = g; d.lineEl = line; d.hitEl = hit;
-        d.lblEl = lbl; d.handleEl = handle; d.lockBadge = lockBadge;
+        d.lblEl = lbl; d.customLabelEl = customLbl; d.handleEl = handle; d.lockBadge = lockBadge;
         d.delBtn = delBtn; d.dupBtn = dupBtn;
 
         updateHLine(d);
@@ -1628,6 +1655,10 @@
 
     function updateHLine(d) {
         if (!d.el || !chart || !S.candle) return;
+        /* Visibility filter */
+        if (d.visibility && d.visibility.length > 0 && d.visibility.indexOf(_currentTf) < 0) {
+            d.el.setAttribute('display', 'none'); return;
+        }
         var y = _priceToY(d.price);
         if (y == null) { d.el.setAttribute('display', 'none'); return; }
         d.el.removeAttribute('display');
@@ -1687,6 +1718,19 @@
         } else {
             d.lockBadge.setAttribute('display', 'none');
         }
+
+        /* Custom text label */
+        if (d.customLabelEl) {
+            if (d.customLabel) {
+                d.customLabelEl.textContent = d.customLabel;
+                d.customLabelEl.setAttribute('x', maxX / 2);
+                d.customLabelEl.setAttribute('y', y - 10);
+                d.customLabelEl.setAttribute('fill', col);
+                d.customLabelEl.setAttribute('display', '');
+            } else {
+                d.customLabelEl.setAttribute('display', 'none');
+            }
+        }
     }
 
     function updateAllHLines() {
@@ -1702,7 +1746,8 @@
             localStorage.setItem(_circleKey(), JSON.stringify(
                 circles.map(function(c) {
                     return { cx_time:c.cx_time, cy_price:c.cy_price, r_price:c.r_price,
-                             color:c.color, width:c.width, style:c.style||'solid', locked:c.locked||false };
+                             color:c.color, width:c.width, style:c.style||'solid', locked:c.locked||false,
+                             customLabel:c.customLabel||'', visibility:c.visibility||[] };
                 })
             ));
         } catch(e) {}
@@ -1715,7 +1760,8 @@
                 try {
                     var obj = { cx_time:d.cx_time, cy_price:d.cy_price, r_price:d.r_price,
                                 color:d.color||'#ffd700', width:d.width||1,
-                                style:d.style||'solid', locked:d.locked||false };
+                                style:d.style||'solid', locked:d.locked||false,
+                                customLabel:d.customLabel||'', visibility:d.visibility||[] };
                     circles.push(obj);
                     buildCircleEl(obj);
                 } catch(e) {}
@@ -1989,6 +2035,11 @@
         c.el = g; c.circEl = circEl; c.hitEl = hitEl;
         c.cHandle = cHandle; c.rHandle = rHandle; c.lockBadge = lockBadge;
 
+        hitEl.addEventListener('dblclick', function(e) {
+            e.stopPropagation(); e.preventDefault();
+            var idx = circles.indexOf(c);
+            if (idx >= 0) _showDrawingSettings(e.clientX, e.clientY, 'circle', idx);
+        });
         hitEl.addEventListener('mousedown', function(e) {
             if (drawMode) return;
             var idx = circles.indexOf(c); if (idx < 0) return;
@@ -2041,6 +2092,9 @@
 
     function updateCircle(c) {
         if (!c.el || !chart || !S.candle) return;
+        if (c.visibility && c.visibility.length > 0 && c.visibility.indexOf(_currentTf) < 0) {
+            c.el.setAttribute('display', 'none'); return;
+        }
         var scx = _timeToXExtrap(c.cx_time);
         var scy = _priceToY(c.cy_price);
         if (scx == null || scy == null) { c.el.setAttribute('display', 'none'); return; }
@@ -2171,7 +2225,8 @@
                     try {
                         var obj = { type:'h-line', price:d.price,
                                     color:d.color||'#ffd700', width:d.width||1,
-                                    style:d.style||'solid', locked:d.locked||false };
+                                    style:d.style||'solid', locked:d.locked||false,
+                                    customLabel:d.customLabel||'', visibility:d.visibility||[] };
                         drawings.push(obj);
                         buildHLineEl(obj);
                     } catch(e) {}
@@ -2460,120 +2515,310 @@
        DRAWING SETTINGS POPUP  (Issue #6 — double-click any drawing to edit)
        ═══════════════════════════════════════════════════════════════════════ */
 
+    /* ── Drawing settings constants ─────────────────────────────────────── */
+    var _ALL_VIS       = ['M5','M15','M30','H1','H4','D','W'];
+    var _TF_LABELS_MAP = {M5:'5m',M15:'15m',M30:'30m',H1:'1H',H4:'4H',D:'D',W:'W'};
     var _SETTINGS_COLORS = [
-        '#ffffff','#ff3366','#00ff88','#38b6ff','#ffd700','#ff9900','#cc44ff','#ff69b4','#7d8590'
+        '#ffffff','#ff3366','#00ff88','#38b6ff','#ffd700','#ff9900','#cc44ff','#ff69b4','#7d8590','#00ccff'
     ];
 
+    /* ── Settings helper functions ────────────────────────────────────────── */
+    function _drawingTypeName(type) {
+        return {'trend':'Trendline','h-line':'H-Line','box':'Box','fib':'Fibonacci','circle':'Circle'}[type] || type;
+    }
+    function _getDrawingObj(type, idx) {
+        if (type==='trend')  return trendlines[idx];
+        if (type==='h-line') return drawings[idx];
+        if (type==='box')    return boxes[idx];
+        if (type==='fib')    return fibs[idx];
+        if (type==='circle') return circles[idx];
+        return null;
+    }
+    function _updateDrawingAndSave(type, obj) {
+        if (type==='trend')  { updateTrendline(obj); saveTrendlines(); }
+        if (type==='h-line') { updateHLine(obj);     saveDrawings();   }
+        if (type==='box')    { updateBox(obj);        saveBoxes();      }
+        if (type==='fib')    { updateFib(obj);        saveFibs();       }
+        if (type==='circle') { updateCircle(obj);     saveCircles();    }
+    }
+    function _deleteDrawingByTypeIdx(type, idx) {
+        if (type==='trend')  { delTrendline(idx); return; }
+        if (type==='box')    { delBox(idx); return; }
+        if (type==='fib')    { delFib(idx); return; }
+        if (type==='h-line') {
+            var dh = drawings[idx]; if (!dh) return;
+            _removeOne(dh); drawings.splice(idx, 1);
+            if (selectedIdx===idx) selectedIdx=-1; else if (selectedIdx>idx) selectedIdx--;
+            saveDrawings(); return;
+        }
+        if (type==='circle') {
+            var cc2 = circles[idx]; if (!cc2) return;
+            if (cc2.el && cc2.el.parentNode) cc2.el.parentNode.removeChild(cc2.el);
+            circles.splice(idx, 1); saveCircles();
+        }
+    }
+    function _dsRow(labelText, content) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';
+        if (labelText) {
+            var lbl = document.createElement('span');
+            lbl.textContent = labelText;
+            lbl.style.cssText = 'color:#8b949e;font-size:10px;min-width:48px;flex-shrink:0;';
+            row.appendChild(lbl);
+        }
+        if (content) row.appendChild(content);
+        return row;
+    }
+    function _dsBtnStyle(active) {
+        return 'cursor:pointer;padding:3px 8px;border-radius:3px;font-size:11px;outline:none;border:1px solid ' +
+               (active ? '#58a6ff;background:#1f3559;color:#58a6ff;' : '#30363d;background:#21262d;color:#e6edf3;');
+    }
+    function _dsActionStyle(danger) {
+        return 'cursor:pointer;padding:4px 12px;border-radius:4px;font-size:11px;outline:none;border:1px solid ' +
+               (danger ? '#ff3366;background:rgba(255,51,102,0.12);color:#ff3366;'
+                       : '#30363d;background:#21262d;color:#e6edf3;');
+    }
+
+    /* ── Main settings modal ──────────────────────────────────────────────── */
     function _showDrawingSettings(cx, cy, drawingType, idx) {
         _hideDrawingSettings();
-        var popup = document.createElement('div');
-        popup.id  = 'apex-drawing-settings';
-        popup.style.cssText =
+        var obj = _getDrawingObj(drawingType, idx);
+        if (!obj) return;
+
+        /* Modal container */
+        var modal = document.createElement('div');
+        modal.id = 'apex-drawing-settings';
+        modal.style.cssText =
             'position:fixed;z-index:9999;background:#161b22;border:1px solid #30363d;' +
-            'border-radius:6px;padding:10px 12px;box-shadow:0 4px 16px rgba(0,0,0,0.6);' +
-            'font-family:monospace;font-size:11px;min-width:170px;';
-        /* Position near cursor but keep on-screen */
-        var pw = 180, ph = 130;
-        var lft = Math.min(cx + 8, window.innerWidth  - pw - 4);
-        var top = Math.min(cy + 8, window.innerHeight - ph - 4);
-        popup.style.left = lft + 'px';
-        popup.style.top  = top + 'px';
+            'border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.85);' +
+            'font-family:"IBM Plex Sans",sans-serif;font-size:12px;min-width:290px;user-select:none;';
+        var lft = Math.min(cx + 10, window.innerWidth  - 300);
+        var top = Math.min(cy + 10, window.innerHeight - 320);
+        modal.style.left = Math.max(4, lft) + 'px';
+        modal.style.top  = Math.max(4, top) + 'px';
 
-        /* Title */
-        var title = document.createElement('div');
-        title.style.cssText = 'color:#8b949e;margin-bottom:8px;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;display:flex;justify-content:space-between;';
-        title.innerHTML = '<span>' + drawingType + ' Settings</span>';
-        var closeBtn = document.createElement('span');
-        closeBtn.textContent = '×'; closeBtn.style.cssText = 'cursor:pointer;color:#8b949e;font-size:14px;';
-        closeBtn.addEventListener('click', _hideDrawingSettings);
-        title.appendChild(closeBtn);
-        popup.appendChild(title);
+        /* Title bar (draggable) */
+        var titleBar = document.createElement('div');
+        titleBar.style.cssText =
+            'display:flex;justify-content:space-between;align-items:center;' +
+            'padding:8px 12px;border-bottom:1px solid #21262d;cursor:move;border-radius:8px 8px 0 0;';
+        var titleSpan = document.createElement('span');
+        titleSpan.textContent = _drawingTypeName(drawingType);
+        titleSpan.style.cssText = 'color:#e6edf3;font-weight:600;font-size:12px;';
+        var closeX = document.createElement('span');
+        closeX.textContent = '×';
+        closeX.style.cssText = 'color:#8b949e;cursor:pointer;font-size:18px;line-height:1;';
+        closeX.addEventListener('click', _hideDrawingSettings);
+        titleBar.appendChild(titleSpan); titleBar.appendChild(closeX);
+        modal.appendChild(titleBar);
 
-        /* Color row */
-        var colorRow = document.createElement('div');
-        colorRow.style.cssText = 'display:flex;gap:5px;align-items:center;margin-bottom:8px;';
-        var colorLbl = document.createElement('span'); colorLbl.textContent = 'Color'; colorLbl.style.color='#8b949e'; colorLbl.style.minWidth='36px';
-        colorRow.appendChild(colorLbl);
-        _SETTINGS_COLORS.forEach(function(col) {
-            var sw = document.createElement('div');
-            sw.style.cssText = 'width:14px;height:14px;border-radius:50%;background:' + col + ';cursor:pointer;border:1.5px solid rgba(255,255,255,0.15);flex-shrink:0;';
-            sw.addEventListener('click', function() {
-                _applySettingColor(drawingType, idx, col);
-                _hideDrawingSettings();
-            });
-            colorRow.appendChild(sw);
-        });
-        popup.appendChild(colorRow);
-
-        /* Width row (boxes / trendlines only) */
-        if (drawingType === 'box' || drawingType === 'trend') {
-            var wRow = document.createElement('div');
-            wRow.style.cssText = 'display:flex;gap:5px;align-items:center;margin-bottom:8px;';
-            var wLbl = document.createElement('span'); wLbl.textContent = 'Width'; wLbl.style.color='#8b949e'; wLbl.style.minWidth='36px';
-            wRow.appendChild(wLbl);
-            [1,2,3].forEach(function(w) {
-                var wb = document.createElement('div');
-                wb.textContent = w + 'px';
-                wb.style.cssText = 'cursor:pointer;padding:2px 6px;border-radius:3px;background:#21262d;color:#e6edf3;border:1px solid #30363d;';
-                wb.addEventListener('click', function() {
-                    _applySettingWidth(drawingType, idx, w);
-                    _hideDrawingSettings();
-                });
-                wRow.appendChild(wb);
-            });
-            popup.appendChild(wRow);
-        }
-
-        /* Lock toggle — available for all drawing types */
+        /* Drag-to-move the modal */
         (function() {
-            var obj = null;
-            var isLocked = false;
-            if (drawingType === 'fib')   { obj = fibs[idx];       isLocked = !!(obj && obj.locked); }
-            if (drawingType === 'box')   { obj = boxes[idx];      isLocked = !!(obj && obj.locked); }
-            if (drawingType === 'trend') { obj = trendlines[idx]; isLocked = !!(obj && obj.locked); }
-            if (!obj) return;
-
-            var lockRow = document.createElement('div'); lockRow.style.marginBottom = '6px';
-            var lockBtn0 = document.createElement('div');
-            lockBtn0.textContent = isLocked ? '🔒 Locked — click to unlock' : '🔓 Unlocked — click to lock';
-            lockBtn0.style.cssText = 'cursor:pointer;color:' + (isLocked ? '#ffd700' : '#8b949e') + ';padding:3px 0;font-size:11px;';
-            lockBtn0.addEventListener('click', function() {
-                _hideDrawingSettings();
-                if (drawingType === 'fib') {
-                    var f = fibs[idx]; if (!f) return;
-                    f.locked = !f.locked; updateFib(f); saveFibs();
-                } else if (drawingType === 'box') {
-                    var b = boxes[idx]; if (!b) return;
-                    b.locked = !b.locked; updateBox(b); saveBoxes();
-                } else if (drawingType === 'trend') {
-                    var t = trendlines[idx]; if (!t) return;
-                    t.locked = !t.locked; updateTrendline(t); saveTrendlines();
-                }
+            var ds = null;
+            titleBar.addEventListener('mousedown', function(e) {
+                if (e.target === closeX) return;
+                ds = { ox: e.clientX - parseInt(modal.style.left||'0',10),
+                       oy: e.clientY - parseInt(modal.style.top||'0',10) };
+                e.preventDefault();
             });
-            lockRow.appendChild(lockBtn0);
-            popup.appendChild(lockRow);
+            document.addEventListener('mousemove', function(e) {
+                if (!ds) return;
+                modal.style.left = Math.max(0, e.clientX - ds.ox) + 'px';
+                modal.style.top  = Math.max(0, e.clientY - ds.oy) + 'px';
+            });
+            document.addEventListener('mouseup', function() { ds = null; });
         }());
 
-        /* Delete button */
-        var delRow = document.createElement('div'); delRow.style.marginTop = '4px';
-        var delBtn2 = document.createElement('div');
-        delBtn2.textContent = '🗑 Delete';
-        delBtn2.style.cssText = 'cursor:pointer;color:#ff3366;padding:3px 0;';
-        delBtn2.addEventListener('click', function() {
-            _hideDrawingSettings();
-            if (drawingType === 'box')   delBox(idx);
-            if (drawingType === 'trend') delTrendline(idx);
-            if (drawingType === 'fib')   delFib(idx);
+        /* Tab system */
+        var TAB_NAMES = ['Style','Text','Coordinates','Visibility'];
+        var tabBar = document.createElement('div');
+        tabBar.style.cssText = 'display:flex;border-bottom:1px solid #21262d;';
+        var tabPanels = {};
+        TAB_NAMES.forEach(function(name) {
+            var btn = document.createElement('button');
+            btn.setAttribute('data-tab', name);
+            btn.textContent = name;
+            btn.addEventListener('click', function() { _activateTab(name); });
+            tabBar.appendChild(btn);
+            var pnl = document.createElement('div');
+            pnl.style.cssText = 'padding:10px 12px;display:none;';
+            tabPanels[name] = pnl;
         });
-        delRow.appendChild(delBtn2);
-        popup.appendChild(delRow);
+        modal.appendChild(tabBar);
+        TAB_NAMES.forEach(function(name) { modal.appendChild(tabPanels[name]); });
 
-        document.body.appendChild(popup);
+        function _activateTab(name) {
+            TAB_NAMES.forEach(function(n) {
+                var b = tabBar.querySelector('[data-tab="' + n + '"]');
+                if (b) b.style.cssText = 'padding:7px 11px;cursor:pointer;font-size:11px;border:none;background:none;outline:none;border-bottom:2px solid ' +
+                    (n===name ? '#58a6ff;color:#58a6ff;' : 'transparent;color:#8b949e;');
+                if (tabPanels[n]) tabPanels[n].style.display = (n===name) ? 'block' : 'none';
+            });
+        }
 
-        /* Close on outside click */
-        setTimeout(function() {
-            document.addEventListener('mousedown', _settingsOutsideClick);
-        }, 50);
+        /* ── STYLE TAB ── */
+        var sp = tabPanels['Style'];
+
+        /* Color swatches */
+        var swWrap = document.createElement('div');
+        swWrap.style.cssText = 'display:flex;gap:5px;align-items:center;flex-wrap:wrap;';
+        _SETTINGS_COLORS.forEach(function(col) {
+            var sw = document.createElement('div');
+            var isActive = (col === (obj.color||'#ffd700'));
+            sw.style.cssText = 'width:16px;height:16px;border-radius:50%;background:' + col +
+                ';cursor:pointer;flex-shrink:0;border:' +
+                (isActive ? '2px solid #fff;' : '1.5px solid rgba(255,255,255,0.2);');
+            sw.addEventListener('click', function() {
+                obj.color = col; _updateDrawingAndSave(drawingType, obj); _hideDrawingSettings();
+            });
+            swWrap.appendChild(sw);
+        });
+        var cpick = document.createElement('input');
+        cpick.type = 'color'; cpick.value = obj.color || '#ffd700';
+        cpick.title = 'Custom color';
+        cpick.style.cssText = 'width:22px;height:22px;border:none;background:none;cursor:pointer;padding:0;border-radius:3px;';
+        cpick.addEventListener('change', function() { obj.color = cpick.value; _updateDrawingAndSave(drawingType, obj); });
+        swWrap.appendChild(cpick);
+        sp.appendChild(_dsRow('Color', swWrap));
+
+        /* Width (not for fib) */
+        if (drawingType !== 'fib') {
+            var wWrap = document.createElement('div'); wWrap.style.cssText = 'display:flex;gap:4px;';
+            var widthField = (drawingType==='box') ? 'borderWidth' : 'width';
+            [1,2,3].forEach(function(w) {
+                var wb = document.createElement('button');
+                wb.style.cssText = _dsBtnStyle((obj[widthField]||1)===w);
+                wb.innerHTML = ['─','━','▬'][w-1] + ' ' + w;
+                wb.addEventListener('click', function() {
+                    obj[widthField] = w; _updateDrawingAndSave(drawingType, obj);
+                    wWrap.querySelectorAll('button').forEach(function(b2,i){ b2.style.cssText=_dsBtnStyle(i+1===w); });
+                });
+                wWrap.appendChild(wb);
+            });
+            sp.appendChild(_dsRow('Width', wWrap));
+        }
+
+        /* Line style (trend / h-line / circle) */
+        if (drawingType==='trend' || drawingType==='h-line' || drawingType==='circle') {
+            var lsWrap = document.createElement('div'); lsWrap.style.cssText = 'display:flex;gap:4px;';
+            [['solid','——'],['dashed','- -'],['dotted','···']].forEach(function(pair) {
+                var sb = document.createElement('button');
+                sb.style.cssText = _dsBtnStyle((obj.style||'solid')===pair[0]);
+                sb.textContent = pair[1];
+                sb.addEventListener('click', function() {
+                    obj.style = pair[0]; _updateDrawingAndSave(drawingType, obj);
+                    lsWrap.querySelectorAll('button').forEach(function(b2,i){
+                        b2.style.cssText = _dsBtnStyle([['solid'],['dashed'],['dotted']][i][0]===pair[0]);
+                    });
+                });
+                lsWrap.appendChild(sb);
+            });
+            sp.appendChild(_dsRow('Style', lsWrap));
+        }
+
+        /* Fill opacity (box only) */
+        if (drawingType==='box') {
+            var opSlider = document.createElement('input');
+            opSlider.type='range'; opSlider.min='0'; opSlider.max='100'; opSlider.step='5';
+            opSlider.value = Math.round((obj.fillOpacity||0.1)*100);
+            opSlider.style.cssText = 'flex:1;accent-color:#58a6ff;cursor:pointer;';
+            var opVal = document.createElement('span');
+            opVal.textContent = opSlider.value + '%';
+            opVal.style.cssText = 'color:#e6edf3;min-width:30px;text-align:right;font-size:11px;';
+            opSlider.addEventListener('input', function() {
+                opVal.textContent = opSlider.value + '%';
+                obj.fillOpacity = parseInt(opSlider.value,10) / 100;
+                _updateDrawingAndSave(drawingType, obj);
+            });
+            var opWrap = document.createElement('div'); opWrap.style.cssText='display:flex;gap:6px;align-items:center;flex:1;';
+            opWrap.appendChild(opSlider); opWrap.appendChild(opVal);
+            sp.appendChild(_dsRow('Fill %', opWrap));
+        }
+
+        /* Lock toggle */
+        var lockBtn = document.createElement('button');
+        function _refreshLock() {
+            var locked = !!obj.locked;
+            lockBtn.textContent = locked ? '🔒 Locked' : '🔓 Unlocked';
+            lockBtn.style.cssText = _dsActionStyle(false) + (locked ? 'border-color:#ffd700;color:#ffd700;' : '');
+        }
+        _refreshLock();
+        lockBtn.addEventListener('click', function() { obj.locked = !obj.locked; _updateDrawingAndSave(drawingType, obj); _refreshLock(); });
+        sp.appendChild(lockBtn);
+
+        /* ── TEXT TAB ── */
+        var tp = tabPanels['Text'];
+        var labelInp = document.createElement('input');
+        labelInp.type = 'text'; labelInp.placeholder = 'Custom label…';
+        labelInp.value = obj.customLabel || '';
+        labelInp.style.cssText =
+            'width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;' +
+            'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
+        labelInp.addEventListener('input', function() { obj.customLabel = labelInp.value; _updateDrawingAndSave(drawingType, obj); });
+        tp.appendChild(_dsRow('Label', labelInp));
+
+        /* ── COORDINATES TAB ── */
+        var coordP = tabPanels['Coordinates'];
+        function _pInp(lbl, getter, setter) {
+            var inp = document.createElement('input');
+            inp.type='number'; inp.step='any';
+            var v = getter(); inp.value = (typeof v==='number') ? fmtPrice(v) : (v||'');
+            inp.style.cssText =
+                'width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;' +
+                'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
+            inp.addEventListener('change', function() { var n=parseFloat(inp.value); if(!isNaN(n)){setter(n);_updateDrawingAndSave(drawingType, obj);} });
+            coordP.appendChild(_dsRow(lbl, inp));
+        }
+        if (drawingType==='h-line') {
+            _pInp('Price', function(){return obj.price;}, function(v){obj.price=v;});
+        } else if (drawingType==='trend'||drawingType==='box'||drawingType==='fib') {
+            _pInp('Price 1', function(){return obj.p1;}, function(v){obj.p1=v;});
+            _pInp('Price 2', function(){return obj.p2;}, function(v){obj.p2=v;});
+        } else if (drawingType==='circle') {
+            _pInp('Center', function(){return obj.cy_price;}, function(v){obj.cy_price=v;});
+            _pInp('Radius', function(){return obj.r_price;},  function(v){obj.r_price=v;});
+        }
+
+        /* ── VISIBILITY TAB ── */
+        var vp = tabPanels['Visibility'];
+        var visCont = document.createElement('div');
+        visCont.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+        _ALL_VIS.forEach(function(tf) {
+            var lbl2 = document.createElement('label');
+            lbl2.style.cssText = 'display:flex;align-items:center;gap:4px;cursor:pointer;color:#e6edf3;font-size:11px;';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox'; cb.value = tf;
+            var vis = obj.visibility || [];
+            cb.checked = (vis.length===0 || vis.indexOf(tf)>=0);
+            cb.style.cssText = 'accent-color:#58a6ff;cursor:pointer;';
+            cb.addEventListener('change', function() {
+                var cur = (obj.visibility && obj.visibility.length>0) ? obj.visibility.slice() : _ALL_VIS.slice();
+                if (cb.checked) { if (cur.indexOf(tf)<0) cur.push(tf); }
+                else { cur = cur.filter(function(x){return x!==tf;}); }
+                obj.visibility = (cur.length===_ALL_VIS.length) ? [] : cur;
+                _updateDrawingAndSave(drawingType, obj);
+            });
+            lbl2.appendChild(cb);
+            var tfSpan = document.createElement('span'); tfSpan.textContent = _TF_LABELS_MAP[tf]||tf;
+            lbl2.appendChild(tfSpan);
+            visCont.appendChild(lbl2);
+        });
+        vp.appendChild(_dsRow('Show on', visCont));
+
+        /* Action row (delete) */
+        var actionRow = document.createElement('div');
+        actionRow.style.cssText = 'display:flex;justify-content:flex-end;padding:8px 12px;border-top:1px solid #21262d;';
+        var delBtn2 = document.createElement('button');
+        delBtn2.textContent = '🗑 Delete';
+        delBtn2.style.cssText = _dsActionStyle(true);
+        delBtn2.addEventListener('click', function() { _hideDrawingSettings(); _deleteDrawingByTypeIdx(drawingType, idx); });
+        actionRow.appendChild(delBtn2);
+        modal.appendChild(actionRow);
+
+        document.body.appendChild(modal);
+        _activateTab('Style');
+
+        setTimeout(function() { document.addEventListener('mousedown', _settingsOutsideClick); }, 50);
     }
 
     function _settingsOutsideClick(e) {
@@ -2585,29 +2830,6 @@
         var p = document.getElementById('apex-drawing-settings');
         if (p && p.parentNode) p.parentNode.removeChild(p);
         document.removeEventListener('mousedown', _settingsOutsideClick);
-    }
-
-    function _applySettingColor(type, idx, col) {
-        if (type === 'box') {
-            var b = boxes[idx]; if (!b) return;
-            b.color = col; updateBox(b); saveBoxes();
-        } else if (type === 'trend') {
-            var t = trendlines[idx]; if (!t) return;
-            t.color = col; updateTrendline(t); saveTrendlines();
-        } else if (type === 'fib') {
-            var f = fibs[idx]; if (!f) return;
-            f.color = col; updateFib(f); saveFibs();
-        }
-    }
-
-    function _applySettingWidth(type, idx, w) {
-        if (type === 'box') {
-            var b = boxes[idx]; if (!b) return;
-            b.borderWidth = w; updateBox(b); saveBoxes();
-        } else if (type === 'trend') {
-            var t = trendlines[idx]; if (!t) return;
-            t.width = w; updateTrendline(t); saveTrendlines();
-        }
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
@@ -2622,7 +2844,8 @@
         try {
             var data = fibs.map(function(f) {
                 return { id:f.id, t1:f.t1, p1:f.p1, t2:f.t2, p2:f.p2,
-                         color:f.color, locked: !!f.locked };
+                         color:f.color, locked: !!f.locked,
+                         customLabel:f.customLabel||'', visibility:f.visibility||[] };
             });
             localStorage.setItem(_fibKey(), JSON.stringify(data));
         } catch(e) {}
@@ -2634,7 +2857,8 @@
             if (!raw) return;
             var arr = JSON.parse(raw);
             arr.forEach(function(d) {
-                addFib(d.t1, d.p1, d.t2, d.p2, d.color || drawColor, d.id, !!d.locked);
+                var fib = addFib(d.t1, d.p1, d.t2, d.p2, d.color || drawColor, d.id, !!d.locked);
+                if (fib) { fib.customLabel = d.customLabel||''; fib.visibility = d.visibility||[]; }
                 /* Keep fibIdCtr above any loaded ids so new fibs don't collide */
                 var numId = parseInt(d.id, 10);
                 if (!isNaN(numId) && numId > fibIdCtr) fibIdCtr = numId;
@@ -2777,6 +3001,9 @@
 
     function updateFib(fib) {
         if (!fib.el || !chart || !S.candle) return;
+        if (fib.visibility && fib.visibility.length > 0 && fib.visibility.indexOf(_currentTf) < 0) {
+            fib.el.style.display = 'none'; return;
+        }
         var chartEl = document.getElementById('tvlw-chart'); if (!chartEl) return;
         var chartW  = chartEl.clientWidth - psWidth();
 
@@ -2859,7 +3086,7 @@
     function updateAllFibs() { fibs.forEach(updateFib); }
 
     function addFib(t1, p1, t2, p2, color, existingId, locked) {
-        var ov = ensureFibOverlay(); if (!ov) return;
+        var ov = ensureFibOverlay(); if (!ov) return null;
         var fib = {
             id: existingId != null ? existingId : (++fibIdCtr),
             t1: t1, p1: p1, t2: t2, p2: p2, color: color || drawColor,
@@ -2870,6 +3097,7 @@
         fibs.push(fib);
         updateFib(fib);
         if (existingId == null) saveFibs();
+        return fib;
     }
 
     function delFib(idx) {
@@ -3824,6 +4052,18 @@
     window._apexSetDrawWidth = function(w) { drawWidth = parseInt(w,10) || 1; };
     window._apexSetDrawStyle = function(s) { drawStyle = s || 'solid'; };
 
+    /* ── MA panel outside-click: close when clicking away ───────────────── */
+    document.addEventListener('mousedown', function(e) {
+        var panel = document.getElementById('ma-settings-panel');
+        var btn   = document.getElementById('ma-settings-btn');
+        if (!panel || panel.style.display === 'none') return;
+        if ((panel.contains && panel.contains(e.target)) ||
+            (btn   && btn.contains   && btn.contains(e.target))) return;
+        try {
+            window.dash_clientside.set_props('ma-outside-click', { data: Date.now() });
+        } catch(ex) {}
+    });
+
     window._apexDeleteSelected = function() {
         if (selectedTrend >= 0) {
             delTrendline(selectedTrend);
@@ -4012,7 +4252,7 @@
        INDICATOR SETTINGS  (CCI / MACD)
        ─────────────────────────────────────────────────────────────────────
        Architecture:
-         • All settings (visual + computational) live in localStorage per pair+TF.
+         • All settings (visual + computational) live in localStorage per pair.
          • Visual changes (color/width/style/visibility) are applied immediately
            via series.applyOptions() — no server round-trip.
          • Computational changes (CCI length/source, MACD fast/slow/signal) are
@@ -4061,12 +4301,12 @@
         },
     };
 
-    /* ── Per-pair+TF settings cache ───────────────────────────────────────── */
-    var _indSettings = null;   // settings for current pair+TF (live reference)
+    /* ── Per-pair settings cache ──────────────────────────────────────────── */
+    var _indSettings = null;   // settings for current pair (live reference)
 
     function _indKey() {
-        /* Use raw TF ("H1"/"H4"/"D") to match the Python-side key format */
-        return 'apex_ind_' + (_currentPair || 'default') + '_' + (_currentRawTf || _currentTf || 'H1');
+        /* Pair-only key — settings are shared across all timeframes for a pair */
+        return 'apex_ind_' + (_currentPair || 'default');
     }
 
     function _loadIndSettings() {
