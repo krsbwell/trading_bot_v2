@@ -1,8 +1,9 @@
 """
 Backtesting runner for Apex Trading Bot.
 
-Replays historical H1 + H4 candle data through the signal engine bar-by-bar,
-simulates trades via PaperTrader, and writes a results CSV.
+Replays historical primary-TF + confirm-TF candle data through the signal engine
+bar-by-bar, simulates trades via PaperTrader, and writes a results CSV.
+Primary / confirm TFs are read from config.TIMEFRAMES (currently M30 + H1).
 
 Usage from project root:
     python -m backtest.runner --pair EUR_USD --bars 2000 --output data/bt_results.csv
@@ -132,12 +133,10 @@ def run_backtest(
         signal_log      : list of {bar_idx, direction, score, entry, sl, tp1}
     """
     if len(df_h1) < _WARMUP + 50 or len(df_h4) < 50:
-        logger.warning("Backtest %s: insufficient data (%d H1, %d H4)", pair, len(df_h1), len(df_h4))
+        logger.warning("Backtest %s: insufficient data (%d primary, %d confirm)", pair, len(df_h1), len(df_h4))
         return {"error": "insufficient_data"}
 
-    _BT_STATE = Path("data/_bt_tmp_state.json")
-    _BT_STATE.unlink(missing_ok=True)  # always start fresh — never inherit a previous run's state
-    pt          = PaperTrader(starting_balance, save_path=_BT_STATE)
+    pt          = PaperTrader(starting_balance, save_path=False)  # no disk I/O during backtest
     equity      = []
     signal_log  = []
     peak        = starting_balance
@@ -243,12 +242,6 @@ def run_backtest(
         dd        = (peak_eq - pt_eq["nav"]) / peak_eq if peak_eq > 0 else 0
         max_dd    = max(max_dd, dd)
 
-    # Clean up temp state file
-    try:
-        Path("data/_bt_tmp_state.json").unlink(missing_ok=True)
-    except Exception:
-        pass
-
     # Build seed rows: closed trade signal features + outcome for PatternLearner seeding
     seed_rows = []
     for t in closed:
@@ -269,6 +262,7 @@ def run_backtest(
         "wins":           wins,
         "win_rate":       round(wr, 4),
         "total_pnl":      round(tot_pnl, 2),
+        "profit_factor":  _calc_profit_factor(closed),
         "final_balance":  round(pt.balance, 2),
         "max_drawdown":   round(max_dd, 4),
         "trades":         closed,
@@ -332,7 +326,7 @@ def run_walk_forward(
 
     total_needed = train_bars + test_bars
     if len(df_h1) < total_needed:
-        return {"error": f"Need at least {total_needed} H1 bars, got {len(df_h1)}"}
+        return {"error": f"Need at least {total_needed} primary-TF bars, got {len(df_h1)}"}
 
     max_windows = 6   # cap to keep runtime under ~60 s in a sync Dash callback
     windows_out = []
@@ -344,9 +338,9 @@ def run_walk_forward(
         train_df = df_h1.iloc[i : i + train_bars]
         test_df  = df_h1.iloc[i + train_bars : i + train_bars + test_bars]
 
-        # Align H4 data for each window (approx 1/4 the H1 bars)
-        train_h4 = df_h4.iloc[i // 4 : (i + train_bars) // 4] if len(df_h4) > (i + train_bars) // 4 else df_h4
-        test_h4  = df_h4.iloc[(i + train_bars) // 4 : (i + total_needed) // 4] if len(df_h4) > (i + total_needed) // 4 else df_h4
+        # Align confirm-TF data for each window (M30→H1 is 2:1; was 4:1 for H1→H4)
+        train_h4 = df_h4.iloc[i // 2 : (i + train_bars) // 2] if len(df_h4) > (i + train_bars) // 2 else df_h4
+        test_h4  = df_h4.iloc[(i + train_bars) // 2 : (i + total_needed) // 2] if len(df_h4) > (i + total_needed) // 2 else df_h4
 
         # ── In-sample grid search ─────────────────────────────────────────────
         best_is_pf    = -1.0
@@ -443,9 +437,12 @@ if __name__ == "__main__":
     from connectors.oanda_connector import OandaConnector
     conn = OandaConnector()
 
-    logger.info("Fetching %d H1 + %d H4 bars for %s …", args.bars, args.bars // 4, args.pair)
-    df_h1 = conn.get_candles(args.pair, "H1", args.bars)
-    df_h4 = conn.get_candles(args.pair, "H4", args.bars // 4)
+    primary = config.TIMEFRAMES["primary"]
+    confirm = config.TIMEFRAMES["confirm"]
+    logger.info("Fetching %d %s + %d %s bars for %s …",
+                args.bars, primary, args.bars // 2, confirm, args.pair)
+    df_h1 = conn.get_candles(args.pair, primary, args.bars)
+    df_h4 = conn.get_candles(args.pair, confirm, args.bars // 2)
 
     res = run_backtest(args.pair, df_h1, df_h4,
                        starting_balance=args.balance,
@@ -456,9 +453,9 @@ if __name__ == "__main__":
     else:
         logger.info(
             "Backtest %s  bars=%d  signals=%d  trades=%d  WR=%.0f%%  "
-            "PnL=$%.2f  MaxDD=%.1f%%  FinalBal=$%.2f",
+            "PF=%.2f  PnL=$%.2f  MaxDD=%.1f%%  FinalBal=$%.2f",
             res["pair"], res["bars"], res["total_signals"], res["total_trades"],
-            res["win_rate"] * 100, res["total_pnl"],
-            res["max_drawdown"] * 100, res["final_balance"],
+            res["win_rate"] * 100, res.get("profit_factor", 0),
+            res["total_pnl"], res["max_drawdown"] * 100, res["final_balance"],
         )
         save_results_csv(res, args.output)

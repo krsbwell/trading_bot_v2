@@ -78,9 +78,13 @@ def _deser(trade: dict) -> dict:
 class PaperTrader:
 
     def __init__(self, starting_balance: float = 500.0,
-                 save_path: str | Path = None):
+                 save_path: str | Path | bool = None):
         self._lock = threading.Lock()   # protects open_trades / closed_trades mutations
-        self._save_path = Path(save_path) if save_path else _DEFAULT_SAVE_PATH
+        # save_path=False disables all disk I/O (used by backtest/WFO to avoid file contention)
+        if save_path is False:
+            self._save_path = None
+        else:
+            self._save_path = Path(save_path) if save_path else _DEFAULT_SAVE_PATH
 
         loaded = self._load_state()
         if loaded:
@@ -104,6 +108,8 @@ class PaperTrader:
 
     def _save_state(self) -> None:
         """Write full state to disk. Called after every mutation."""
+        if self._save_path is None:
+            return   # disk I/O disabled (backtest / WFO mode)
         try:
             self._save_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
@@ -152,10 +158,12 @@ class PaperTrader:
 
     def _load_state(self) -> dict | None:
         """Read state from disk. Returns None if file missing or corrupt."""
+        if self._save_path is None:
+            return None   # disk I/O disabled (backtest / WFO mode)
         try:
             logger.info("PaperTrader._load_state: reading %s", self._save_path)
             if not self._save_path.exists():
-                logger.warning("PaperTrader._load_state: file not found at %s", self._save_path)
+                logger.debug("PaperTrader._load_state: file not found at %s", self._save_path)
                 return None
             with open(self._save_path, "r", encoding="utf-8") as f:
                 raw = json.load(f)

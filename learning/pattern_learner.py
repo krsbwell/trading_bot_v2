@@ -258,7 +258,7 @@ class PatternLearner:
                 gran_h1 = _cfg.TIMEFRAMES.get("primary", "H1")
                 gran_h4 = _cfg.TIMEFRAMES.get("confirm",  "H4")
                 df_h1 = candles_fn(pair, gran_h1, bars + 60)
-                df_h4 = candles_fn(pair, gran_h4, bars // 4 + 20)
+                df_h4 = candles_fn(pair, gran_h4, bars // 2 + 20)  # M30→H1 is 2:1
                 if df_h1 is None or len(df_h1) < 120:
                     errors.append(f"{pair}: insufficient candles")
                     continue

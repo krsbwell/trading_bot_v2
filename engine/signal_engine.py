@@ -43,13 +43,18 @@ class SignalEngine:
         market: str,
         ml_win_prob: Optional[float] = None,
         no_audit: bool = False,
+        candles_override: Optional[tuple] = None,
     ) -> Optional[dict]:
         """
         Run the full signal pipeline for one pair.
 
-        pair        : "EUR_USD" (Oanda) or "BTC/USD" (Alpaca)
-        market      : "forex" or "crypto"
-        ml_win_prob : win probability from PatternLearner (None until 50 trades)
+        pair             : "EUR_USD" (Oanda) or "BTC/USD" (Alpaca)
+        market           : "forex" or "crypto"
+        ml_win_prob      : win probability from PatternLearner (None until 50 trades)
+        candles_override : (df_primary, df_confirm) tuple — skips the API fetch and
+                           uses supplied DataFrames instead. Used by _live_diagnostic_scan
+                           to inject the in-progress bar without touching the
+                           completed-only fetch path that drives trade decisions.
 
         Returns a signal dict when score >= MIN_CONFLUENCE_SCORE, else None.
         Signals scoring 50–69 are logged but return None (no trade fired).
@@ -57,14 +62,16 @@ class SignalEngine:
         # Suppress audit writes for diagnostic-only calls (e.g. _diagnostic_scan in main.py)
         _do_audit = (lambda **kw: None) if no_audit else _audit
 
-        # Fetch primary (H1) and confirmation (H4) candles
-        # 250 candles gives the EMA auto-fit 200 candles + extra buffer
-        try:
-            df_h1 = self._get_candles(pair, config.TIMEFRAMES["primary"], 250)
-            df_h4 = self._get_candles(pair, config.TIMEFRAMES["confirm"],  250)
-        except Exception as exc:
-            logger.error("Candle fetch failed for %s: %s", pair, exc)
-            return None
+        # Fetch primary (M30) and confirmation (H1) candles — or use override for live bar
+        if candles_override is not None:
+            df_h1, df_h4 = candles_override
+        else:
+            try:
+                df_h1 = self._get_candles(pair, config.TIMEFRAMES["primary"], 250)
+                df_h4 = self._get_candles(pair, config.TIMEFRAMES["confirm"],  250)
+            except Exception as exc:
+                logger.error("Candle fetch failed for %s: %s", pair, exc)
+                return None
 
         if len(df_h1) < 50 or len(df_h4) < 50:
             logger.warning("Insufficient data for %s (%d H1, %d H4)", pair, len(df_h1), len(df_h4))

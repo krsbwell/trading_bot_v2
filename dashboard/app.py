@@ -230,7 +230,7 @@ def _sep():
 
 app.layout = html.Div(
     id="root",
-    style={"backgroundColor": "#DBDBDB", "minHeight": "100vh",
+    style={"backgroundColor": "#0d1117", "minHeight": "100vh",
            "fontFamily": "'IBM Plex Sans', sans-serif", "color": "#e6edf3"},
     children=[
 
@@ -390,6 +390,9 @@ app.layout = html.Div(
             html.Div([
 
                 # ── Toolbar ───────────────────────────────────────────────────
+                # MA and Style panels are position:absolute inside their own
+                # relative wrapper so they drop down as compact popups anchored
+                # to the button, not spanning the full chart width.
                 html.Div([
                     dcc.Dropdown(
                         id="pair-select", options=_pair_options(),
@@ -401,13 +404,29 @@ app.layout = html.Div(
                                   style=_tf_btn_style(tf == "H1"))
                       for tf in _ALL_TFS],
                     _sep(),
-                    html.Button("MA", id="ma-settings-btn", n_clicks=0,
-                                title="Moving Average Settings", style=_tf_btn_style()),
-                    _sep(),
-                    # Drawing style panel toggle
-                    html.Button("Style ▾", id="draw-style-panel-btn", n_clicks=0,
-                                title="Drawing style settings",
-                                style=_tf_btn_style()),
+                    # MA button + compact dropdown panel anchored below it
+                    html.Div([
+                        html.Button("MA", id="ma-settings-btn", n_clicks=0,
+                                    title="Moving Average Settings",
+                                    style=_tf_btn_style()),
+                        html.Div(
+                            id="ma-settings-panel",
+                            style={"display": "none", "position": "absolute",
+                                   "top": "100%", "left": 0, "zIndex": 300,
+                                   "flexDirection": "column", "gap": "0.4rem",
+                                   "background": "#161b22",
+                                   "borderRadius": "0 4px 4px 4px",
+                                   "padding": "0.6rem 0.75rem", "minWidth": "340px",
+                                   "border": "1px solid #30363d",
+                                   "boxShadow": "0 6px 20px rgba(0,0,0,0.6)"},
+                            children=[
+                                html.Span("Moving Average Settings",
+                                          style={"color": "#8b949e", "fontSize": "0.75rem",
+                                                 "fontWeight": 600}),
+                                html.Div(id="ma-settings-panel-rows"),
+                            ],
+                        ),
+                    ], style={"position": "relative"}),
                     html.Button("⚙ Indicators", id="ind-settings-btn", n_clicks=0,
                                 title="Indicator settings (CCI / MACD)",
                                 style={**_tf_btn_style(),
@@ -446,140 +465,71 @@ app.layout = html.Div(
                                 title="Heikin-Ashi chart",
                                 style=_tf_btn_style(False)),
                     html.Div(style={"marginLeft": "auto"}),
-                    html.Button("⏻", id="shutdown-toggle-btn", n_clicks=0,
-                                title="Auto-shutdown settings",
-                                style={**_tf_btn_style(), "fontSize": "0.85rem",
-                                       "padding": "4px 8px"}),
+                    # Shutdown button + compact dropdown panel, right-aligned
+                    html.Div([
+                        html.Button("⏻", id="shutdown-toggle-btn", n_clicks=0,
+                                    title="Auto-shutdown settings",
+                                    style={**_tf_btn_style(), "fontSize": "0.85rem",
+                                           "padding": "4px 8px"}),
+                        html.Div(
+                            id="shutdown-panel",
+                            style={"display": "none", "position": "absolute",
+                                   "top": "100%", "right": 0, "zIndex": 300,
+                                   "flexDirection": "column", "gap": "0.4rem",
+                                   "background": "#161b22",
+                                   "borderRadius": "4px 0 4px 4px",
+                                   "padding": "0.65rem 0.85rem", "minWidth": "340px",
+                                   "border": "1px solid #3d1010",
+                                   "boxShadow": "0 6px 20px rgba(0,0,0,0.6)"},
+                            children=[
+                                html.Span("Auto-Shutdown",
+                                          style={"color": "#ff9900", "fontSize": "0.72rem",
+                                                 "fontWeight": 600, "letterSpacing": "0.05em"}),
+                                html.Div([
+                                    html.Button("Disabled", id="shutdown-enable-btn",
+                                                n_clicks=0,
+                                                style={**_tf_btn_style(False),
+                                                       "minWidth": "74px"}),
+                                    html.Span("Shutdown at:",
+                                              style={"color": "#8b949e", "fontSize": "0.72rem",
+                                                     "alignSelf": "center",
+                                                     "marginLeft": "0.5rem"}),
+                                    dcc.Input(
+                                        id="shutdown-time-input", type="time", value="16:00",
+                                        style={"background": "#21262d", "color": "#e6edf3",
+                                               "border": "1px solid #30363d",
+                                               "borderRadius": "3px",
+                                               "padding": "0.2rem 0.4rem",
+                                               "fontSize": "0.82rem", "width": "100px"},
+                                    ),
+                                    html.Span("Warn (min):",
+                                              style={"color": "#8b949e", "fontSize": "0.72rem",
+                                                     "alignSelf": "center",
+                                                     "marginLeft": "0.5rem"}),
+                                    dcc.Input(
+                                        id="shutdown-warn-input", type="number", value=5,
+                                        min=1, max=60, step=1, debounce=True,
+                                        style={"width": "56px", "background": "#21262d",
+                                               "color": "#e6edf3",
+                                               "border": "1px solid #30363d",
+                                               "borderRadius": "3px",
+                                               "padding": "0.2rem 0.35rem",
+                                               "fontSize": "0.82rem"},
+                                    ),
+                                ], style={"display": "flex", "alignItems": "center",
+                                          "gap": "0.35rem", "flexWrap": "wrap"}),
+                                html.Div(id="shutdown-status",
+                                         style={"color": "#ff9900", "fontSize": "0.72rem",
+                                                "fontFamily": "monospace"}),
+                            ],
+                        ),
+                    ], style={"position": "relative"}),
                     html.Button("⛶", id="chart-expand-btn", n_clicks=0,
                                 title="Expand / collapse chart",
                                 style={**_tf_btn_style(), "fontSize": "1rem",
                                        "padding": "4px 8px"}),
                 ], style={"display": "flex", "gap": "0.4rem", "flexWrap": "wrap",
                            "alignItems": "center", "marginBottom": "6px"}),
-
-                # ── Drawing Style Panel (collapsed by default) ────────────────
-                html.Div(
-                    id="draw-style-panel",
-                    style={"display": "none", "flexDirection": "column", "gap": "0.5rem",
-                           "background": "#161b22", "borderRadius": "4px",
-                           "padding": "0.65rem 0.85rem", "marginBottom": "6px",
-                           "border": "1px solid #30363d"},
-                    children=[
-                        html.Span("Drawing Style",
-                                  style={"color": "#8b949e", "fontSize": "0.72rem",
-                                         "fontWeight": 600, "letterSpacing": "0.05em"}),
-                        # Thickness row
-                        html.Div([
-                            html.Span("Thickness",
-                                      style={"color": "#8b949e", "fontSize": "0.72rem",
-                                             "minWidth": "62px", "alignSelf": "center"}),
-                            *[html.Button(
-                                _DRAW_WIDTH_LABELS[w],
-                                id={"type": "draw-width-btn", "index": w},
-                                n_clicks=0, title=f"Line width {w}px",
-                                style=_width_btn_style(w == 1),
-                              ) for w in _DRAW_WIDTHS],
-                        ], style={"display": "flex", "alignItems": "center", "gap": "0.35rem"}),
-                        # Line style row
-                        html.Div([
-                            html.Span("Line Style",
-                                      style={"color": "#8b949e", "fontSize": "0.72rem",
-                                             "minWidth": "62px", "alignSelf": "center"}),
-                            *[html.Button(
-                                _DRAW_STYLE_LABELS[s],
-                                id={"type": "draw-style-btn", "index": s},
-                                n_clicks=0, title=s.capitalize(),
-                                style=_style_btn_style(s == "solid"),
-                              ) for s in _DRAW_STYLES],
-                        ], style={"display": "flex", "alignItems": "center", "gap": "0.35rem"}),
-                        # Color row
-                        html.Div([
-                            html.Span("Color",
-                                      style={"color": "#8b949e", "fontSize": "0.72rem",
-                                             "minWidth": "62px", "alignSelf": "center"}),
-                            *[html.Button(
-                                "",
-                                id={"type": "draw-color-btn", "index": c},
-                                n_clicks=0, title=c,
-                                style=_swatch_style(c, c == _DRAW_DEFAULT_COLOR),
-                              ) for c in _DRAW_COLORS],
-                            # Custom colour picker
-                            html.Div([
-                                html.Span("Custom:", style={"color": "#8b949e",
-                                           "fontSize": "0.7rem", "marginRight": "4px"}),
-                                dcc.Input(
-                                    id="draw-color-custom",
-                                    type="color",
-                                    value=_DRAW_DEFAULT_COLOR,
-                                    style={"width": "32px", "height": "22px",
-                                           "border": "1px solid #30363d",
-                                           "borderRadius": "3px", "cursor": "pointer",
-                                           "padding": "0", "background": "none"},
-                                ),
-                            ], style={"display": "flex", "alignItems": "center",
-                                      "marginLeft": "0.35rem"}),
-                        ], style={"display": "flex", "alignItems": "center",
-                                  "gap": "0.3rem", "flexWrap": "wrap"}),
-                    ],
-                ),
-
-                # ── MA Settings panel (collapsed by default) ──────────────────
-                html.Div(
-                    id="ma-settings-panel",
-                    style={"display": "none", "flexDirection": "column", "gap": "0.4rem",
-                           "background": "#161b22", "borderRadius": "4px",
-                           "padding": "0.6rem 0.75rem", "marginBottom": "6px",
-                           "border": "1px solid #30363d"},
-                    children=[
-                        html.Span("Moving Average Settings",
-                                  style={"color": "#8b949e", "fontSize": "0.75rem",
-                                         "fontWeight": 600}),
-                        html.Div(id="ma-settings-panel-rows"),
-                    ],
-                ),
-
-                # ── Auto-Shutdown Panel (collapsed by default) ────────────────
-                html.Div(
-                    id="shutdown-panel",
-                    style={"display": "none", "flexDirection": "column", "gap": "0.4rem",
-                           "background": "#161b22", "borderRadius": "4px",
-                           "padding": "0.65rem 0.85rem", "marginBottom": "6px",
-                           "border": "1px solid #3d1010"},
-                    children=[
-                        html.Span("Auto-Shutdown",
-                                  style={"color": "#ff9900", "fontSize": "0.72rem",
-                                         "fontWeight": 600, "letterSpacing": "0.05em"}),
-                        html.Div([
-                            html.Button("Disabled", id="shutdown-enable-btn", n_clicks=0,
-                                        style={**_tf_btn_style(False), "minWidth": "74px"}),
-                            html.Span("Shutdown at:",
-                                      style={"color": "#8b949e", "fontSize": "0.72rem",
-                                             "alignSelf": "center", "marginLeft": "0.5rem"}),
-                            dcc.Input(
-                                id="shutdown-time-input", type="time", value="16:00",
-                                style={"background": "#21262d", "color": "#e6edf3",
-                                       "border": "1px solid #30363d", "borderRadius": "3px",
-                                       "padding": "0.2rem 0.4rem", "fontSize": "0.82rem",
-                                       "width": "100px"},
-                            ),
-                            html.Span("Warn (min):",
-                                      style={"color": "#8b949e", "fontSize": "0.72rem",
-                                             "alignSelf": "center", "marginLeft": "0.5rem"}),
-                            dcc.Input(
-                                id="shutdown-warn-input", type="number", value=5,
-                                min=1, max=60, step=1, debounce=True,
-                                style={"width": "56px", "background": "#21262d",
-                                       "color": "#e6edf3", "border": "1px solid #30363d",
-                                       "borderRadius": "3px", "padding": "0.2rem 0.35rem",
-                                       "fontSize": "0.82rem"},
-                            ),
-                        ], style={"display": "flex", "alignItems": "center", "gap": "0.35rem",
-                                  "flexWrap": "wrap"}),
-                        html.Div(id="shutdown-status",
-                                 style={"color": "#ff9900", "fontSize": "0.72rem",
-                                        "fontFamily": "monospace"}),
-                    ],
-                ),
 
                 # Chart area — chart + floating trade panel overlay
                 html.Div(
@@ -821,9 +771,7 @@ app.layout = html.Div(
         dcc.Store(id="alert-action",      data=None),
         dcc.Store(id="chart-data-store",  data=None),
         dcc.Store(id="draw-mode-store",   data=None),
-        dcc.Store(id="draw-color-store",  data=_DRAW_DEFAULT_COLOR),
-        dcc.Store(id="draw-width-store",  data=1),
-        dcc.Store(id="draw-style-store",  data="solid"),
+        dcc.Store(id="ma-outside-click",  data=0),
         dcc.Store(id="open-trades-store",     data=[]),
         dcc.Store(id="edit-trade-store",      data=None),
         dcc.Store(id="trade-modify-store",    data=None),
@@ -991,7 +939,8 @@ app.layout = html.Div(
                                        "fontSize": "0.8rem", "fontWeight": 600}),
                 ], style={"display": "flex", "gap": "0.5rem", "marginTop": "1rem"}),
                 html.Div(id="ml-action-status",
-                         style={"color": "#8b949e", "fontSize": "0.78rem", "marginTop": "0.4rem"}),
+                         style={"color": "#ffd700", "fontSize": "0.8rem", "marginTop": "0.6rem",
+                                "minHeight": "1.2em"}),
             ],
         ),
         html.Div(id="learning-backdrop", n_clicks=0,
@@ -1175,9 +1124,6 @@ app.layout = html.Div(
         html.Div(id="trade-modify-dummy", style={"display": "none"}),
         html.Div(id="chart-dummy",        style={"display": "none"}),
         html.Div(id="draw-dummy",        style={"display": "none"}),
-        html.Div(id="draw-color-dummy",  style={"display": "none"}),
-        html.Div(id="draw-width-dummy",  style={"display": "none"}),
-        html.Div(id="draw-style-dummy",  style={"display": "none"}),
         html.Div(id="draw-lock-dummy",   style={"display": "none"}),
         html.Div(id="draw-dup-dummy",    style={"display": "none"}),
         html.Div(id="ind-panel-dummy",   style={"display": "none"}),
@@ -1438,13 +1384,20 @@ def select_chart_type(n_candle, n_ha):
     Output("ma-settings-panel", "style"),
     Output("ma-settings-btn",   "style"),
     Input("ma-settings-btn",    "n_clicks"),
+    Input("ma-outside-click",   "data"),
     State("ma-settings-panel",  "style"),
     prevent_initial_call=True,
 )
-def toggle_ma_panel(_, ps):
+def toggle_ma_panel(_, _close, ps):
+    ctx      = callback_context
+    trigger  = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else ""
     is_open  = (ps or {}).get("display") != "none"
-    new_disp = "none" if is_open else "flex"
-    return {**(ps or {}), "display": new_disp}, _tf_btn_style(not is_open)
+    if trigger == "ma-outside-click":
+        new_open = False        # always close on outside click
+    else:
+        new_open = not is_open  # button: toggle
+    disp = "flex" if new_open else "none"
+    return {**(ps or {}), "display": disp}, _tf_btn_style(new_open)
 
 
 # ── Populate MA settings rows ─────────────────────────────────────────────────
@@ -1637,110 +1590,6 @@ app.clientside_callback(
     Input("draw-mode-store", "data"),
     Input("draw-clear-btn",  "n_clicks"),
     Input({"type": "draw-tool-btn", "index": "cancel"}, "n_clicks"),
-    prevent_initial_call=True,
-)
-
-
-# ── Drawing colour ────────────────────────────────────────────────────────────
-
-@app.callback(
-    Output("draw-color-store", "data"),
-    Output({"type": "draw-color-btn", "index": ALL}, "style"),
-    Input( {"type": "draw-color-btn", "index": ALL}, "n_clicks"),
-    State("draw-color-store", "data"),
-    prevent_initial_call=True,
-)
-def select_draw_color(_clicks, current):
-    ctx = callback_context
-    if not ctx.triggered:
-        return no_update, [_swatch_style(c, c == current) for c in _DRAW_COLORS]
-    try:
-        color = json.loads(ctx.triggered[0]["prop_id"].split(".")[0]).get("index", current)
-    except Exception:
-        color = current
-    return color, [_swatch_style(c, c == color) for c in _DRAW_COLORS]
-
-
-@app.callback(
-    Output("draw-color-store", "data", allow_duplicate=True),
-    Input("draw-color-custom", "value"),
-    prevent_initial_call=True,
-)
-def select_draw_color_custom(custom_val):
-    if not custom_val:
-        return no_update
-    return custom_val
-
-
-app.clientside_callback(
-    "function(c){ if(window._apexSetDrawColor) window._apexSetDrawColor(c); return ''; }",
-    Output("draw-color-dummy", "children"),
-    Input("draw-color-store", "data"),
-    prevent_initial_call=True,
-)
-
-
-# ── Drawing line width ────────────────────────────────────────────────────────
-
-@app.callback(
-    Output("draw-width-store", "data"),
-    Output({"type": "draw-width-btn", "index": ALL}, "style"),
-    Input( {"type": "draw-width-btn", "index": ALL}, "n_clicks"),
-    State("draw-width-store", "data"),
-    prevent_initial_call=True,
-)
-def select_draw_width(_, current):
-    ctx = callback_context
-    if not ctx.triggered:
-        return no_update, [_width_btn_style(w == current) for w in _DRAW_WIDTHS]
-    w = int(json.loads(ctx.triggered[0]["prop_id"].split(".")[0]).get("index", current))
-    return w, [_width_btn_style(ww == w) for ww in _DRAW_WIDTHS]
-
-
-app.clientside_callback(
-    "function(w){ if(window._apexSetDrawWidth) window._apexSetDrawWidth(w); return ''; }",
-    Output("draw-width-dummy", "children"),
-    Input("draw-width-store", "data"),
-    prevent_initial_call=True,
-)
-
-
-# ── Drawing style panel toggle ────────────────────────────────────────────────
-
-@app.callback(
-    Output("draw-style-panel", "style"),
-    Output("draw-style-panel-btn", "style"),
-    Input("draw-style-panel-btn", "n_clicks"),
-    State("draw-style-panel", "style"),
-    prevent_initial_call=True,
-)
-def toggle_draw_style_panel(_, ps):
-    is_open  = (ps or {}).get("display") != "none"
-    new_disp = "none" if is_open else "flex"
-    return {**(ps or {}), "display": new_disp}, _tf_btn_style(not is_open)
-
-
-# ── Drawing line style (solid / dashed / dotted) ──────────────────────────────
-
-@app.callback(
-    Output("draw-style-store", "data"),
-    Output({"type": "draw-style-btn", "index": ALL}, "style"),
-    Input( {"type": "draw-style-btn", "index": ALL}, "n_clicks"),
-    State("draw-style-store", "data"),
-    prevent_initial_call=True,
-)
-def select_draw_style(_, current):
-    ctx = callback_context
-    if not ctx.triggered:
-        return no_update, [_style_btn_style(s == current) for s in _DRAW_STYLES]
-    style = json.loads(ctx.triggered[0]["prop_id"].split(".")[0]).get("index", current)
-    return style, [_style_btn_style(s == style) for s in _DRAW_STYLES]
-
-
-app.clientside_callback(
-    "function(s){ if(window._apexSetDrawStyle) window._apexSetDrawStyle(s); return ''; }",
-    Output("draw-style-dummy", "children"),
-    Input("draw-style-store", "data"),
     prevent_initial_call=True,
 )
 
@@ -2843,7 +2692,12 @@ def ml_action(retrain_n, seed_n, wfo_n):
 
     connector = state.get_key("forex_connector")
     if connector is None:
-        return "Error: forex connector not available — start the bot first."
+        # Bot may not be running — create a temporary connector from env credentials
+        try:
+            from connectors.oanda_connector import OandaConnector
+            connector = OandaConnector()
+        except Exception as exc:
+            return f"Error: cannot connect to OANDA — {exc}"
 
     pairs = config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", [])
 
@@ -2864,15 +2718,22 @@ def ml_action(retrain_n, seed_n, wfo_n):
         threading.Thread(target=_run_wfo, daemon=True).start()
         return f"WFO started for {len(pairs)} pair(s) — running in background. Telegram notification will follow when done."
 
-    # Seed from Backtest + Retrain
-    summary = learner.seed_from_backtest(pairs, _candles_fn, bars=2000, market="forex")
-    errs    = summary.get("errors", [])
-    msg     = (f"Seeded {summary['total_seeded']} trades from "
+    # Seed from Backtest + Retrain — run in background (same pattern as WFO)
+    def _run_seed():
+        summary = learner.seed_from_backtest(pairs, _candles_fn, bars=3500, market="forex")
+        errs    = summary.get("errors", [])
+        msg = (f"Seed complete: {summary['total_seeded']} trades written from "
                f"{summary['pairs_done']}/{len(pairs)} pairs. "
                f"{summary['train_result']}")
-    if errs:
-        msg += f"  Errors: {'; '.join(errs[:3])}"
-    return msg
+        if errs:
+            msg += f"  Errors: {'; '.join(errs[:3])}"
+        logger.info("ML seed: %s", msg)
+
+    threading.Thread(target=_run_seed, daemon=True).start()
+    pair_list = ", ".join(pairs)
+    return (f"⏳ Seeding started for {len(pairs)} pairs ({pair_list}). "
+            f"Fetching 3500 M30 bars each — takes ~1–2 min. "
+            f"Model retrains automatically when done. Check logs for result.")
 
 
 # ── Backtest panel show / hide ────────────────────────────────────────────────
@@ -2903,6 +2764,18 @@ def toggle_backtest_panel(open_n, close_n, backdrop_n, current_style):
     return _hide, {**_BACK_HIDE, "zIndex": 1999}
 
 
+# ── Clear results when pair changes (prevents stale data showing for new pair) ─
+
+@app.callback(
+    Output("backtest-status",  "children", allow_duplicate=True),
+    Output("backtest-results", "children", allow_duplicate=True),
+    Input("bt-pair-select",    "value"),
+    prevent_initial_call=True,
+)
+def clear_backtest_on_pair_change(_pair):
+    return "", []
+
+
 # ── Backtest run ──────────────────────────────────────────────────────────────
 
 @app.callback(
@@ -2927,8 +2800,9 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
         return "Error: connector not available.", no_update
 
     market   = "forex" if is_forex else "crypto"
-    gran_h1  = "H1" if is_forex else "1Hour"
-    gran_h4  = "H4" if is_forex else "4Hour"
+    gran_h1  = config.TIMEFRAMES["primary"] if is_forex else "1Hour"
+    gran_h4  = config.TIMEFRAMES["confirm"] if is_forex else "4Hour"
+    confirm_ratio = 2 if is_forex else 4  # M30→H1 is 2:1; crypto keeps 4:1
     balance  = state.get_key("account", {}).get("balance", 500.0)
 
     # ── Walk-Forward mode ─────────────────────────────────────────────────────
@@ -2941,9 +2815,9 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
             # 6 windows max, so fetch train + test + (6 × step) bars
             fetch_bars = total + min(step * 6, 2000)
             df_h1 = connector.get_candles(pair, gran_h1, fetch_bars)
-            df_h4 = connector.get_candles(pair, gran_h4, max(200, fetch_bars // 4))
+            df_h4 = connector.get_candles(pair, gran_h4, max(200, fetch_bars // confirm_ratio))
         except Exception as exc:
-            return f"Data fetch failed: {exc}", no_update
+            return f"Data fetch failed: {exc}", html.Div()
 
         from backtest.runner import run_walk_forward
         from dashboard.panels import walk_forward_results
@@ -2952,7 +2826,7 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
                                   step_bars=step,
                                   starting_balance=balance, market=market)
         if "error" in wf_res:
-            return f"Walk-forward error: {wf_res['error']}", no_update
+            return f"Walk-forward error: {wf_res['error']}", html.Div()
 
         n_win = len(wf_res.get("windows", []))
         status = (f"Walk-forward complete — {n_win} windows  "
@@ -2964,9 +2838,9 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
     bars = int(bars or 1500)
     try:
         df_h1   = connector.get_candles(pair, gran_h1, bars)
-        df_h4   = connector.get_candles(pair, gran_h4, max(200, bars // 4))
+        df_h4   = connector.get_candles(pair, gran_h4, max(200, bars // confirm_ratio))
     except Exception as exc:
-        return f"Data fetch failed: {exc}", no_update
+        return f"Data fetch failed: {exc}", html.Div()
 
     from backtest.runner import run_backtest
     res    = run_backtest(pair, df_h1, df_h4,
@@ -2980,8 +2854,10 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
     # ── Summary cards ─────────────────────────────────────────────────────────
     wr    = res["win_rate"]
     dd    = res["max_drawdown"]
+    pf    = res.get("profit_factor", 0.0)
     wr_c  = "#00ff88" if wr >= 0.5 else "#ff3366"
     dd_c  = "#ff3366" if dd >= 0.10 else ("#ffd700" if dd >= 0.05 else "#00ff88")
+    pf_c  = "#00ff88" if pf >= 1.5 else ("#ffd700" if pf >= 1.0 else "#ff3366")
 
     def _card(label, val, color="#e6edf3"):
         return html.Div([
@@ -2991,13 +2867,14 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
                   "padding": "0.5rem 0.75rem", "textAlign": "center", "flex": "1"})
 
     summary = html.Div([
-        _card("Signals", str(res["total_signals"]), "#38b6ff"),
-        _card("Trades",  str(res["total_trades"]),  "#e6edf3"),
-        _card("Win Rate",f"{wr:.0%}",               wr_c),
-        _card("Total P&L",f"${res['total_pnl']:+.2f}",
+        _card("Signals",   str(res["total_signals"]), "#38b6ff"),
+        _card("Trades",    str(res["total_trades"]),  "#e6edf3"),
+        _card("Win Rate",  f"{wr:.0%}",               wr_c),
+        _card("Profit Factor", f"{pf:.2f}",           pf_c),
+        _card("Total P&L", f"${res['total_pnl']:+.2f}",
               "#00ff88" if res["total_pnl"] >= 0 else "#ff3366"),
-        _card("Max DD",  f"{dd:.1%}",               dd_c),
-        _card("Final Bal",f"${res['final_balance']:.2f}", "#ffd700"),
+        _card("Max DD",    f"{dd:.1%}",               dd_c),
+        _card("Final Bal", f"${res['final_balance']:.2f}", "#ffd700"),
     ], style={"display": "flex", "gap": "0.4rem", "marginBottom": "1rem",
                "flexWrap": "wrap"})
 

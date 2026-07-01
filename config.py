@@ -4,30 +4,32 @@ load_dotenv()
 
 MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 
-# Active trading pairs — updated 2026-06-26 after backtest review
-# USD_CAD: 52% win rate  — best performer, confirmed by backtest and live data
-# USD_CHF: 42% win rate  $+37.60  2.1% DD — confirmed; excellent R:R and low drawdown
-# GBP_CHF: 50% win rate  $+40.19  2.8% DD — promoted 2026-06-26; highest WR of all pairs tested
+# Active trading pairs — updated 2026-07-01 (SESSION_START=04:00, ADX(28), 3500 M30 bars)
+# USD_CAD: 48% WR  $+71.96  2.5% DD (29 trades) — WFO-optimised: CCI=28, MACD=8/21/5 → 55.6% WR on last 30 days
+# NZD_USD: 38% WR  $+39.05  5.0% DD (26 trades) — PF=1.58; 2:1 R:R makes 38% WR profitable; promoted 2026-07-01
+# USD_CHF: 27% win rate  $-12.38   8.9% DD — demoted to watch 2026-06-30; loses money on M30
+# GBP_CHF: 24% win rate  $-26.65   8.9% DD — removed 2026-06-30; worst M30 performer; CHF low-vol kills M30 edge
 # AUD_USD: 12% win rate  — removed; unacceptable live performance
-FOREX_PAIRS  = ["USD_CAD", "USD_CHF", "GBP_CHF"]
+FOREX_PAIRS  = ["USD_CAD", "NZD_USD"]
 
 # Pairs under monitoring — signals shown, NO trades opened
-# GBP_USD: 33% win rate  — below break-even threshold; watching for improvement before re-activating
-# EUR_USD: 27% win rate  — structurally mismatched with EMA-bounce; strong trend pair
-# NZD_USD: 39% win rate  $+22.68  4.6% DD — profitable but full SL hits dominate; equity underwater too long
+# All results below: SESSION_START=04:00, SESSION_END=17:00, ADX(28), 3500 M30 bars
+# NZD_USD: promoted to active 2026-07-01 — PF=1.58, +$39.05, 5.0% DD
+# EUR_AUD: 37% WR  $+47.20  8.4% DD (43 trades) — re-added 2026-07-01; positive PnL, high trade count; WFO candidate
+# EUR_CHF: 27% WR  $+1.10   4.0% DD (11 trades) — nearly breakeven; 04:00 start recovered some London-open edge
+# GBP_USD: 25% WR  $-2.85   7.8% DD (47 trades) — below break-even; marginal
+# EUR_USD: 24% WR  $-28.63  9.7% DD (33 trades) — losing; high DD
+# USD_CHF: 21% WR  $-37.41  8.7% DD (33 trades) — pre-London CHF (04:00-07:00) very noisy; SNB wicks; watch-only
 # AUD_NZD: 19% win rate  -$23.38  6.6% DD — rejected; EMA-bounce has no edge on this cross
-# EUR_CHF: 43% win rate  $+4.94  1.7% DD — best DD of all pairs but only 7 trades/3mo; too few signals
-# GBP_CHF: 50% win rate  $+40.19  2.8% DD — promoted to active 2026-06-26
 # GBP_JPY: 17% win rate  $-51   — removed; spike-and-revert behaviour kills R:R without BE
 # USD_JPY: 48% win rate  $+1    — EMA-bounce doesn't suit JPY momentum
-# EUR_AUD: removed 2026-06-29 — 9.1% max DD too volatile; signals were watch-only and scoring below threshold
-FOREX_WATCH  = ["GBP_USD", "EUR_USD", "NZD_USD", "EUR_CHF"]
+FOREX_WATCH  = ["USD_CHF", "GBP_USD", "EUR_USD", "EUR_CHF", "EUR_AUD"]
 CRYPTO_PAIRS = []   # EMA-bounce is a forex mean-reversion strategy — does not suit crypto trending behaviour
                     # BTC: 19% win rate, -$149 P&L, 29.6% DD | ETH: -$6.96 | both removed after backtest
 
 TIMEFRAMES = {
-    "primary": "H1",    # Signal generation
-    "confirm": "H4",    # Trend filter gate
+    "primary": "M30",   # Signal generation (was H1 — M30 gives 2× decision points per hour)
+    "confirm": "H1",    # Trend filter gate (was H4 — maintains 2:1 confirm:primary ratio)
     "context": "D",     # Market structure context
 }
 
@@ -41,16 +43,25 @@ TRAILING_STOP_PIPS   = 15     # Trail SL 15 pips after TP2 is hit (0 = disabled)
 # ── Duplicate trade protection ────────────────────────────────────────────────
 ALLOW_MULTIPLE_PER_PAIR    = False  # Allow multiple open positions for the same pair
 TRADE_COOLDOWN_HOURS       = 4      # Min hours after a pair's trade closes before re-entry
-LIMIT_ORDER_EXPIRY_CANDLES = 4      # Cancel unfilled limit orders after N candle closes (4 = 4h on H1)
-
-# Session filter — London + London/NY overlap only (07:00–16:00 UTC)
-# NY solo (16:00–21:00) and Asian (21:00–07:00) both show 23% WR — excluded.
-SESSION_START_UTC = 7    # 07:00 UTC — London open
-SESSION_END_UTC   = 16   # 16:00 UTC — end of London/NY overlap
+LIMIT_ORDER_EXPIRY_CANDLES = 8      # Cancel unfilled limit orders after N candle closes (8 M30 = 4h, was 4 H1)
 
 # ── Volatility gates ──────────────────────────────────────────────────────────
 ATR_MIN_PIPS = 5     # Skip signals when market is too quiet (ATR < 5 pips)
 ATR_MAX_PIPS = 35    # Skip signals during extreme volatility (ATR > 35 pips)
+
+# ── ADX regime gate ───────────────────────────────────────────────────────────
+# ADX(14) measures trend strength (not direction). EMA-bounce is mean-reversion
+# and only works when the market is ranging. When ADX > threshold the market is
+# trending and EMA bounces fail — price continues instead of reversing.
+ADX_THRESHOLD = 28   # Hard-block signals when ADX(14) > this value (strong trend)
+                     # 28 is standard; WFO will tune per pair (grid: 22, 28, 33)
+
+# ── Session gate ─────────────────────────────────────────────────────────────
+# 04:00 UTC captures European pre-market positioning (Frankfurt/Paris banks begin
+# at ~05:00 UTC) and Sydney overlap — important for EUR/AUD and EUR/CHF.
+# ADX filter handles ranging vs trending; session gate just cuts deep-Asian hours.
+SESSION_START_UTC = 4   # 04:00 UTC — European pre-market / Sydney overlap
+SESSION_END_UTC   = 17  # 17:00 UTC — NY close
 
 # ── H4 trend gate ────────────────────────────────────────────────────────────
 H4_GATE_BLOCKING = True   # Hard-block counter-trend signals (True) vs diagnostic-only (False)
@@ -70,13 +81,13 @@ BREAKEVEN_PER_PAIR    = {}     # No active pair needs BE — add e.g. "GBP_JPY":
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")   # Leave blank to disable
 
 EMA_TEST_PERIODS          = [20, 34, 50, 60, 75, 100, 110, 125, 150, 200, 250]
-EMA_REFIT_EVERY_N_CANDLES = 50
+EMA_REFIT_EVERY_N_CANDLES = 100  # was 50 on H1; 100 M30 bars ≈ same 50-hour wall-clock refit cadence
 
 # ── Walk-Forward Optimization ────────────────────────────────────────────────
 # Weekly grid-search over CCI period, MACD settings, and min_score using the
 # last WFO_TRAIN_BARS of live candle data. Runs in a background thread.
 WFO_ENABLED    = True   # Set False to disable the weekly re-fit entirely
-WFO_TRAIN_BARS = 720    # H1 bars used for fitting (~30 days of data)
+WFO_TRAIN_BARS = 1440   # M30 bars used for fitting (~30 days: 48 bars/day × 30; was 720 H1)
 WFO_REFIT_DAYS = 7      # Days between re-fits per pair
 
 # ── Adaptive parameter tuning ─────────────────────────────────────────────────

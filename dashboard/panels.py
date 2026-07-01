@@ -102,6 +102,7 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
         ema_s     = det.get("ema_score",       0)
         str_s     = det.get("structure_score", 0)
         pa_s      = det.get("pa_score",        0)
+        ml_prob   = det.get("ml_win_prob")
         h4_gate   = det.get("h4_gate",   {}) or {}
         h4_passed = h4_gate.get("passed")
         h4_trend  = det.get("h4_trend",  "neutral")
@@ -110,6 +111,14 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
                      _BEAR if h4_passed is False else _MUTED)
         gate_lbl  = ("H4✓" if h4_passed is True  else
                      "H4✗" if h4_passed is False else "H4?")
+
+        ml_col  = (_BULL if (ml_prob or 0) >= 0.55 else
+                   _GOLD if (ml_prob or 0) >= 0.45 else _BEAR)
+        ml_cell = (html.Span(f"  ML:{ml_prob:.0%}", style={"color": ml_col,
+                              "fontSize": "0.65rem", **_mono})
+                   if ml_prob is not None else
+                   html.Span("  ML:—", style={"color": _MUTED,
+                             "fontSize": "0.65rem", **_mono}))
 
         diag_row = html.Tr([
             html.Td([
@@ -122,6 +131,7 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
                 html.Span(f"PA:{pa_s:.0f}",
                           style={"color": _BULL if pa_s > 0 else _MUTED,
                                  "fontSize": "0.65rem", **_mono}),
+                ml_cell,
             ]),
             html.Td([
                 html.Span(gate_lbl + " ",
@@ -142,11 +152,16 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
         block_reason  = det.get("trade_blocked_reason")
         badge_content = [html.Span(status, style={"color": badge_col, "fontSize": "0.7rem",
                                                    "fontWeight": 700})]
-        if block_reason and status == "SIGNAL":
-            badge_content.append(
-                html.Span(f" ⊘ {block_reason}", style={"color": "#8b949e", "fontSize": "0.6rem",
-                                                        "display": "block", "marginTop": "1px"})
-            )
+        if block_reason:
+            # Shorten to category prefix (before first colon/parenthesis) for display
+            cat = block_reason.split(":")[0].split("(")[0].strip()
+            badge_content.append(html.Span(f"⊘ {cat}", style={
+                "color": "#ff9900", "fontSize": "0.62rem", "fontWeight": 700,
+                "display": "block", "marginTop": "2px",
+                "background": "rgba(255,153,0,0.12)",
+                "border": "1px solid rgba(255,153,0,0.35)",
+                "borderRadius": "3px", "padding": "0 4px",
+            }))
         active_rows.append(html.Tr([
             html.Td([
                 html.Div([
@@ -394,9 +409,9 @@ def account_stats_bar(account: dict, daily_pnl: float, win_rate_all: float,
     lat_str  = f"{avg_latency_ms:.0f} ms" if avg_latency_ms is not None else "—"
 
     stats = [
-        _stat("Balance",    f"${balance:,.2f}"),
+        _stat("Balance",    f"${balance:,.2f}", large=True),
         _stat("NAV",        f"${nav:,.2f}"),
-        _stat("Daily P&L",  f"${daily_pnl:+,.2f}", dpnl_col),
+        _stat("Daily P&L",  f"${daily_pnl:+,.2f}", dpnl_col, large=True),
         _stat("Unrealised", f"${unreal:+,.2f}", _BULL if unreal >= 0 else _BEAR),
         _stat("Win Rate",   f"{win_rate_all:.0%} / {win_rate_20:.0%}",
               _BULL if win_rate_all >= 0.50 else _BEAR),
@@ -715,13 +730,13 @@ def _ml_block(ml_stats: dict) -> html.Div:
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 
-def _stat(label: str, value: str, value_color: str = _TEXT) -> html.Div:
+def _stat(label: str, value: str, value_color: str = _TEXT, large: bool = False) -> html.Div:
     return html.Div([
-        html.Span(label, style={"color": _MUTED, "fontSize": "0.72rem",
-                                  "display": "block"}),
-        html.Span(value, style={"color": value_color, "fontWeight": 600,
-                                  "fontSize": "0.9rem", **_mono}),
-    ], style={"padding": "0 0.75rem", "borderRight": "1px solid #21262d"})
+        html.Span(label, style={"color": _MUTED, "fontSize": "0.67rem",
+                                  "display": "block", "letterSpacing": "0.03em"}),
+        html.Span(value, style={"color": value_color, "fontWeight": 700,
+                                  "fontSize": "1.0rem" if large else "0.88rem", **_mono}),
+    ], style={"padding": "0 0.8rem", "borderRight": "1px solid #21262d"})
 
 
 def signal_quality_panel(analysis: dict) -> html.Div:
@@ -1075,20 +1090,24 @@ def learning_panel(
                 fitted_str = _dt.fromisoformat(fitted_str).strftime("%m/%d %H:%M")
             except Exception:
                 pass
-            wr_col = _BULL if s.get("win_rate_pct", 0) >= 50 else _BEAR
+            wr_col  = _BULL if s.get("win_rate_pct", 0) >= 50 else _BEAR
+            adx_val = s.get("adx_threshold")
+            adx_str = str(adx_val) if adx_val is not None else "—"
+            adx_col = "#ffd700" if adx_val and adx_val <= 22 else ("#38b6ff" if adx_val and adx_val == 28 else "#ff9966")
             rows.append(html.Tr([
-                html.Td(pair.replace("_", "/"),         style={**_td, "color": _TEXT, **_mono}),
-                html.Td(fitted_str,                      style={**_td, "color": _MUTED, "fontSize": "0.7rem"}),
-                html.Td(str(s.get("CCI_PERIOD", "—")),  style={**_td, "color": "#38b6ff"}),
-                html.Td(s.get("MACD", "—"),              style={**_td, "color": "#38b6ff"}),
-                html.Td(str(s.get("min_score", "—")),   style={**_td, "color": _GOLD, "fontWeight": 700}),
+                html.Td(pair.replace("_", "/"),          style={**_td, "color": _TEXT, **_mono}),
+                html.Td(fitted_str,                       style={**_td, "color": _MUTED, "fontSize": "0.7rem"}),
+                html.Td(str(s.get("CCI_PERIOD", "—")),   style={**_td, "color": "#38b6ff"}),
+                html.Td(s.get("MACD", "—"),               style={**_td, "color": "#38b6ff"}),
+                html.Td(str(s.get("min_score", "—")),    style={**_td, "color": _GOLD, "fontWeight": 700}),
+                html.Td(adx_str,                          style={**_td, "color": adx_col, "fontWeight": 700}),
                 html.Td(f"{s.get('win_rate_pct', 0):.0f}%", style={**_td, "color": wr_col}),
-                html.Td(str(s.get("total_trades", 0)),  style={**_td, "color": _TEXT}),
+                html.Td(str(s.get("total_trades", 0)),   style={**_td, "color": _TEXT}),
             ]))
         sections.append(html.Table([
             html.Thead(html.Tr([html.Th(h, style=_th) for h in
                                 ["Pair", "Last Fit", "CCI", "MACD F/S/Sig",
-                                 "Min Score", "Win%", "Trades"]])),
+                                 "Min Score", "ADX Thr", "Win%", "Trades"]])),
             html.Tbody(rows),
         ], style={"width": "100%", "borderCollapse": "collapse", "marginBottom": "1.5rem"}))
     else:

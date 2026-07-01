@@ -142,6 +142,50 @@ def macd_full(
     return macd_line, signal_line, histogram
 
 
+def adx(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
+) -> pd.Series:
+    """
+    Wilder Average Directional Index — matches TradingView ADX exactly.
+    Returns the ADX line (0–100). Values above 25–30 indicate a trending market;
+    values below 25 indicate a ranging/choppy market where EMA bounces work best.
+    """
+    prev_high  = high.shift(1)
+    prev_low   = low.shift(1)
+    prev_close = close.shift(1)
+
+    # True Range
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+    # Directional movement
+    up   = high - prev_high
+    down = prev_low - low
+
+    plus_dm  = np.where((up > down) & (up > 0),   up,   0.0)
+    minus_dm = np.where((down > up) & (down > 0),  down, 0.0)
+
+    plus_dm_s  = pd.Series(plus_dm,  index=close.index)
+    minus_dm_s = pd.Series(minus_dm, index=close.index)
+
+    # Wilder smoothing (alpha = 1/period)
+    alpha = 1.0 / period
+    atr_s      = tr.ewm(alpha=alpha,       min_periods=period, adjust=False).mean()
+    plus_di_s  = plus_dm_s.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
+    minus_di_s = minus_dm_s.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
+
+    plus_di  = 100 * plus_di_s  / atr_s.replace(0, np.nan)
+    minus_di = 100 * minus_di_s / atr_s.replace(0, np.nan)
+
+    dx_denom = (plus_di + minus_di).replace(0, np.nan)
+    dx       = 100 * (plus_di - minus_di).abs() / dx_denom
+
+    return dx.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
+
+
 def rsi(close: pd.Series, period: int = 14) -> pd.Series:
     """Wilder RSI — matches TradingView ta.rsi() exactly."""
     delta = close.diff()

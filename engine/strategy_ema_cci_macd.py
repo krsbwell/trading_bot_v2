@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from engine.indicators import ema, atr, cci, macd_full
+from engine.indicators import ema, atr, cci, macd_full, adx
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def get_best_emas(pair: str, timeframe: str, df: pd.DataFrame) -> tuple[int, int
     }
 
     if len(scores) < 3:
-        logger.warning("Too few scoreable periods for %s %s — using defaults", pair, timeframe)
+        logger.debug("Too few scoreable periods for %s %s — using defaults", pair, timeframe)
         fallback = [p for p in [34, 100, 200] if p < n][:3]
         while len(fallback) < 3:
             fallback.append(fallback[-1])
@@ -110,7 +110,7 @@ def _find_touch(
     ema_s: pd.Series,
     atr_s: pd.Series,
     direction: str,
-    lookback: int = 20,
+    lookback: int = 40,
     band_mult: float = 0.25,
 ) -> Optional[int]:
     """
@@ -118,6 +118,7 @@ def _find_touch(
     direction "long"  → look for low touching EMA from above (within band_mult×ATR)
     direction "short" → look for high touching EMA from below (within band_mult×ATR)
     Returns the index position in df (absolute), or None.
+    Default lookback=40 M30 bars ≈ 20 hours (was 20 H1 bars = same 20-hour window).
     """
     n = len(df)
     lows  = df["low"].values
@@ -163,11 +164,24 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     ap               = adaptive or {}
     cci_threshold    = ap.get("cci_threshold",    20)
     touch_band_mult  = ap.get("touch_band_mult",  0.25)
+    touch_lookback   = ap.get("touch_lookback",   40)
     macd_bars_needed = ap.get("macd_bars_needed", 1)
     cci_period       = ap.get("CCI_PERIOD",       config.CCI_PERIOD)
     macd_fast        = ap.get("MACD_FAST",        config.MACD_FAST)
     macd_slow        = ap.get("MACD_SLOW",        config.MACD_SLOW)
     macd_signal_p    = ap.get("MACD_SIGNAL",      config.MACD_SIGNAL)
+    adx_threshold    = ap.get("adx_threshold",    config.ADX_THRESHOLD)
+
+    # ── Session gate — London + New York only (07:00–17:00 UTC) ──────────────
+    last_bar_hour = df_h1.index[-1].hour
+    if not (config.SESSION_START_UTC <= last_bar_hour < config.SESSION_END_UTC):
+        return 0.0
+
+    # ── ADX regime gate — skip when market is strongly trending ──────────────
+    adx_h1  = adx(df_h1["high"], df_h1["low"], df_h1["close"], 14)
+    adx_val = float(adx_h1.iloc[-1])
+    if np.isnan(adx_val) or adx_val > adx_threshold:
+        return 0.0   # trending market — EMA bounce unreliable
 
     short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
     short_h4, _, _   = get_best_emas(pair, config.TIMEFRAMES["confirm"],  df_h4)
@@ -192,7 +206,7 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         return 0.0   # H4 counter-trend — skip entirely
 
     c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "long",
-                         lookback=20, band_mult=touch_band_mult)
+                         lookback=touch_lookback, band_mult=touch_band_mult)
     c3 = c3_idx is not None
 
     c4 = c5 = c6 = c7 = False
@@ -255,11 +269,24 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     ap               = adaptive or {}
     cci_threshold    = ap.get("cci_threshold",    20)
     touch_band_mult  = ap.get("touch_band_mult",  0.25)
+    touch_lookback   = ap.get("touch_lookback",   40)
     macd_bars_needed = ap.get("macd_bars_needed", 1)
     cci_period       = ap.get("CCI_PERIOD",       config.CCI_PERIOD)
     macd_fast        = ap.get("MACD_FAST",        config.MACD_FAST)
     macd_slow        = ap.get("MACD_SLOW",        config.MACD_SLOW)
     macd_signal_p    = ap.get("MACD_SIGNAL",      config.MACD_SIGNAL)
+    adx_threshold    = ap.get("adx_threshold",    config.ADX_THRESHOLD)
+
+    # ── Session gate — London + New York only (07:00–17:00 UTC) ──────────────
+    last_bar_hour = df_h1.index[-1].hour
+    if not (config.SESSION_START_UTC <= last_bar_hour < config.SESSION_END_UTC):
+        return 0.0
+
+    # ── ADX regime gate — skip when market is strongly trending ──────────────
+    adx_h1  = adx(df_h1["high"], df_h1["low"], df_h1["close"], 14)
+    adx_val = float(adx_h1.iloc[-1])
+    if np.isnan(adx_val) or adx_val > adx_threshold:
+        return 0.0   # trending market — EMA bounce unreliable
 
     short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
     short_h4, _, _   = get_best_emas(pair, config.TIMEFRAMES["confirm"],  df_h4)
@@ -284,7 +311,7 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         return 0.0   # H4 counter-trend — skip entirely
 
     c3_idx = _find_touch(df_h1, short_ema_h1, atr_h1, "short",
-                         lookback=20, band_mult=touch_band_mult)
+                         lookback=touch_lookback, band_mult=touch_band_mult)
     c3 = c3_idx is not None
 
     c4 = c5 = c6 = c7 = False

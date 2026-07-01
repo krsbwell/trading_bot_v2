@@ -2,7 +2,7 @@
 Walk-Forward Optimizer — weekly parameter re-fitting per pair.
 
 Searches over CCI period, MACD fast/slow/signal combos, and minimum confluence
-score using the last WFO_TRAIN_BARS of historical H1 data. The best combination
+score using the last WFO_TRAIN_BARS of primary-TF (M30) data. The best combination
 (by composite profit-factor x win-rate) is saved to data/wfo_params.json and
 read by the signal engine on every candle cycle.
 
@@ -25,23 +25,30 @@ logger = logging.getLogger(__name__)
 _SAVE_PATH = Path(__file__).parent.parent / "data" / "wfo_params.json"
 
 # ── Parameter search grid ─────────────────────────────────────────────────────
-# 3 x 3 x 2 = 18 combinations per pair — fast enough for a background job
-_MIN_SCORES  = [50, 55, 62]
-_CCI_PERIODS = [14, 20, 28]
-_MACD_COMBOS = [
+# 3 x 3 x 2 x 2 x 2 x 3 = 216 combinations per pair — ~5 min background job
+_MIN_SCORES      = [50, 55, 62]
+_CCI_PERIODS     = [14, 20, 28]
+_MACD_COMBOS     = [
     (12, 26, 9),   # standard
     (8,  21, 5),   # faster response
 ]
+_CCI_THRESHOLDS  = [15, 30]   # CCI oversold/overbought required at EMA touch (default 20)
+_TOUCH_LOOKBACKS = [30, 50]   # M30 bars to search back for EMA touch (default 40)
+_ADX_THRESHOLDS  = [22, 28, 33]  # ADX regime gate — below = ranging (trade); above = skip
 
 _PARAM_COMBINATIONS = [
     {
-        "min_score":   ms,
-        "CCI_PERIOD":  cci,
-        "MACD_FAST":   mf,
-        "MACD_SLOW":   msl,
-        "MACD_SIGNAL": msig,
+        "min_score":      ms,
+        "CCI_PERIOD":     cci,
+        "MACD_FAST":      mf,
+        "MACD_SLOW":      msl,
+        "MACD_SIGNAL":    msig,
+        "cci_threshold":  ct,
+        "touch_lookback": tl,
+        "adx_threshold":  adxt,
     }
-    for ms, cci, (mf, msl, msig) in product(_MIN_SCORES, _CCI_PERIODS, _MACD_COMBOS)
+    for ms, cci, (mf, msl, msig), ct, tl, adxt
+    in product(_MIN_SCORES, _CCI_PERIODS, _MACD_COMBOS, _CCI_THRESHOLDS, _TOUCH_LOOKBACKS, _ADX_THRESHOLDS)
 ]
 
 
@@ -116,9 +123,9 @@ class WFOOptimizer:
         of data. Saves the best params to disk and returns the winning param dict,
         or None if no combination produced >= 5 trades.
         """
-        train_bars = getattr(config, "WFO_TRAIN_BARS", 720)
+        train_bars = getattr(config, "WFO_TRAIN_BARS", 1440)
         train_h1   = df_h1.tail(train_bars).copy()
-        train_h4   = df_h4.tail(max(train_bars // 4, 50)).copy()
+        train_h4   = df_h4.tail(max(train_bars // 2, 50)).copy()  # M30→H1 is 2:1, not 4:1
 
         if len(train_h1) < 120:
             logger.warning("WFO %s: insufficient data (%d bars)", pair, len(train_h1))
@@ -133,10 +140,13 @@ class WFOOptimizer:
 
         for combo in _PARAM_COMBINATIONS:
             indicator_overrides = {
-                "CCI_PERIOD":  combo["CCI_PERIOD"],
-                "MACD_FAST":   combo["MACD_FAST"],
-                "MACD_SLOW":   combo["MACD_SLOW"],
-                "MACD_SIGNAL": combo["MACD_SIGNAL"],
+                "CCI_PERIOD":     combo["CCI_PERIOD"],
+                "MACD_FAST":      combo["MACD_FAST"],
+                "MACD_SLOW":      combo["MACD_SLOW"],
+                "MACD_SIGNAL":    combo["MACD_SIGNAL"],
+                "cci_threshold":  combo["cci_threshold"],
+                "touch_lookback": combo["touch_lookback"],
+                "adx_threshold":  combo["adx_threshold"],
             }
             try:
                 result = run_backtest(
@@ -173,10 +183,13 @@ class WFOOptimizer:
 
         logger.info(
             "WFO %s: best  min_score=%d  CCI=%d  MACD=%d/%d/%d  "
+            "cci_thr=%d  lookback=%d  adx_thr=%d  "
             "score=%.2f  WR=%.0f%%  trades=%d  PnL=$%.2f",
             pair,
             best_params["min_score"],  best_params["CCI_PERIOD"],
             best_params["MACD_FAST"],  best_params["MACD_SLOW"],  best_params["MACD_SIGNAL"],
+            best_params["cci_threshold"], best_params["touch_lookback"],
+            best_params["adx_threshold"],
             best_score,
             best_result.get("win_rate", 0) * 100,
             best_result.get("total_trades", 0),
@@ -196,7 +209,7 @@ class WFOOptimizer:
                 continue
             try:
                 df_h1 = get_candles_fn(pair, config.TIMEFRAMES["primary"], train_bars + 60)
-                df_h4 = get_candles_fn(pair, config.TIMEFRAMES["confirm"],  train_bars // 4 + 20)
+                df_h4 = get_candles_fn(pair, config.TIMEFRAMES["confirm"],  train_bars // 2 + 20)  # M30→H1 is 2:1
                 if df_h1 is None or len(df_h1) < 120:
                     logger.warning("WFO %s: candle fetch returned insufficient data", pair)
                     continue
@@ -209,17 +222,18 @@ class WFOOptimizer:
         with self._lock:
             return {
                 pair: {
-                    "fitted_at":    s.get("fitted_at", ""),
-                    "min_score":    s["params"].get("min_score"),
-                    "CCI_PERIOD":   s["params"].get("CCI_PERIOD"),
-                    "MACD":         (
+                    "fitted_at":     s.get("fitted_at", ""),
+                    "min_score":     s["params"].get("min_score"),
+                    "CCI_PERIOD":    s["params"].get("CCI_PERIOD"),
+                    "MACD":          (
                         f"{s['params'].get('MACD_FAST')}/"
                         f"{s['params'].get('MACD_SLOW')}/"
                         f"{s['params'].get('MACD_SIGNAL')}"
                     ),
-                    "win_rate_pct": round(s.get("win_rate", 0) * 100, 1),
-                    "total_trades": s.get("total_trades", 0),
-                    "score":        s.get("score", 0),
+                    "adx_threshold": s["params"].get("adx_threshold"),
+                    "win_rate_pct":  round(s.get("win_rate", 0) * 100, 1),
+                    "total_trades":  s.get("total_trades", 0),
+                    "score":         s.get("score", 0),
                 }
                 for pair, s in self._state.items()
             }

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 import config
 from connectors.oanda_connector import OandaConnector
@@ -591,8 +592,8 @@ def _update_ml_stats() -> None:
 
 def _diagnostic_scan() -> None:
     """
-    Runs between H1 closes (:15, :30, :45) to refresh dashboard signal state.
-    Updates scores and rejection reasons for all pairs — NEVER opens trades.
+    Runs between M30 closes (:10/:20 after each close) to refresh dashboard signal state.
+    Uses completed candles only. NEVER opens trades.
     """
     now_utc = datetime.now(timezone.utc)
     state.update(last_scan_time=now_utc)
@@ -614,6 +615,50 @@ def _diagnostic_scan() -> None:
                 state.update_signal_detail(pair, sig)
         except Exception as exc:
             logger.debug("Diagnostic scan %s: %s", pair, exc)
+
+
+def _live_diagnostic_scan() -> None:
+    """
+    Runs every 60 s via IntervalTrigger to keep the Signal Monitor current
+    using the in-progress M30 bar (live price), not just the last completed bar.
+
+    Fetches 250 completed M30 bars + the forming bar via get_live_candles(),
+    runs the signal engine in display-only mode (no_audit=True), and updates
+    dashboard state. NEVER opens or modifies trades.
+    """
+    if not _forex_engine or not _oanda_connector:
+        return
+    all_pairs = config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", [])
+    for pair in all_pairs:
+        try:
+            # 251 candles: last row is the in-progress bar with live OHLC
+            df_live = _oanda_connector.get_live_candles(
+                pair, config.TIMEFRAMES["primary"], 251
+            )
+            if df_live is None or len(df_live) < 50:
+                continue
+            # Confirm TF still uses completed bars — no repainting risk there
+            df_confirm = _oanda_connector.get_candles(
+                pair, config.TIMEFRAMES["confirm"], 250
+            )
+            if df_confirm is None or len(df_confirm) < 50:
+                continue
+            sig = _forex_engine.run(
+                pair, "forex", no_audit=True,
+                candles_override=(df_live, df_confirm),
+            )
+            if sig is None:
+                continue
+            tf = sig.get("timeframe", config.TIMEFRAMES["primary"])
+            sig["live_bar"] = True   # flag so dashboard can show "LIVE" label
+            if sig.get("no_signal"):
+                state.update_signal(pair, 0, "—", timeframe=tf)
+                state.update_signal_detail(pair, sig)
+            else:
+                state.update_signal(pair, sig["score"], sig["direction"], timeframe=tf)
+                state.update_signal_detail(pair, sig)
+        except Exception as exc:
+            logger.debug("Live diagnostic scan %s: %s", pair, exc)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -776,10 +821,12 @@ def main() -> None:
 
     # ── Scheduler ─────────────────────────────────────────────────────────────
     scheduler = BlockingScheduler(timezone="UTC")
-    # H1 candle closes on the hour — full scan + trade evaluation
-    scheduler.add_job(on_candle_close, CronTrigger(minute=0), id="h1_close")
-    # Between-close diagnostic scans — update dashboard state only, no trades
-    scheduler.add_job(_diagnostic_scan, CronTrigger(minute="15,30,45"), id="diag_scan")
+    # M30 candle closes at :00 and :30 — full scan + trade evaluation
+    scheduler.add_job(on_candle_close, CronTrigger(minute="0,30"), id="m30_close")
+    # Between-close diagnostic scans (:10/:20 after each M30 close) — no trades
+    scheduler.add_job(_diagnostic_scan, CronTrigger(minute="10,20,40,50"), id="diag_scan")
+    # Live candle feed — runs every 60 s to keep Signal Monitor current mid-bar
+    scheduler.add_job(_live_diagnostic_scan, IntervalTrigger(seconds=60), id="live_scan")
     # Weekly WFO re-fit — Sunday 02:00 UTC, runs in background thread (non-blocking)
     if getattr(config, "WFO_ENABLED", True) and _oanda_connector:
         def _wfo_job():
@@ -793,7 +840,7 @@ def main() -> None:
         scheduler.add_job(_wfo_job, CronTrigger(day_of_week="sun", hour=2, minute=0), id="wfo_refit")
         logger.info("WFO weekly re-fit scheduled — Sundays 02:00 UTC")
     state.update(last_scan_time=datetime.now(timezone.utc))
-    logger.info("Scheduler ready — H1 close on :00, diagnostics at :15/:30/:45")
+    logger.info("Scheduler ready — M30 close on :00/:30, diagnostics at :10/:20/:40/:50, live feed every 60s")
     logger.info("Press Ctrl+C to stop.\n")
 
     # Optionally run immediately on startup (useful for testing)
