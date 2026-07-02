@@ -199,6 +199,7 @@
        Drawings use absolute timestamp+price anchors so they are valid on any TF.
        This means trendlines drawn on Daily are visible on 4H and 1H automatically. */
     function _hlKey()     { return 'apex_hlines_'    + _currentPair; }
+    function _vlKey()     { return 'apex_vlines_'    + _currentPair; }
     function _trendKey()  { return 'apex_trendlines_' + _currentPair; }
     function _boxKey()    { return 'apex_boxes_'      + _currentPair; }
     function _posKey()    { return 'apex_pos_'        + _currentPair; }
@@ -1737,6 +1738,263 @@
         drawings.forEach(function(d) { if (d.type === 'h-line') updateHLine(d); });
     }
 
+    /* ── SVG vertical line builder / updater ──────────────────────────────── */
+    function _pad2(n) { return (n < 10 ? '0' : '') + n; }
+    function _fmtVTime(t) {
+        try {
+            var dt = new Date(t * 1000);
+            return _pad2(dt.getUTCMonth() + 1) + '/' + _pad2(dt.getUTCDate()) + ' ' +
+                   _pad2(dt.getUTCHours()) + ':' + _pad2(dt.getUTCMinutes());
+        } catch(e) { return ''; }
+    }
+
+    function buildVLineEl(d) {
+        var svg = ensureTrendOverlay(); if (!svg) return;
+        var g   = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+        /* Wide transparent hit strip — makes the thin line easy to click */
+        var hit = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        hit.setAttribute('stroke', 'transparent');
+        hit.setAttribute('stroke-width', '14');
+        hit.setAttribute('pointer-events', 'stroke');
+        hit.setAttribute('cursor', 'move');
+        hit.addEventListener('dblclick', function(e) {
+            e.stopPropagation(); e.preventDefault();
+            var idx = drawings.indexOf(d);
+            if (idx >= 0) _showDrawingSettings(e.clientX, e.clientY, 'v-line', idx);
+        });
+
+        /* Visual line */
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('pointer-events', 'none');
+
+        /* Time label — near the top of the line */
+        var lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('font-size', '10');
+        lbl.setAttribute('font-family', 'monospace');
+        lbl.setAttribute('font-weight', '600');
+        lbl.setAttribute('dominant-baseline', 'hanging');
+        lbl.setAttribute('text-anchor', 'middle');
+        lbl.setAttribute('pointer-events', 'none');
+
+        /* Selection handle (small circle at top end) */
+        var handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        handle.setAttribute('r', '4');
+        handle.setAttribute('stroke-width', '2');
+        handle.setAttribute('pointer-events', 'none');
+        handle.setAttribute('display', 'none');
+
+        /* Lock badge */
+        var lockBadge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lockBadge.setAttribute('font-size', '12');
+        lockBadge.setAttribute('text-anchor', 'middle');
+        lockBadge.setAttribute('dominant-baseline', 'central');
+        lockBadge.setAttribute('pointer-events', 'none');
+        lockBadge.setAttribute('display', 'none');
+        lockBadge.textContent = '🔒';
+
+        /* Delete button — × shown near the top when selected. The glyph itself
+           is a thin SVG text stroke (a tiny, unreliable click target), so a
+           larger invisible circle sits on top of it to actually catch clicks. */
+        var delBtn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        delBtn.textContent = '×';
+        delBtn.setAttribute('font-size', '16');
+        delBtn.setAttribute('font-family', 'monospace');
+        delBtn.setAttribute('font-weight', '700');
+        delBtn.setAttribute('dominant-baseline', 'central');
+        delBtn.setAttribute('text-anchor', 'middle');
+        delBtn.setAttribute('pointer-events', 'none');
+        delBtn.setAttribute('display', 'none');
+
+        var delHit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        delHit.setAttribute('r', '11');
+        delHit.setAttribute('fill', 'transparent');
+        delHit.setAttribute('cursor', 'pointer');
+        delHit.setAttribute('display', 'none');
+        /* The overlay SVG root is pointer-events:none (so it doesn't block the
+           chart underneath) and pointer-events inherits — without an explicit
+           override here this circle is invisible to clicks no matter its size. */
+        delHit.setAttribute('pointer-events', 'all');
+        /* Stop mousedown from bubbling to the chart container's drag-select
+           handler — otherwise it treats this as the start of a line-drag
+           (since the button sits right next to the line) and moves the line
+           out from under the cursor before the click can land. */
+        delHit.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+        delHit.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var idx = drawings.indexOf(d);
+            if (idx < 0) return;
+            _removeOne(d);
+            drawings.splice(idx, 1);
+            if (selectedIdx === idx) selectedIdx = -1;
+            else if (selectedIdx > idx) selectedIdx--;
+            saveVLines();
+        });
+
+        /* Duplicate button — + shown near the top when selected (same wider
+           invisible hit-circle treatment as delete, above). */
+        var dupBtn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        dupBtn.textContent = '+';
+        dupBtn.setAttribute('font-size', '14');
+        dupBtn.setAttribute('font-family', 'monospace');
+        dupBtn.setAttribute('font-weight', '700');
+        dupBtn.setAttribute('dominant-baseline', 'central');
+        dupBtn.setAttribute('text-anchor', 'middle');
+        dupBtn.setAttribute('pointer-events', 'none');
+        dupBtn.setAttribute('display', 'none');
+
+        var dupHit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dupHit.setAttribute('r', '11');
+        dupHit.setAttribute('fill', 'transparent');
+        dupHit.setAttribute('cursor', 'pointer');
+        dupHit.setAttribute('display', 'none');
+        dupHit.setAttribute('pointer-events', 'all');
+        dupHit.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+        dupHit.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var idx = drawings.indexOf(d);
+            if (idx >= 0) _dupVLine(idx);
+        });
+
+        /* Custom text label — shown at vertical midpoint beside the line */
+        var customLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        customLbl.setAttribute('font-size', '10');
+        customLbl.setAttribute('font-family', 'monospace');
+        customLbl.setAttribute('font-weight', '600');
+        customLbl.setAttribute('dominant-baseline', 'central');
+        customLbl.setAttribute('text-anchor', 'start');
+        customLbl.setAttribute('pointer-events', 'none');
+        customLbl.setAttribute('display', 'none');
+
+        g.appendChild(hit); g.appendChild(line);
+        g.appendChild(lbl); g.appendChild(customLbl); g.appendChild(handle); g.appendChild(lockBadge);
+        g.appendChild(delHit); g.appendChild(dupHit); g.appendChild(delBtn); g.appendChild(dupBtn);
+        svg.appendChild(g);
+
+        d.el = g; d.lineEl = line; d.hitEl = hit;
+        d.lblEl = lbl; d.customLabelEl = customLbl; d.handleEl = handle; d.lockBadge = lockBadge;
+        d.delBtn = delBtn; d.dupBtn = dupBtn; d.delHit = delHit; d.dupHit = dupHit;
+
+        updateVLine(d);
+    }
+
+    function updateVLine(d) {
+        if (!d.el || !chart || !S.candle) return;
+        /* Visibility filter */
+        if (d.visibility && d.visibility.length > 0 && d.visibility.indexOf(_currentTf) < 0) {
+            d.el.setAttribute('display', 'none'); return;
+        }
+        var x = _timeToXExtrap(d.time);
+        if (x == null) { d.el.setAttribute('display', 'none'); return; }
+        d.el.removeAttribute('display');
+
+        var col   = d.color || '#ffd700';
+        var isSel = (selectedIdx === drawings.indexOf(d));
+        var w     = d.width || 1;
+        var dash  = _svgDash(d.style);
+
+        function setV(el) {
+            el.setAttribute('x1', x); el.setAttribute('y1', 0);
+            el.setAttribute('x2', x); el.setAttribute('y2', TOTAL_H);
+        }
+        setV(d.lineEl); setV(d.hitEl);
+
+        d.lineEl.setAttribute('stroke', col);
+        d.lineEl.setAttribute('stroke-width', isSel ? w + 1 : w);
+        d.lineEl.setAttribute('stroke-dasharray', dash);
+        d.lineEl.setAttribute('stroke-opacity', d.locked ? '0.55' : '1');
+        d.hitEl.setAttribute('cursor', d.locked ? 'default' : 'move');
+
+        /* Time label near the top of the line */
+        d.lblEl.setAttribute('x', x);
+        d.lblEl.setAttribute('y', 3);
+        d.lblEl.setAttribute('fill', col);
+        d.lblEl.textContent = _fmtVTime(d.time);
+
+        /* Selection handle at top end */
+        if (isSel && !d.locked) {
+            d.handleEl.setAttribute('cx', x);
+            d.handleEl.setAttribute('cy', 16);
+            d.handleEl.setAttribute('fill', 'rgba(13,17,23,0.92)');
+            d.handleEl.setAttribute('stroke', col);
+            d.handleEl.setAttribute('display', '');
+            /* × delete button and + dup button — above the line, near the top */
+            d.delBtn.setAttribute('x', x - 14);
+            d.delBtn.setAttribute('y', 30);
+            d.delBtn.setAttribute('fill', '#ff5252');
+            d.delBtn.setAttribute('display', '');
+            d.dupBtn.setAttribute('x', x + 14);
+            d.dupBtn.setAttribute('y', 30);
+            d.dupBtn.setAttribute('fill', '#38b6ff');
+            d.dupBtn.setAttribute('display', '');
+            if (d.delHit) {
+                d.delHit.setAttribute('cx', x - 14);
+                d.delHit.setAttribute('cy', 30);
+                d.delHit.setAttribute('display', '');
+            }
+            if (d.dupHit) {
+                d.dupHit.setAttribute('cx', x + 14);
+                d.dupHit.setAttribute('cy', 30);
+                d.dupHit.setAttribute('display', '');
+            }
+        } else {
+            d.handleEl.setAttribute('display', 'none');
+            if (d.delBtn) d.delBtn.setAttribute('display', 'none');
+            if (d.dupBtn) d.dupBtn.setAttribute('display', 'none');
+            if (d.delHit) d.delHit.setAttribute('display', 'none');
+            if (d.dupHit) d.dupHit.setAttribute('display', 'none');
+        }
+
+        /* Lock badge at vertical midpoint */
+        if (d.locked) {
+            d.lockBadge.setAttribute('x', x);
+            d.lockBadge.setAttribute('y', TOTAL_H / 2);
+            d.lockBadge.setAttribute('display', '');
+        } else {
+            d.lockBadge.setAttribute('display', 'none');
+        }
+
+        /* Custom text label */
+        if (d.customLabelEl) {
+            if (d.customLabel) {
+                d.customLabelEl.textContent = d.customLabel;
+                d.customLabelEl.setAttribute('x', x + 6);
+                d.customLabelEl.setAttribute('y', TOTAL_H / 2 - 16);
+                d.customLabelEl.setAttribute('fill', col);
+                d.customLabelEl.setAttribute('display', '');
+            } else {
+                d.customLabelEl.setAttribute('display', 'none');
+            }
+        }
+    }
+
+    function updateAllVLines() {
+        drawings.forEach(function(d) { if (d.type === 'v-line') updateVLine(d); });
+    }
+
+    function saveVLines() {
+        try {
+            var data = drawings
+                .filter(function(d){ return d.type==='v-line'; })
+                .map(function(d) {
+                    return { type:'v-line', time:d.time, color:d.color, width:d.width, style:d.style,
+                             locked:d.locked||false, customLabel:d.customLabel||'', visibility:d.visibility||[] };
+                });
+            localStorage.setItem(_vlKey(), JSON.stringify(data));
+        } catch(e) {}
+    }
+
+    function _dupVLine(idx) {
+        var d = drawings[idx]; if (!d) return;
+        var iv = _candleInterval() || 1800;
+        var obj = { type:'v-line', time:d.time + iv*5, color:d.color,
+                    width:d.width, style:d.style||'solid', locked:false };
+        drawings.push(obj);
+        buildVLineEl(obj);
+        selectDrawing(drawings.length - 1);
+        saveVLines();
+    }
+
     /* ═══════════════════════════════════════════════════════════════════════
        CIRCLE DRAWING TOOL
        ═══════════════════════════════════════════════════════════════════════ */
@@ -2236,6 +2494,25 @@
         } catch(e) {}
     }
 
+    function loadVLines() {
+        try {
+            var raw = localStorage.getItem(_vlKey());
+            if (!raw) return;
+            JSON.parse(raw).forEach(function(d) {
+                if (d.type === 'v-line') {
+                    try {
+                        var obj = { type:'v-line', time:d.time,
+                                    color:d.color||'#ffd700', width:d.width||1,
+                                    style:d.style||'solid', locked:d.locked||false,
+                                    customLabel:d.customLabel||'', visibility:d.visibility||[] };
+                        drawings.push(obj);
+                        buildVLineEl(obj);
+                    } catch(e) {}
+                }
+            });
+        } catch(e) {}
+    }
+
     function _twlcLineStyle(style) {
         if (!LC()) return 0;
         if (style === 'dashed') return LC().LineStyle.Dashed;
@@ -2244,22 +2521,31 @@
     }
 
     function _removeOne(d) {
-        if (d.type === 'h-line' && d.el && d.el.parentNode) {
+        if ((d.type === 'h-line' || d.type === 'v-line') && d.el && d.el.parentNode) {
             d.el.parentNode.removeChild(d.el);
         }
     }
 
     function copyDragData(d) {
         if (d.type==='h-line') return { price:d.price };
+        if (d.type==='v-line') return { time:d.time };
         return {};
     }
 
+    /* Distances are normalized by each type's own pixel-equivalent threshold so
+       h-line (price-space) and v-line (time-space) hit-tests are comparable. */
     function findNearest(price, time) {
-        var pip = pipSize(_currentPair), thr = pip*12, best = -1, bestD = Infinity;
+        var pip = pipSize(_currentPair), priceThr = pip*12;
+        var ts = _getTimeScale(), timeThr = (ts && ts.pps) ? (12 / Math.abs(ts.pps)) : null;
+        var best = -1, bestNorm = 1;
         for (var i = 0; i < drawings.length; i++) {
-            var d = drawings[i], dist = Infinity;
-            if (d.type==='h-line') { dist = Math.abs((d.price||0) - price); }
-            if (dist<thr && dist<bestD) { bestD=dist; best=i; }
+            var d = drawings[i], norm = Infinity;
+            if (d.type==='h-line') {
+                norm = Math.abs((d.price||0) - price) / priceThr;
+            } else if (d.type==='v-line' && time != null && timeThr != null) {
+                norm = Math.abs((d.time||0) - time) / timeThr;
+            }
+            if (norm < bestNorm) { bestNorm = norm; best = i; }
         }
         return best;
     }
@@ -2269,22 +2555,28 @@
         _deselectText();
         var d = drawings[idx]; selectedIdx = idx; d._selected = true;
         if (d.type === 'h-line') updateHLine(d);
+        else if (d.type === 'v-line') updateVLine(d);
     }
 
     function deselectDrawing() {
         if (selectedIdx < 0) return;
         var d = drawings[selectedIdx]; d._selected = false;
         if (d.type === 'h-line') updateHLine(d);
+        else if (d.type === 'v-line') updateVLine(d);
         selectedIdx = -1;
     }
 
-    function moveDrawing(idx, priceDelta) {
+    function moveDrawing(idx, priceDelta, curTime) {
         var d = drawings[idx];
         if (d.type === 'h-line' && dragStartData) {
             d.price = (dragStartData.price || 0) + priceDelta;
             updateHLine(d);
+            saveDrawings();
+        } else if (d.type === 'v-line' && curTime != null) {
+            d.time = curTime;
+            updateVLine(d);
+            saveVLines();
         }
-        saveDrawings();
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
@@ -2524,11 +2816,12 @@
 
     /* ── Settings helper functions ────────────────────────────────────────── */
     function _drawingTypeName(type) {
-        return {'trend':'Trendline','h-line':'H-Line','box':'Box','fib':'Fibonacci','circle':'Circle'}[type] || type;
+        return {'trend':'Trendline','h-line':'H-Line','v-line':'V-Line','box':'Box','fib':'Fibonacci','circle':'Circle'}[type] || type;
     }
     function _getDrawingObj(type, idx) {
         if (type==='trend')  return trendlines[idx];
         if (type==='h-line') return drawings[idx];
+        if (type==='v-line') return drawings[idx];
         if (type==='box')    return boxes[idx];
         if (type==='fib')    return fibs[idx];
         if (type==='circle') return circles[idx];
@@ -2537,6 +2830,7 @@
     function _updateDrawingAndSave(type, obj) {
         if (type==='trend')  { updateTrendline(obj); saveTrendlines(); }
         if (type==='h-line') { updateHLine(obj);     saveDrawings();   }
+        if (type==='v-line') { updateVLine(obj);     saveVLines();     }
         if (type==='box')    { updateBox(obj);        saveBoxes();      }
         if (type==='fib')    { updateFib(obj);        saveFibs();       }
         if (type==='circle') { updateCircle(obj);     saveCircles();    }
@@ -2550,6 +2844,12 @@
             _removeOne(dh); drawings.splice(idx, 1);
             if (selectedIdx===idx) selectedIdx=-1; else if (selectedIdx>idx) selectedIdx--;
             saveDrawings(); return;
+        }
+        if (type==='v-line') {
+            var dv = drawings[idx]; if (!dv) return;
+            _removeOne(dv); drawings.splice(idx, 1);
+            if (selectedIdx===idx) selectedIdx=-1; else if (selectedIdx>idx) selectedIdx--;
+            saveVLines(); return;
         }
         if (type==='circle') {
             var cc2 = circles[idx]; if (!cc2) return;
@@ -2699,7 +2999,7 @@
         }
 
         /* Line style (trend / h-line / circle) */
-        if (drawingType==='trend' || drawingType==='h-line' || drawingType==='circle') {
+        if (drawingType==='trend' || drawingType==='h-line' || drawingType==='v-line' || drawingType==='circle') {
             var lsWrap = document.createElement('div'); lsWrap.style.cssText = 'display:flex;gap:4px;';
             [['solid','——'],['dashed','- -'],['dotted','···']].forEach(function(pair) {
                 var sb = document.createElement('button');
@@ -2771,6 +3071,18 @@
         }
         if (drawingType==='h-line') {
             _pInp('Price', function(){return obj.price;}, function(v){obj.price=v;});
+        } else if (drawingType==='v-line') {
+            var tInp = document.createElement('input');
+            tInp.type = 'datetime-local'; tInp.step = '60';
+            tInp.value = new Date(obj.time * 1000).toISOString().slice(0, 16);
+            tInp.style.cssText =
+                'width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;' +
+                'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
+            tInp.addEventListener('change', function() {
+                var parsed = new Date(tInp.value + 'Z').getTime();
+                if (!isNaN(parsed)) { obj.time = Math.round(parsed / 1000); _updateDrawingAndSave(drawingType, obj); }
+            });
+            coordP.appendChild(_dsRow('Time (UTC)', tInp));
         } else if (drawingType==='trend'||drawingType==='box'||drawingType==='fib') {
             _pInp('Price 1', function(){return obj.p1;}, function(v){obj.p1=v;});
             _pInp('Price 2', function(){return obj.p2;}, function(v){obj.p2=v;});
@@ -3269,13 +3581,13 @@
             });
         } catch(e) {}
 
-        loadDrawings(); loadTrendlines(); loadPos(); loadBoxes(); loadFibs(); loadCircles(); loadTexts();
+        loadDrawings(); loadVLines(); loadTrendlines(); loadPos(); loadBoxes(); loadFibs(); loadCircles(); loadTexts();
         _startAutoSave();
 
         try {
             chart.timeScale().subscribeVisibleLogicalRangeChange(function() {
                 updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines();
-                updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts();
+                updateAllVLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts();
             });
             /* Save zoom (time range) whenever the user scrolls/zooms, keyed per pair+TF */
             chart.timeScale().subscribeVisibleTimeRangeChange(function(range) {
@@ -3290,7 +3602,7 @@
                 if (positions.length > 0)       updateAllPos();
                 if (boxes.length > 0)           updateAllBoxes();
                 if (fibs.length > 0)            updateAllFibs();
-                if (drawings.length > 0)        updateAllHLines();
+                if (drawings.length > 0)        { updateAllHLines(); updateAllVLines(); }
                 if (circles.length > 0)         updateAllCircles();
                 if (_tradeSvgLines.length > 0)  _updateAllTradeSvgLines();
                 if (textDrawings.length > 0)    updateAllTexts();
@@ -3331,6 +3643,18 @@
                         buildHLineEl(hobj);
                         selectDrawing(drawings.length - 1);
                         saveDrawings();
+                    } catch(e) {}
+                    return;
+                }
+
+                if (drawMode==='v-line') {
+                    try {
+                        var vobj = { type:'v-line', time:time, color:drawColor,
+                                     width:drawWidth, style:drawStyle, locked:false };
+                        drawings.push(vobj);
+                        buildVLineEl(vobj);
+                        selectDrawing(drawings.length - 1);
+                        saveVLines();
                     } catch(e) {}
                     return;
                 }
@@ -3511,8 +3835,9 @@
                 }
             }
 
-            if (isDragging && selectedIdx>=0 && price!=null && isFinite(price)) {
-                moveDrawing(selectedIdx, price-dragStartPrice); e.preventDefault(); return;
+            if (isDragging && selectedIdx>=0 && ((price!=null && isFinite(price)) || time!=null)) {
+                moveDrawing(selectedIdx, (price!=null && isFinite(price)) ? (price-dragStartPrice) : 0, time);
+                e.preventDefault(); return;
             }
             if (!drawMode && price!=null && isFinite(price)) {
                 el.style.cursor = findNearest(price,time)>=0 ? 'move' : 'default';
@@ -3606,7 +3931,7 @@
                     }
                 } catch(e) {}
                 updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs();
-                updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts();
+                updateAllHLines(); updateAllVLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts();
             }
         }).observe(el);
 
@@ -3846,7 +4171,7 @@
         }
 
         _rebuildDetachedOverlays();
-        requestAnimationFrame(function(){ updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts(); });
+        requestAnimationFrame(function(){ updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines(); updateAllVLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts(); });
 
         /* Apply saved indicator visual settings after data loads */
         try { window._apexApplyIndSettings(data.ind_params || null); } catch(e) {}
@@ -4086,9 +4411,11 @@
             return true;
         }
         if (selectedIdx >= 0) {
-            _removeOne(drawings[selectedIdx]);
+            var delD = drawings[selectedIdx];
+            _removeOne(delD);
             drawings.splice(selectedIdx, 1);
-            selectedIdx = -1; saveDrawings();
+            selectedIdx = -1;
+            if (delD && delD.type === 'v-line') saveVLines(); else saveDrawings();
             return true;
         }
         return false;
@@ -4117,7 +4444,12 @@
         }
         if (selectedIdx >= 0) {
             var d = drawings[selectedIdx];
-            if (d) { d.locked = !d.locked; if (d.type === 'h-line') updateHLine(d); saveDrawings(); return true; }
+            if (d) {
+                d.locked = !d.locked;
+                if (d.type === 'h-line') { updateHLine(d); saveDrawings(); }
+                else if (d.type === 'v-line') { updateVLine(d); saveVLines(); }
+                return true;
+            }
         }
         if (selectedText >= 0) {
             var tx = textDrawings[selectedText];
@@ -4130,7 +4462,11 @@
         if (selectedTrend >= 0)   { _dupTrendline(selectedTrend); return true; }
         if (selectedBox >= 0)     { _dupBox(selectedBox); return true; }
         if (selectedCircle >= 0)  { _dupCircle(selectedCircle); return true; }
-        if (selectedIdx >= 0)     { _dupHLine(selectedIdx); return true; }
+        if (selectedIdx >= 0)     {
+            var dsel = drawings[selectedIdx];
+            if (dsel && dsel.type === 'v-line') _dupVLine(selectedIdx); else _dupHLine(selectedIdx);
+            return true;
+        }
         if (selectedText >= 0)    { _dupText(selectedText); return true; }
         return false;
     };
@@ -4138,7 +4474,7 @@
     window._apexClearDrawings = function() {
         deselectDrawing();
         drawings.forEach(_removeOne); drawings = [];
-        saveDrawings();
+        saveDrawings(); saveVLines();
 
         trendlines.forEach(function(t){ if (t.el&&t.el.parentNode) t.el.parentNode.removeChild(t.el); });
         trendlines = []; selectedTrend = -1; saveTrendlines();

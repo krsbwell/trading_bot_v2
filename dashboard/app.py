@@ -44,6 +44,7 @@ def _tf_btn_style(active: bool = False) -> dict:
 
 _DRAW_TOOL_META = [
     ("h-line",    "—",   "Horizontal line — click chart to place"),
+    ("v-line",    "│",   "Vertical line — click chart to place"),
     ("trend",     "╱",   "Trend line — click 2 points; drag endpoints to edit"),
     ("pips",
      html.Img(
