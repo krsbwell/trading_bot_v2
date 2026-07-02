@@ -8,21 +8,33 @@ MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 # USD_CAD: 46% WR  $+70.81  3.1% DD (28 trades) PF=2.08 — WFO-optimised: CCI=28, MACD=8/21/5 → 55.6% WR on last 30 days
 # NZD_USD: 36% WR  $+26.46  5.0% DD (25 trades) PF=1.43 — 2:1 R:R makes sub-50% WR profitable; promoted 2026-07-01
 # EUR_AUD: 33% WR  $+39.35  8.4% DD (42 trades) PF=1.42 — promoted 2026-07-02; best watch-pair PnL, solid sample size
-# USD_CHF: 27% win rate  $-12.38   8.9% DD — demoted to watch 2026-06-30; loses money on M30
+# GBP_CAD: 41% WR  $+71.82  4.8% DD (46 trades) PF=1.66 — promoted 2026-07-02; found via 15-pair screen, as strong as the original active pairs
 # GBP_CHF: 24% win rate  $-26.65   8.9% DD — removed 2026-06-30; worst M30 performer; CHF low-vol kills M30 edge
 # AUD_USD: 12% win rate  — removed; unacceptable live performance
-FOREX_PAIRS  = ["USD_CAD", "NZD_USD", "EUR_AUD"]
+FOREX_PAIRS  = ["USD_CAD", "NZD_USD", "EUR_AUD", "GBP_CAD"]
 
-# Pairs under monitoring — signals shown, NO trades opened
+# Pairs under monitoring — signals shown, NO trades opened. Only pairs with
+# POSITIVE backtested PnL belong here; a losing pair isn't worth watching.
 # All results below: SESSION_START=04:00, SESSION_END=17:00, ADX(28), 3500 M30 bars (re-run 2026-07-02)
 # GBP_USD: 28% WR  $+12.36  7.8% DD (46 trades) PF=1.11 — thin but real edge; largest sample on watchlist; held back 2026-07-02, edge too thin to trust yet
 # EUR_CHF: 30% WR  $+10.46  4.0% DD (10 trades) PF=1.70 — best PF but too few trades to be confident it holds; held back 2026-07-02
-# EUR_USD: 23% WR  $-16.51  9.7% DD (30 trades) PF=0.80 — losing; unsuited to EMA mean-reversion regardless of filters
-# USD_CHF: 29% WR  $-9.19   7.9% DD (31 trades) PF=0.89 — losing; pre-London CHF session still noisy
+# AUD_JPY: 36% WR  $+36.84  7.1% DD (44 trades) PF=1.32 — added 2026-07-02 from 15-pair screen; solid sample, positive
+# EUR_CAD: 35% WR  $+36.08  5.4% DD (34 trades) PF=1.44 — added 2026-07-02 from 15-pair screen; solid sample, positive
+# CHF_JPY: 32% WR  $+11.72  6.7% DD (50 trades) PF=1.09 — added 2026-07-02; thin edge but largest sample of the whole screen
+# EUR_GBP: 50% WR  $+21.00  2.0% DD (6 trades)  PF=3.93 — added 2026-07-02; best ratio of the screen but too few trades to trust yet
+# CAD_CHF: 33% WR  $+13.69  3.1% DD (9 trades)  PF=1.96 — added 2026-07-02; good ratio, too few trades to trust yet
+# NZD_CHF: 36% WR  $+6.92   5.1% DD (11 trades) PF=1.30 — added 2026-07-02; modest, too few trades to trust yet
+FOREX_WATCH  = ["GBP_USD", "EUR_CHF", "AUD_JPY", "EUR_CAD", "CHF_JPY", "EUR_GBP", "CAD_CHF", "NZD_CHF"]
+
+# Rejected / removed — losing money, not watched (re-test only if the strategy or gates change)
+# EUR_USD: 23% WR  $-16.51  9.7% DD (30 trades) PF=0.80 — removed from watch 2026-07-02; unsuited to EMA mean-reversion regardless of filters
+# USD_CHF: 29% WR  $-9.19   7.9% DD (31 trades) PF=0.89 — removed from watch 2026-07-02; pre-London CHF session still noisy
 # AUD_NZD: 19% win rate  -$23.38  6.6% DD — rejected; EMA-bounce has no edge on this cross
 # GBP_JPY: 17% win rate  $-51   — removed; spike-and-revert behaviour kills R:R without BE
-# USD_JPY: 48% win rate  $+1    — EMA-bounce doesn't suit JPY momentum
-FOREX_WATCH  = ["USD_CHF", "GBP_USD", "EUR_USD", "EUR_CHF"]
+# USD_JPY: 48% win rate  $+1    — EMA-bounce doesn't suit JPY momentum (near-zero P&L despite high WR)
+# Rejected 2026-07-02 (15-pair screen, all losing money):
+# EUR_NZD -$31.26/14.4%DD | GBP_AUD -$1.58/9.1%DD | GBP_NZD -$35.27/17.4%DD (worst) |
+# AUD_CHF -$38.01/PF=0.23 (worst ratio) | AUD_CAD -$14.23 | NZD_CAD -$15.43 | CAD_JPY -$15.51 | NZD_JPY -$8.32
 CRYPTO_PAIRS = []   # EMA-bounce is a forex mean-reversion strategy — does not suit crypto trending behaviour
                     # BTC: 19% win rate, -$149 P&L, 29.6% DD | ETH: -$6.96 | both removed after backtest
 

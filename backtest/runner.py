@@ -119,9 +119,17 @@ def run_backtest(
     min_score: int = config.MIN_CONFLUENCE_SCORE,
     market: str = "forex",
     adaptive: dict | None = None,
+    buy_fn=check_buy_signal,
+    sell_fn=check_sell_signal,
+    stop_loss_fn=get_stop_loss,
 ) -> dict:
     """
     Run a full backtest for one pair.
+
+    buy_fn/sell_fn/stop_loss_fn: signal/stop-loss functions with the same
+    signatures as strategy_ema_cci_macd's. Default to EMA-bounce; pass
+    engine.strategy_trend_follow's or engine.strategy_breakout_retest's
+    functions to backtest those strategies instead.
 
     Returns a dict with:
         trades          : list of closed trade dicts
@@ -163,8 +171,8 @@ def run_backtest(
         if pt.get_open_trade(pair):
             continue
 
-        buy_score  = check_buy_signal(pair, slice_h1, slice_h4, adaptive=adaptive)
-        sell_score = check_sell_signal(pair, slice_h1, slice_h4, adaptive=adaptive)
+        buy_score  = buy_fn(pair, slice_h1, slice_h4, adaptive=adaptive)
+        sell_score = sell_fn(pair, slice_h1, slice_h4, adaptive=adaptive)
 
         if buy_score == sell_score == 0:
             continue
@@ -197,7 +205,7 @@ def run_backtest(
             continue
 
         # Place simulated trade
-        stop_loss = get_stop_loss(pair, slice_h1, direction)
+        stop_loss = stop_loss_fn(pair, slice_h1, direction)
         tp_levels = get_tp_levels(entry, stop_loss, direction)
         size      = calculate_position_size(pt.balance, entry, stop_loss, market, pair)
         if size <= 0:
@@ -432,21 +440,37 @@ if __name__ == "__main__":
     parser.add_argument("--bars",    type=int, default=2000)
     parser.add_argument("--balance", type=float, default=500.0)
     parser.add_argument("--output",  default="data/backtest_results.csv")
+    parser.add_argument("--strategy", default="ema_bounce",
+                        choices=["ema_bounce", "trend_follow", "breakout_retest"],
+                        help="ema_bounce (default, ranging-market mean-reversion), "
+                             "trend_follow (fires only when ADX > threshold), or "
+                             "breakout_retest (break of structure + retest confirmation)")
     args = parser.parse_args()
+
+    if args.strategy == "trend_follow":
+        from engine.strategy_trend_follow import check_buy_signal as _buy_fn, check_sell_signal as _sell_fn
+        _sl_fn = get_stop_loss
+    elif args.strategy == "breakout_retest":
+        from engine.strategy_breakout_retest import (
+            check_buy_signal as _buy_fn, check_sell_signal as _sell_fn, get_stop_loss as _sl_fn,
+        )
+    else:
+        _buy_fn, _sell_fn, _sl_fn = check_buy_signal, check_sell_signal, get_stop_loss
 
     from connectors.oanda_connector import OandaConnector
     conn = OandaConnector()
 
     primary = config.TIMEFRAMES["primary"]
     confirm = config.TIMEFRAMES["confirm"]
-    logger.info("Fetching %d %s + %d %s bars for %s …",
-                args.bars, primary, args.bars // 2, confirm, args.pair)
+    logger.info("Fetching %d %s + %d %s bars for %s (strategy=%s) …",
+                args.bars, primary, args.bars // 2, confirm, args.pair, args.strategy)
     df_h1 = conn.get_candles(args.pair, primary, args.bars)
     df_h4 = conn.get_candles(args.pair, confirm, args.bars // 2)
 
     res = run_backtest(args.pair, df_h1, df_h4,
                        starting_balance=args.balance,
-                       market="forex" if "_" in args.pair else "crypto")
+                       market="forex" if "_" in args.pair else "crypto",
+                       buy_fn=_buy_fn, sell_fn=_sell_fn, stop_loss_fn=_sl_fn)
 
     if "error" in res:
         logger.error("Backtest failed: %s", res["error"])

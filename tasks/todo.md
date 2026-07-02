@@ -1,61 +1,94 @@
-# Promote EUR_AUD to active
+# Explore a breakout-retest strategy (backtest-only)
 
-**Goal:** Promote EUR_AUD from watch to active (trades will actually open, not
-just be logged) based on a fresh same-day backtest: 42 trades, WR=33%, PF=1.42,
-PnL=+$39.35, MaxDD=8.4% (3500 M30 bars, current live config: ADX(28) gate,
-04:00–17:00 UTC session). Second candidate pairs (GBP_USD PF=1.11/46 trades,
-EUR_CHF PF=1.70/10 trades) were considered and explicitly held back by the
-user — GBP_USD's edge is too thin, EUR_CHF's sample too small to trust yet.
+## Context
 
-**Context:** signals were triggering infrequently with only 2 active pairs
-(USD_CAD, NZD_USD). Rather than loosen the ADX/session gates (which were
-added specifically to kill false signals), widening the pair roster with a
-pair that already has a proven backtested edge increases signal frequency
-without reintroducing the noise those gates were built to filter.
+The trend-follow experiment (see `project_trend_follow_experiment.md` memory) was
+shelved — reusing EMA-bounce's touch-and-bounce entry logic in the trending regime
+didn't work and actively hurt the strongest pairs. User's next idea: try a
+*genuinely different* entry mechanic — breakout-retest — rather than another
+flavor of the same recipe. Considered EMA-cross as a cheaper alternative first;
+user chose to go straight to breakout-retest since it's more likely to find real
+new edge rather than rediscover the same whipsaw problem.
+
+**Concept:** price breaks a support/resistance zone, pulls back to retest that
+broken zone (now acting as the opposite role — old resistance becomes new
+support, or vice versa), and a rejection candle at the retest confirms the level
+held. Enter in the breakout direction on that rejection.
+
+**Reuse audit done first (see below) — this needs much less new code than the
+"build a whole new indicator stack" fear implied:**
+- `engine/strategy_market_structure.py`'s `get_sr_zones()` already identifies
+  support/resistance zones from recent pivots (upper/lower/price/touches/tested)
+- `detect_bos_choch()` already detects the breakout event itself (Break of
+  Structure — price crossing the most recent pivot high/low)
+- `engine/strategy_price_action.py`'s `detect_patterns()` already detects
+  rejection candles (pin bar, engulfing, marubozu, morning/evening star) on the
+  current bar
+- `risk/risk_manager.get_tp_levels()` is fully generic (pure R:R math), reusable
+  as-is
+
+**Genuinely new code needed:**
+1. Retest detection — has price returned to within a band of the broken zone,
+   within N bars of the break, without closing back through it (i.e. the break
+   is still valid)?
+2. A retest-specific stop-loss — beyond the retest zone boundary, not the
+   EMA-based `get_stop_loss()` in `strategy_ema_cci_macd.py` (confirmed not
+   reusable as-is, but its ATR-fallback pattern is worth mirroring)
+
+## Design decisions (documented so they can be revisited if results are odd)
+
+- **No ADX gate.** Breakouts happen as a trend is *starting* — ADX is often
+  still rising through 20-28 during the breakout+retest, not yet past the
+  threshold. Gating on ADX>28 like the failed trend-follow experiment did would
+  likely miss the entry window entirely. This strategy is regime-independent by
+  design; the retest+rejection confirmation is the filter, not ADX.
+- **Same session gate (04:00-17:00 UTC)** as the other two strategies, for
+  consistency — already established this matters for these pairs' noise levels.
+- **Retest window: 10 bars** (5 hours on M30) after a detected BoS — arbitrary
+  first-pass choice, easy to tune later if backtest results are close but not
+  quite there.
+- **Retest tolerance band: 0.3×ATR** around the broken zone boundary — slightly
+  wider than EMA-bounce's 0.25×ATR touch band since S/R zones are already
+  ±0.5×ATR wide themselves (from `get_sr_zones()`), so the retest doesn't need
+  to be pixel-perfect.
 
 ## Todo
 
-- [x] `config.py`: moved `"EUR_AUD"` from `FOREX_WATCH` to `FOREX_PAIRS`
-- [x] `config.py`: updated the comment blocks above both lists with today's
-      fresh backtest numbers for all 7 pairs (2 active + 5 watch), not just
-      EUR_AUD — the old comments were a day stale
-- [x] `python -m pytest -q` — 177 passed, same 10 pre-existing Alpaca
-      failures, no regressions
-- [x] Rewrote `project_pair_config.md` (was dated 06-29 with a different
-      session window, actively misleading) with the current roster, a
-      documented PF-over-WR decision framework, and the held-back
-      GBP_USD/EUR_CHF rationale for future reference
+### 1. New strategy module
+- [ ] Create `engine/strategy_breakout_retest.py`:
+      - `check_buy_signal(pair, df_h1, df_h4, adaptive=None)` /
+        `check_sell_signal(...)` — same signature as the other two strategies
+        so it plugs into `run_backtest()`'s `buy_fn`/`sell_fn` parameters
+        (already generic from the trend-follow work)
+      - Reuse `detect_pivots`, `classify_structure`, `detect_bos_choch`,
+        `get_sr_zones` from `engine.strategy_market_structure`
+      - Reuse `detect_patterns` from `engine.strategy_price_action`
+      - New: `_find_retest(df, zone, direction, lookback=10, band_mult=0.3)` —
+        scans recent bars for price returning to a broken zone without
+        invalidating the break
+      - New: `get_stop_loss(pair, df_h1, zone, direction)` — SL beyond the
+        retest zone boundary, ATR-fallback pattern mirrored from
+        `strategy_ema_cci_macd.get_stop_loss`
+      - Separate diagnostic dicts (own module-level `_buy_diag`/`_sell_diag`)
+
+### 2. Wire into the backtest CLI
+- [ ] `backtest/runner.py`: add `"breakout_retest"` to the `--strategy` choices,
+      import the new module's functions when selected (same pattern as
+      `trend_follow` — no other runner changes needed, `buy_fn`/`sell_fn`
+      params already exist from last session)
+
+### 3. Run the screen
+- [ ] Backtest all 12 current pairs with `--strategy breakout_retest`, 3500 M30
+      bars
+- [ ] Report results in the same ranked-table format as the previous two screens
+
+### 4. Verification
+- [ ] `python -m py_compile` on new/changed files
+- [ ] `python -m pytest -q` — confirm no regressions
+- [ ] Confirm default (`ema_bounce`) and `trend_follow` CLI paths still work
+      unaffected
 
 ## Review
 
-### What changed
-`config.py` only: `EUR_AUD` moved from `FOREX_WATCH` to `FOREX_PAIRS`
-(active — trades will now actually open for it, not just log), plus comment
-updates reflecting a same-day fresh backtest re-run for every pair on both
-lists (not reused from memory, since a prior comparison this session showed
-GBP_USD's PnL sign flipping between the 07-01 and 07-02 backtest runs).
-
-### Why EUR_AUD and not GBP_USD/EUR_CHF
-All three watch pairs are net-positive on a fresh 3500-bar M30 backtest
-under the current live gates (ADX 28, 04:00–17:00 UTC session). EUR_AUD won
-on both PnL (+$39.35, best of the three) and sample size (42 trades — large
-enough to trust). GBP_USD has more trades (46) but a thinner edge (PF=1.11,
-barely above breakeven); EUR_CHF has the best ratio (PF=1.70) but too few
-trades (10) to know if that holds up. User explicitly chose to hold both
-back rather than promote on frequency alone — noted in memory as the
-current decision framework (PF over win rate, sample size matters as much
-as the ratio) so this doesn't need to be re-litigated next session.
-
-### Security review
-Pure data/config change — no new code paths, no user input, no secrets
-touched. `EUR_AUD` already had a live OANDA connector fetch path (it was on
-the watch list, meaning signals were already being fetched/scored/logged
-for it); this change only flips whether `paper_trader` actually opens a
-position when it fires. No new attack surface.
-
-### Verification
-`python -m pytest -q`: 177 passed / 10 pre-existing unrelated failures.
-Config change takes effect on the bot's next restart (`python main.py`) or
-next scheduled scan — did not restart the user's live paper-trading process
-as part of this change since that's a live-system action outside the scope
-of what was asked (config edit + verification only).
+*(fill in after implementation, including backtest results and a
+recommendation)*

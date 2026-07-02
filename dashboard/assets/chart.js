@@ -1595,7 +1595,10 @@
         lockBadge.setAttribute('display', 'none');
         lockBadge.textContent = '🔒';
 
-        /* Delete button — × shown above line when selected */
+        /* Delete button — × shown above line when selected. The glyph is
+           purely visual (pointer-events:none); delHit below is what
+           actually catches clicks — see the pointer-events / drag-hijack
+           notes on v-line's identical buttons for why both are needed. */
         var delBtn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         delBtn.textContent = '×';
         delBtn.setAttribute('font-size', '16');
@@ -1603,9 +1606,20 @@
         delBtn.setAttribute('font-weight', '700');
         delBtn.setAttribute('dominant-baseline', 'central');
         delBtn.setAttribute('text-anchor', 'middle');
-        delBtn.setAttribute('cursor', 'pointer');
+        delBtn.setAttribute('pointer-events', 'none');
         delBtn.setAttribute('display', 'none');
-        delBtn.addEventListener('click', function(e) {
+
+        var delHit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        /* h-line's del/dup sit only 18px apart (fixed left-edge position, unlike
+           v-line's which move with the line) — r=9 so the two circles touch
+           without overlapping. */
+        delHit.setAttribute('r', '9');
+        delHit.setAttribute('fill', 'transparent');
+        delHit.setAttribute('cursor', 'pointer');
+        delHit.setAttribute('display', 'none');
+        delHit.setAttribute('pointer-events', 'all');
+        delHit.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+        delHit.addEventListener('click', function(e) {
             e.stopPropagation();
             var idx = drawings.indexOf(d);
             if (idx < 0) return;
@@ -1616,7 +1630,8 @@
             saveDrawings();
         });
 
-        /* Duplicate button — + shown above line when selected */
+        /* Duplicate button — + shown above line when selected (same wider
+           invisible hit-circle treatment as delete, above). */
         var dupBtn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         dupBtn.textContent = '+';
         dupBtn.setAttribute('font-size', '14');
@@ -1624,9 +1639,17 @@
         dupBtn.setAttribute('font-weight', '700');
         dupBtn.setAttribute('dominant-baseline', 'central');
         dupBtn.setAttribute('text-anchor', 'middle');
-        dupBtn.setAttribute('cursor', 'pointer');
+        dupBtn.setAttribute('pointer-events', 'none');
         dupBtn.setAttribute('display', 'none');
-        dupBtn.addEventListener('click', function(e) {
+
+        var dupHit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dupHit.setAttribute('r', '9');
+        dupHit.setAttribute('fill', 'transparent');
+        dupHit.setAttribute('cursor', 'pointer');
+        dupHit.setAttribute('display', 'none');
+        dupHit.setAttribute('pointer-events', 'all');
+        dupHit.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+        dupHit.addEventListener('click', function(e) {
             e.stopPropagation();
             var idx = drawings.indexOf(d);
             if (idx >= 0) _dupHLine(idx);
@@ -1644,12 +1667,12 @@
 
         g.appendChild(hit); g.appendChild(line);
         g.appendChild(lbl); g.appendChild(customLbl); g.appendChild(handle); g.appendChild(lockBadge);
-        g.appendChild(delBtn); g.appendChild(dupBtn);
+        g.appendChild(delHit); g.appendChild(dupHit); g.appendChild(delBtn); g.appendChild(dupBtn);
         svg.appendChild(g);
 
         d.el = g; d.lineEl = line; d.hitEl = hit;
         d.lblEl = lbl; d.customLabelEl = customLbl; d.handleEl = handle; d.lockBadge = lockBadge;
-        d.delBtn = delBtn; d.dupBtn = dupBtn;
+        d.delBtn = delBtn; d.dupBtn = dupBtn; d.delHit = delHit; d.dupHit = dupHit;
 
         updateHLine(d);
     }
@@ -1705,10 +1728,22 @@
             d.dupBtn.setAttribute('y', y - 11);
             d.dupBtn.setAttribute('fill', '#38b6ff');
             d.dupBtn.setAttribute('display', '');
+            if (d.delHit) {
+                d.delHit.setAttribute('cx', 18);
+                d.delHit.setAttribute('cy', y - 11);
+                d.delHit.setAttribute('display', '');
+            }
+            if (d.dupHit) {
+                d.dupHit.setAttribute('cx', 36);
+                d.dupHit.setAttribute('cy', y - 11);
+                d.dupHit.setAttribute('display', '');
+            }
         } else {
             d.handleEl.setAttribute('display', 'none');
             if (d.delBtn) d.delBtn.setAttribute('display', 'none');
             if (d.dupBtn) d.dupBtn.setAttribute('display', 'none');
+            if (d.delHit) d.delHit.setAttribute('display', 'none');
+            if (d.dupHit) d.dupHit.setAttribute('display', 'none');
         }
 
         /* Lock badge at midpoint */
