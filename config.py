@@ -9,14 +9,29 @@ MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 # NZD_USD: 36% WR  $+26.46  5.0% DD (25 trades) PF=1.43 — 2:1 R:R makes sub-50% WR profitable; promoted 2026-07-01
 # EUR_AUD: 33% WR  $+39.35  8.4% DD (42 trades) PF=1.42 — promoted 2026-07-02; best watch-pair PnL, solid sample size
 # GBP_CAD: 41% WR  $+71.82  4.8% DD (46 trades) PF=1.66 — promoted 2026-07-02; found via 15-pair screen, as strong as the original active pairs
+# GBP_USD: promoted 2026-07-02 running strategy_breakout_retest (see STRATEGY_OVERRIDE below),
+#          NOT EMA-bounce. 4999-bar backtest: WR=45% PF=1.94 $+42.63 (20 trades) 3.1% DD — held up
+#          and improved with more data (was PF=1.80/$30.00 at 3500 bars). EMA-bounce edge on this
+#          pair was only PF=1.11 (thin) — breakout-retest is a genuinely stronger, independent signal here.
 # GBP_CHF: 24% win rate  $-26.65   8.9% DD — removed 2026-06-30; worst M30 performer; CHF low-vol kills M30 edge
 # AUD_USD: 12% win rate  — removed; unacceptable live performance
-FOREX_PAIRS  = ["USD_CAD", "NZD_USD", "EUR_AUD", "GBP_CAD"]
+FOREX_PAIRS  = ["USD_CAD", "NZD_USD", "EUR_AUD", "GBP_CAD", "GBP_USD"]
+
+# Per-pair strategy override — a pair not listed here uses the default
+# (strategy_ema_cci_macd / "EMA-bounce"). Only strategy_breakout_retest is
+# wired into signal_engine.py so far (see engine/strategy_trend_follow.py —
+# shelved, backtest-only, never wired live; see project_trend_follow_experiment
+# memory for why).
+STRATEGY_OVERRIDE = {
+    "GBP_USD": "breakout_retest",   # promoted 2026-07-02 — see FOREX_PAIRS comment above.
+                                     # GBP_CAD was ALSO tested under breakout-retest and showed a
+                                     # persistent, worsening conflict (PF 0.44, -$42.79 at 4999 bars)
+                                     # — deliberately stays on EMA-bounce, not an oversight.
+}
 
 # Pairs under monitoring — signals shown, NO trades opened. Only pairs with
 # POSITIVE backtested PnL belong here; a losing pair isn't worth watching.
 # All results below: SESSION_START=04:00, SESSION_END=17:00, ADX(28), 3500 M30 bars (re-run 2026-07-02)
-# GBP_USD: 28% WR  $+12.36  7.8% DD (46 trades) PF=1.11 — thin but real edge; largest sample on watchlist; held back 2026-07-02, edge too thin to trust yet
 # EUR_CHF: 30% WR  $+10.46  4.0% DD (10 trades) PF=1.70 — best PF but too few trades to be confident it holds; held back 2026-07-02
 # AUD_JPY: 36% WR  $+36.84  7.1% DD (44 trades) PF=1.32 — added 2026-07-02 from 15-pair screen; solid sample, positive
 # EUR_CAD: 35% WR  $+36.08  5.4% DD (34 trades) PF=1.44 — added 2026-07-02 from 15-pair screen; solid sample, positive
@@ -24,7 +39,7 @@ FOREX_PAIRS  = ["USD_CAD", "NZD_USD", "EUR_AUD", "GBP_CAD"]
 # EUR_GBP: 50% WR  $+21.00  2.0% DD (6 trades)  PF=3.93 — added 2026-07-02; best ratio of the screen but too few trades to trust yet
 # CAD_CHF: 33% WR  $+13.69  3.1% DD (9 trades)  PF=1.96 — added 2026-07-02; good ratio, too few trades to trust yet
 # NZD_CHF: 36% WR  $+6.92   5.1% DD (11 trades) PF=1.30 — added 2026-07-02; modest, too few trades to trust yet
-FOREX_WATCH  = ["GBP_USD", "EUR_CHF", "AUD_JPY", "EUR_CAD", "CHF_JPY", "EUR_GBP", "CAD_CHF", "NZD_CHF"]
+FOREX_WATCH  = ["EUR_CHF", "AUD_JPY", "EUR_CAD", "CHF_JPY", "EUR_GBP", "CAD_CHF", "NZD_CHF"]
 
 # Rejected / removed — losing money, not watched (re-test only if the strategy or gates change)
 # EUR_USD: 23% WR  $-16.51  9.7% DD (30 trades) PF=0.80 — removed from watch 2026-07-02; unsuited to EMA mean-reversion regardless of filters

@@ -1,94 +1,96 @@
-# Explore a breakout-retest strategy (backtest-only)
+# Two real JS bugs: MACD histogram opacity does nothing, BB toggle reverts itself
 
-## Context
+## What was reported
 
-The trend-follow experiment (see `project_trend_follow_experiment.md` memory) was
-shelved — reusing EMA-bounce's touch-and-bounce entry logic in the trending regime
-didn't work and actively hurt the strongest pairs. User's next idea: try a
-*genuinely different* entry mechanic — breakout-retest — rather than another
-flavor of the same recipe. Considered EMA-cross as a cheaper alternative first;
-user chose to go straight to breakout-retest since it's more likely to find real
-new edge rather than rediscover the same whipsaw problem.
+1. MACD histogram Opacity slider (Indicator Settings → MACD → Histogram)
+   has no visible effect on the chart.
+2. Toggling BB (Bollinger Bands) "Visible" in the settings panel does
+   nothing.
 
-**Concept:** price breaks a support/resistance zone, pulls back to retest that
-broken zone (now acting as the opposite role — old resistance becomes new
-support, or vice versa), and a rejection candle at the retest confirms the level
-held. Enter in the breakout direction on that rejection.
+## Bug 1 — MACD histogram opacity/colors were never applied anywhere
 
-**Reuse audit done first (see below) — this needs much less new code than the
-"build a whole new indicator stack" fear implied:**
-- `engine/strategy_market_structure.py`'s `get_sr_zones()` already identifies
-  support/resistance zones from recent pivots (upper/lower/price/touches/tested)
-- `detect_bos_choch()` already detects the breakout event itself (Break of
-  Structure — price crossing the most recent pivot high/low)
-- `engine/strategy_price_action.py`'s `detect_patterns()` already detects
-  rejection candles (pin bar, engulfing, marubozu, morning/evening star) on the
-  current bar
-- `risk/risk_manager.get_tp_levels()` is fully generic (pure R:R math), reusable
-  as-is
+`S.macd` (the MACD histogram series, `dashboard/assets/chart.js`) is
+created with no `color` option at the series level at all:
+```js
+S.macd = chart.addSeries(LC_.HistogramSeries, {
+    lastValueVisible: false, priceLineVisible: false,
+}, _macdPane);
+```
+Its per-bar bull/bear coloring comes entirely from each data point's own
+`color` field (the standard lightweight-charts histogram pattern) — but
+nothing in the codebase ever computed that field from
+`histColorUp`/`histColorDown`/`histOpacity`. The settings panel correctly
+read the slider into `_indSettings.macd.histOpacity` and saved it, but
+that value was never consumed anywhere — `_applyIndVisualSettings()`'s
+MACD block only ever called `S.macd.applyOptions({ visible: !!m.showHist })`,
+nothing about color.
 
-**Genuinely new code needed:**
-1. Retest detection — has price returned to within a band of the broken zone,
-   within N bars of the break, without closing back through it (i.e. the break
-   is still valid)?
-2. A retest-specific stop-loss — beyond the retest zone boundary, not the
-   EMA-based `get_stop_loss()` in `strategy_ema_cci_macd.py` (confirmed not
-   reusable as-is, but its ATR-fallback pattern is worth mirroring)
+**Fix:** added `_recolorMacdHist()` — recomputes every bar's color from
+`_lastChartData.macd`'s raw values (sign determines up/down color) combined
+with the current `histColorUp`/`histColorDown`/`histOpacity`, then
+`setData()`s the recolored array. Called from two places:
+- `_applyIndVisualSettings()` (fires when the user changes a setting)
+- `load()` (fires on every periodic chart data refresh) — replacing the
+  previous raw, uncolored `S.macd.setData(data.macd||[])`, so the user's
+  chosen colors/opacity survive normal chart refreshes instead of
+  reverting to raw data on the next update.
 
-## Design decisions (documented so they can be revisited if results are odd)
+## Bug 2 — BB (and Volume) had two competing, disconnected visibility sources
 
-- **No ADX gate.** Breakouts happen as a trend is *starting* — ADX is often
-  still rising through 20-28 during the breakout+retest, not yet past the
-  threshold. Gating on ADX>28 like the failed trend-follow experiment did would
-  likely miss the entry window entirely. This strategy is regime-independent by
-  design; the retest+rejection confirmation is the filter, not ADX.
-- **Same session gate (04:00-17:00 UTC)** as the other two strategies, for
-  consistency — already established this matters for these pairs' noise levels.
-- **Retest window: 10 bars** (5 hours on M30) after a detected BoS — arbitrary
-  first-pass choice, easy to tune later if backtest results are close but not
-  quite there.
-- **Retest tolerance band: 0.3×ATR** around the broken zone boundary — slightly
-  wider than EMA-bounce's 0.25×ATR touch band since S/R zones are already
-  ±0.5×ATR wide themselves (from `get_sr_zones()`), so the retest doesn't need
-  to be pixel-perfect.
+`dashboard/assets/chart.js`'s `load()` function (runs on every chart data
+refresh) was independently setting BB and Volume visibility from
+`data.ind_toggles` (an older, separate toggle system, server-driven):
+```js
+S.bbUpper.applyOptions({ visible: !!toggles.bb });
+```
+Meanwhile `_applyIndVisualSettings()` (fires when the user changes the
+newer Indicator Settings modal) sets visibility from
+`_indSettings.bb.visible` — a completely different, client-side-only value
+that never communicates back to `toggles.bb`.
 
-## Todo
+Net effect: flipping "Visible" in the modal set `_indSettings.bb.visible`
+correctly, and `_applyIndVisualSettings()` applied it — but the next
+periodic chart data refresh (`load()`) immediately overwrote it back using
+the stale `toggles.bb` value, silently reverting the change. "Flip it,
+nothing happens" was actually "flip it, and it fights itself and loses" —
+not a no-op, a race the modal always eventually lost.
 
-### 1. New strategy module
-- [ ] Create `engine/strategy_breakout_retest.py`:
-      - `check_buy_signal(pair, df_h1, df_h4, adaptive=None)` /
-        `check_sell_signal(...)` — same signature as the other two strategies
-        so it plugs into `run_backtest()`'s `buy_fn`/`sell_fn` parameters
-        (already generic from the trend-follow work)
-      - Reuse `detect_pivots`, `classify_structure`, `detect_bos_choch`,
-        `get_sr_zones` from `engine.strategy_market_structure`
-      - Reuse `detect_patterns` from `engine.strategy_price_action`
-      - New: `_find_retest(df, zone, direction, lookback=10, band_mult=0.3)` —
-        scans recent bars for price returning to a broken zone without
-        invalidating the break
-      - New: `get_stop_loss(pair, df_h1, zone, direction)` — SL beyond the
-        retest zone boundary, ATR-fallback pattern mirrored from
-        `strategy_ema_cci_macd.get_stop_loss`
-      - Separate diagnostic dicts (own module-level `_buy_diag`/`_sell_diag`)
+RSI and Stochastic use `toggles.rsi`/`toggles.stoch` too, but legitimately
+— those need pane creation/destruction tied to the toggle, a different
+concern from a simple visibility flag on an always-present overlay series
+(BB/Volume don't need pane management, they're overlays on the price pane).
+Left RSI/Stoch's toggle usage untouched.
 
-### 2. Wire into the backtest CLI
-- [ ] `backtest/runner.py`: add `"breakout_retest"` to the `--strategy` choices,
-      import the new module's functions when selected (same pattern as
-      `trend_follow` — no other runner changes needed, `buy_fn`/`sell_fn`
-      params already exist from last session)
+**Fix:** removed the `visible: !!toggles.bb` / `visible: !!toggles.volume`
+overrides from `load()`, keeping only the `setData()` calls. Visibility is
+now owned exclusively by `_applyIndVisualSettings()` /
+`_indSettings.{bb,volume}.visible` — matching how CCI/MACD's line-series
+visibility already worked correctly (no complaints about those).
+Confirmed both default to `visible: false` already, matching the
+series-creation defaults, so this doesn't change first-load behavior.
 
-### 3. Run the screen
-- [ ] Backtest all 12 current pairs with `--strategy breakout_retest`, 3500 M30
-      bars
-- [ ] Report results in the same ranked-table format as the previous two screens
+## Verification
 
-### 4. Verification
-- [ ] `python -m py_compile` on new/changed files
-- [ ] `python -m pytest -q` — confirm no regressions
-- [ ] Confirm default (`ema_bounce`) and `trend_follow` CLI paths still work
-      unaffected
+- [x] `node --check` — OK
+- [x] `python -m pytest -q` — 185 passed, no regressions (pure JS change)
+- [x] Confirmed via a throwaway dashboard instance that the served
+      `chart.js` contains `_recolorMacdHist` (3 occurrences: definition +
+      2 call sites) and zero remaining `toggles.bb`/`toggles.volume`
+      visibility overrides
+- [ ] **Not visually confirmed in a real browser** — same standing
+      limitation this whole session (no Playwright/chromium-cli here).
+      Traced both bugs to their exact mechanism via code reading, not
+      observation, so confidence is in the diagnosis being structurally
+      correct rather than a screenshot match.
 
 ## Review
 
-*(fill in after implementation, including backtest results and a
-recommendation)*
+Both bugs share a theme with the CSS panel-cutoff saga earlier: features
+that were built with a plausible-looking code path that silently never
+actually connected end-to-end. The MACD opacity slider updated state that
+nothing read; the BB toggle updated state that something else
+immediately overwrote. Worth a broader pass at some point: are there other
+settings-panel controls with the same "reads into _indSettings but nothing
+applies it" or "two competing toggle sources" pattern? Did not audit CCI/
+RSI/Stoch/Profiles exhaustively for the same issues this session — scoped
+to the two specifically reported.

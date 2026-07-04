@@ -36,6 +36,15 @@ class OandaConnector:
         self.client = oandapyV20.API(
             access_token=config.OANDA_API_KEY,
             environment=config.OANDA_ENV,   # "practice" or "live"
+            # No timeout was set here before — a stalled connection (dropped
+            # network, slow DNS, unresponsive server) would hang this request
+            # indefinitely. Since main.py's scheduler is a BlockingScheduler
+            # running jobs synchronously in the main thread, one hung request
+            # here freezes every scheduled job (including all other pairs'
+            # signal scans) until it resolves. 15s is generous for a candle
+            # fetch; anything longer almost certainly means the connection is
+            # dead, not just slow.
+            request_params={"timeout": 15},
         )
         logger.info(
             "OandaConnector ready — env=%s  account=%s",

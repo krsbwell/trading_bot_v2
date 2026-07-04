@@ -2501,6 +2501,14 @@ def trigger_scan(n):
             for pair, market, engine in tasks:
                 try:
                     sig = engine.run(pair, market)
+                    if market == "forex":
+                        # Scan Now didn't previously clear the bot-health
+                        # "never scanned" warning even though it successfully
+                        # scanned the pair — same tracking main.py's scheduled
+                        # scan uses, so clicking Scan Now now actually
+                        # resolves the health banner instead of leaving it
+                        # stuck until the next scheduled cycle.
+                        state.record_pair_scan(pair)
                     if sig is None:
                         state.update_signal(pair, 0, "—")
                         continue
@@ -2991,6 +2999,7 @@ def update_signals(_, _1s, threshold):
         state.get_key("signals", {}),
         signal_details=state.get_key("signal_details", {}),
         last_scan_time=state.get_key("last_scan_time"),
+        pair_scan_times=state.get_key("pair_scan_times", {}),
     )
     return missed_banner + [panel] if missed_banner else panel
 

@@ -37,15 +37,49 @@ _REJECT_LABELS = {
 
 
 def signal_monitor_panel(signals: dict, signal_details: dict = None,
-                         last_scan_time=None) -> html.Div:
+                         last_scan_time=None, pair_scan_times: dict = None) -> html.Div:
     """
-    signals        : {pair: {"score": int, "direction": str, "status": str}}
-    signal_details : {pair: full signal dict with sub-scores, h4_gate, trends}
-    last_scan_time : datetime of most recent scan (shown in header)
+    signals          : {pair: {"score": int, "direction": str, "status": str}}
+    signal_details   : {pair: full signal dict with sub-scores, h4_gate, trends}
+    last_scan_time   : datetime of most recent scan cycle start (shown in header)
+    pair_scan_times  : {pair: datetime} of each active pair's last successfully
+                       COMPLETED scan — distinct from last_scan_time, which only
+                       tells you the cycle started, not that every pair in it
+                       finished. Used to detect a pair silently going dark
+                       (e.g. an earlier pair's exception killing the rest of
+                       the loop — see bugs_scheduler_reliability memory).
     """
     import config as _cfg
+    from datetime import datetime as _dt, timezone as _tz
     _watch = set(getattr(_cfg, "FOREX_WATCH", []))
     details = signal_details or {}
+    pair_scan_times = pair_scan_times or {}
+
+    # ── Bot health check — flag any active (trading) pair whose scan is stale ──
+    _STALE_MIN = 45   # 1.5× the 30-min scan cadence; buffer for slow API calls
+    _now = _dt.now(_tz.utc)
+    _stale_pairs = []
+    for _p in getattr(_cfg, "FOREX_PAIRS", []):
+        _last = pair_scan_times.get(_p)
+        if _last is None:
+            _stale_pairs.append((_p, "never scanned"))
+        else:
+            _age_min = (_now - _last).total_seconds() / 60
+            if _age_min > _STALE_MIN:
+                _stale_pairs.append((_p, f"{_age_min:.0f} min ago"))
+
+    health_banner = None
+    if _stale_pairs:
+        health_banner = html.Div([
+            html.Span("⚠ BOT HEALTH: ", style={"color": "#ffd700", "fontWeight": 700,
+                                                 "fontSize": "0.75rem", **_mono}),
+            html.Span(
+                "  ".join(f"{p.replace('_','/')} ({age})" for p, age in _stale_pairs)
+                + f"  — not scanned in the last {_STALE_MIN} min, check the bot process",
+                style={"color": "#ffd700", "fontSize": "0.72rem", **_mono},
+            ),
+        ], style={"background": "#2a1a00", "border": "1px solid #ffd700",
+                   "borderRadius": "4px", "padding": "6px 10px", "marginBottom": "8px"})
 
     active_rows  = []   # pairs with a long/short direction
     neutral_rows = []   # pairs returning no_signal (score = 0, direction = "—")
@@ -212,7 +246,10 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
                  style={"color": _MUTED, "fontSize": "0.8rem",
                         "textAlign": "center", "padding": "0.75rem 0"})
     )
-    return html.Div([header, table_or_empty], style=_panel_style())
+    body = [header, table_or_empty]
+    if health_banner:
+        body = [health_banner] + body
+    return html.Div(body, style=_panel_style())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

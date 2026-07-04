@@ -4000,7 +4000,7 @@
         try { if (S.cciMa)      S.cciMa.setData(data.cci_ma||[]); }        catch(e) {}
         try { if (S.cciBbUpper) S.cciBbUpper.setData(data.cci_bb_upper||[]); } catch(e) {}
         try { if (S.cciBbLower) S.cciBbLower.setData(data.cci_bb_lower||[]); } catch(e) {}
-        try { if (S.macd)       S.macd.setData(data.macd||[]); }            catch(e) {}
+        _recolorMacdHist();  /* sets S.macd's data with current histColorUp/Down/Opacity applied, not raw */
         try { if (S.macdLine)   S.macdLine.setData(data.macd_line||[]); }   catch(e) {}
         try { if (S.macdSignal) S.macdSignal.setData(data.macd_signal||[]); } catch(e) {}
 
@@ -4063,17 +4063,20 @@
             S.stochD = null;
         }
 
-        /* Bollinger Bands (pane 0 overlay) */
-        try { if (S.bbUpper) { S.bbUpper.setData(data.bb_upper||[]); S.bbUpper.applyOptions({ visible: !!toggles.bb }); } } catch(e) {}
-        try { if (S.bbBasis) { S.bbBasis.setData(data.bb_basis||[]); S.bbBasis.applyOptions({ visible: !!toggles.bb }); } } catch(e) {}
-        try { if (S.bbLower) { S.bbLower.setData(data.bb_lower||[]); S.bbLower.applyOptions({ visible: !!toggles.bb }); } } catch(e) {}
-        /* Volume (pane 0 overlay) */
+        /* Bollinger Bands (pane 0 overlay). Visibility is NOT set here — it's
+           owned exclusively by _applyIndVisualSettings() reading
+           _indSettings.bb.visible (the Indicator Settings modal's actual
+           state). This used to also apply visible:!!toggles.bb here, a
+           second, disconnected toggle source that silently reverted the
+           modal's "Visible" switch on every data refresh — "flip it, nothing
+           happens" was this fighting with itself, not doing nothing. */
+        try { if (S.bbUpper) S.bbUpper.setData(data.bb_upper||[]); } catch(e) {}
+        try { if (S.bbBasis) S.bbBasis.setData(data.bb_basis||[]); } catch(e) {}
+        try { if (S.bbLower) S.bbLower.setData(data.bb_lower||[]); } catch(e) {}
+        /* Volume (pane 0 overlay) — same fix, same reason: visibility owned
+           by _applyIndVisualSettings() / _indSettings.volume.visible only. */
         try {
-            if (S.volume) {
-                S.volume.setData(data.volume||[]);
-                S.volume.applyOptions({ visible: !!toggles.volume });
-                chart.priceScale('vol').applyOptions({ visible: !!toggles.volume });
-            }
+            if (S.volume) S.volume.setData(data.volume||[]);
         } catch(e) {}
 
         try {
@@ -4756,6 +4759,27 @@
         if (el) { el.style.height = TOTAL_H + 'px'; el.style.overflow = 'hidden'; }
     }
 
+    /* MACD histogram bars carry their own per-point color (standard
+       lightweight-charts histogram pattern) rather than reading a single
+       series-level color/opacity option — so histColorUp/histColorDown/
+       histOpacity in the settings panel previously did nothing at all,
+       because nothing ever recomputed the per-bar colors from them. Called
+       both when the user changes a setting AND after every fresh data load,
+       so the customization survives normal chart refreshes instead of
+       reverting to the server's raw (uncolored) data on the next update. */
+    function _recolorMacdHist() {
+        if (!S.macd || !_indSettings || !_lastChartData || !_lastChartData.macd) return;
+        var m = _indSettings.macd;
+        try {
+            var recolored = _lastChartData.macd.map(function(pt) {
+                var isUp = (pt.value || 0) >= 0;
+                var baseColor = isUp ? m.histColorUp : m.histColorDown;
+                return { time: pt.time, value: pt.value, color: _hexToRgba(baseColor, m.histOpacity) };
+            });
+            S.macd.setData(recolored);
+        } catch(e) {}
+    }
+
     /* Apply visual settings to live chart series (no reload needed) */
     function _applyIndVisualSettings() {
         if (!_indSettings || !chart) return;
@@ -4883,6 +4907,7 @@
         try {
             if (S.macd) S.macd.applyOptions({ visible: !!(m.showHist) });
         } catch(e) {}
+        _recolorMacdHist();
         try {
             if (S.macdLine) S.macdLine.applyOptions({
                 visible: !!(m.showMacd),

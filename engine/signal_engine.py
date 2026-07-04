@@ -6,7 +6,12 @@ import pandas as pd
 import config
 from engine.indicators import ema, atr as calc_atr, cci, macd_histogram
 from engine.strategy_ema_cci_macd import (
-    check_buy_signal, check_sell_signal, get_best_emas, get_stop_loss,
+    check_buy_signal as _ema_buy, check_sell_signal as _ema_sell,
+    get_best_emas, get_stop_loss as _ema_sl, get_last_diag as _ema_diag,
+)
+from engine.strategy_breakout_retest import (
+    check_buy_signal as _br_buy, check_sell_signal as _br_sell,
+    get_stop_loss as _br_sl, get_last_diag as _br_diag,
 )
 from engine.adaptive_params import adaptive_params
 from engine.wfo_optimizer import wfo_optimizer
@@ -16,13 +21,26 @@ from engine.strategy_market_structure import (
 from engine.strategy_price_action import detect_patterns, score_price_action
 from engine.confluence_scorer import score_signal
 from engine.signal_audit import log_signal as _audit
-from engine.strategy_ema_cci_macd import get_last_diag
 from risk.risk_manager import get_tp_levels
 
 logger = logging.getLogger(__name__)
 
 # get_candles signature: (instrument, granularity, count) → pd.DataFrame
 GetCandlesFn = Callable[[str, str, int], pd.DataFrame]
+
+# Per-pair strategy dispatch — a pair not in config.STRATEGY_OVERRIDE uses
+# "ema_bounce". All 4 (buy, sell, stop-loss, diagnostics) must route together,
+# since a pair's diagnostics only exist in whichever module's check_buy/sell_signal
+# actually ran for it.
+_STRATEGY_FNS = {
+    "ema_bounce":      (_ema_buy, _ema_sell, _ema_sl, _ema_diag),
+    "breakout_retest": (_br_buy, _br_sell, _br_sl, _br_diag),
+}
+
+
+def _resolve_strategy(pair: str):
+    name = getattr(config, "STRATEGY_OVERRIDE", {}).get(pair, "ema_bounce")
+    return _STRATEGY_FNS.get(name, _STRATEGY_FNS["ema_bounce"])
 
 
 class SignalEngine:
@@ -59,6 +77,8 @@ class SignalEngine:
         Returns a signal dict when score >= MIN_CONFLUENCE_SCORE, else None.
         Signals scoring 50–69 are logged but return None (no trade fired).
         """
+        _buy_fn, _sell_fn, _sl_fn, _diag_fn = _resolve_strategy(pair)
+
         # Suppress audit writes for diagnostic-only calls (e.g. _diagnostic_scan in main.py)
         _do_audit = (lambda **kw: None) if no_audit else _audit
 
@@ -108,13 +128,13 @@ class SignalEngine:
         _wfo       = wfo_optimizer.get_params(pair)
         _ap        = adaptive_params.get(pair)
         _combined  = {**_wfo, **_ap}
-        buy_score  = check_buy_signal(pair, df_h1, df_h4, adaptive=_combined)
-        sell_score = check_sell_signal(pair, df_h1, df_h4, adaptive=_combined)
+        buy_score  = _buy_fn(pair, df_h1, df_h4, adaptive=_combined)
+        sell_score = _sell_fn(pair, df_h1, df_h4, adaptive=_combined)
 
         if buy_score == sell_score == 0:
             # Diagnose why: check which direction H4 aligned with, then why that direction scored 0
-            _buy_d  = get_last_diag(pair, "long")
-            _sell_d = get_last_diag(pair, "short")
+            _buy_d  = _diag_fn(pair, "long")
+            _sell_d = _diag_fn(pair, "short")
             if h4_trend == "bull":
                 _reject = "NO_TOUCH" if not _buy_d.get("c3") else "CONDITIONS_WEAK"
             elif h4_trend == "bear":
@@ -182,7 +202,7 @@ class SignalEngine:
         )
 
         # Fetch condition diagnostics set by check_buy/sell_signal
-        _diag = get_last_diag(pair, direction)
+        _diag = _diag_fn(pair, direction)
 
         if final_score < 35:
             _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
@@ -191,7 +211,7 @@ class SignalEngine:
                    confluence_score=final_score,
                    c1=_diag.get("c1"), c2_h4=_diag.get("c2"), c3_touch=_diag.get("c3"),
                    c4_cci_at_touch=_diag.get("c4"), c5_cci_recovery=_diag.get("c5"),
-                   c6_macd=_diag.get("c6"), c7_macd_momentum=_diag.get("c7"),
+                   c6_macd=_diag.get("c6"),
                    cci_at_touch_val=_diag.get("cci_at_touch_val"),
                    cci_current=_diag.get("cci_current"),
                    macd_hist_val=_diag.get("macd_hist_val"),
@@ -200,7 +220,7 @@ class SignalEngine:
             return None
 
         # ── Compute SL/TP early — needed for chart overlay on WATCHING signals too ─
-        _watch_sl = get_stop_loss(pair, df_h1, direction)
+        _watch_sl = _sl_fn(pair, df_h1, direction)
         _watch_sl_pips = abs(entry - _watch_sl) / _pip_size
         if _watch_sl_pips < config.MIN_SL_PIPS:
             _sl_dir  = -1 if direction == "long" else 1
@@ -218,7 +238,7 @@ class SignalEngine:
                    confluence_score=final_score,
                    c1=_diag.get("c1"), c2_h4=_diag.get("c2"), c3_touch=_diag.get("c3"),
                    c4_cci_at_touch=_diag.get("c4"), c5_cci_recovery=_diag.get("c5"),
-                   c6_macd=_diag.get("c6"), c7_macd_momentum=_diag.get("c7"),
+                   c6_macd=_diag.get("c6"),
                    cci_at_touch_val=_diag.get("cci_at_touch_val"),
                    cci_current=_diag.get("cci_current"),
                    macd_hist_val=_diag.get("macd_hist_val"),

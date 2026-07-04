@@ -53,6 +53,26 @@ class TestOandaConnectorStructural:
         with pytest.raises(ValueError, match="OANDA_ACCOUNT_ID"):
             OandaConnector()
 
+    def test_client_has_request_timeout(self, monkeypatch):
+        """
+        A stalled HTTP call must not hang forever — main.py's scheduler runs
+        jobs synchronously (BlockingScheduler), so one hung request would
+        freeze every scheduled job, not just the current one. See
+        bugs_scheduler_reliability memory: this was the likely cause of a
+        multi-hour silent outage before request_params={"timeout": ...} was
+        added. Regression test — fails if the timeout is ever removed.
+        """
+        import config as cfg
+        monkeypatch.setattr(cfg, "OANDA_API_KEY", "fake-key")
+        monkeypatch.setattr(cfg, "OANDA_ACCOUNT_ID", "fake-account")
+        from connectors.oanda_connector import OandaConnector
+        conn = OandaConnector()
+        assert conn.client.request_params.get("timeout") is not None
+        assert conn.client.request_params["timeout"] <= 30, (
+            "timeout should be short enough that a stalled connection can't "
+            "block the scheduler for an unreasonable amount of time"
+        )
+
 
 class TestOandaConnectorLive:
     @pytest.fixture(scope="class")

@@ -410,3 +410,66 @@ class TestEmaStrategy:
         df = _flat(30)  # only 30 candles — not enough
         assert check_buy_signal("SHORT", df, df) == 0.0
         assert check_sell_signal("SHORT2", df, df) == 0.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Signal audit contract — engine/signal_engine.py must only pass kwargs that
+# engine/signal_audit.log_signal() actually accepts
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSignalAuditContract:
+    """
+    Regression test for a real 2026-07-03 incident: signal_engine.py's audit
+    calls passed c7_macd_momentum=... but log_signal()'s signature never had
+    that parameter (keyword-only, no **kwargs catch-all) — every scan that
+    landed in the "SCANNING"/"WATCHING" score band raised an unhandled
+    TypeError, which (combined with the scan-loop bug fixed the same day)
+    silently killed signal processing for whichever pairs came after the one
+    that hit it. See bugs_scheduler_reliability memory.
+
+    Rather than hardcoding the exact kwargs of today's fix (which would only
+    catch this exact regression), this statically verifies every kwarg name
+    signal_engine.py passes to its audit calls is one log_signal() actually
+    accepts — catches this whole class of "these two files drifted out of
+    sync" bug, not just today's specific instance of it.
+    """
+
+    def test_signal_engine_audit_kwargs_are_all_valid(self):
+        """
+        Uses ast (a real Python parser), not regex, to find every _do_audit(...)
+        call site and check its keyword arguments — a first attempt at this
+        test used regex and silently failed to catch a deliberately
+        reintroduced copy of the real bug (multi-line calls with nested
+        parens broke the regex's block boundaries). Verified this ast-based
+        version DOES catch it before relying on it — see the manual
+        verification note in tasks/todo.md for this fix.
+        """
+        import ast
+        import inspect
+        import engine.signal_engine as se
+        from engine.signal_audit import log_signal
+
+        valid_params = set(inspect.signature(log_signal).parameters)
+
+        source = inspect.getsource(se)
+        tree = ast.parse(source)
+
+        call_sites = []
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "_do_audit"):
+                call_sites.append(node)
+
+        assert len(call_sites) >= 1, "expected to find _do_audit(...) call sites — parsing may be broken"
+
+        for node in call_sites:
+            kwarg_names = {kw.arg for kw in node.keywords if kw.arg is not None}
+            invalid = kwarg_names - valid_params
+            assert not invalid, (
+                f"signal_engine.py line {node.lineno} passes kwarg(s) {invalid} "
+                f"to _do_audit() that engine.signal_audit.log_signal() does not "
+                f"accept (valid params: {sorted(valid_params)}) — this raises "
+                f"TypeError at runtime for any signal that reaches this call, "
+                f"exactly like the 2026-07-03 c7_macd_momentum bug"
+            )

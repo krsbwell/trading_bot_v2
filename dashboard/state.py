@@ -68,6 +68,16 @@ _state: dict = {
     # ── Signal details (full signal dict per pair, for chart overlays) ────────
     "signal_details": {},   # pair → {entry, stop_loss, tp_levels, direction, …}
 
+    # ── Per-pair scan health — last time _process_pair completed for this
+    # pair, whether or not it produced a signal. Used by the dashboard's bot
+    # health indicator to detect a pair silently going dark (e.g. an
+    # exception on an earlier pair in the loop previously killed every pair
+    # after it, with no visible symptom until the equity curve went flat —
+    # see bugs_scheduler_reliability memory). Distinct from the single global
+    # "last_scan_time" below, which only tells you the loop started, not that
+    # every pair in it actually completed.
+    "pair_scan_times": {},   # pair → datetime (UTC) of last successful scan
+
     # ── Paper trader reference (for dashboard order placement) ───────────────
     "paper_trader": None,
 
@@ -97,6 +107,12 @@ def get_key(key: str, default: Any = None) -> Any:
 def update(**kwargs) -> None:
     with _lock:
         _state.update(kwargs)
+
+
+def record_pair_scan(pair: str) -> None:
+    """Mark `pair` as successfully scanned right now — see pair_scan_times above."""
+    with _lock:
+        _state.setdefault("pair_scan_times", {})[pair] = datetime.now(timezone.utc)
 
 
 def update_signal(pair: str, score: int, direction: str,

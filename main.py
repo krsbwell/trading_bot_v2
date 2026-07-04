@@ -110,8 +110,7 @@ def on_candle_close() -> None:
         len(config.FOREX_PAIRS), len(watch_pairs), len(config.CRYPTO_PAIRS),
     )
 
-    for pair in config.FOREX_PAIRS:
-        _process_pair(pair, "forex", _forex_engine)
+    _scan_forex_pairs(config.FOREX_PAIRS, _forex_engine)
 
     # Watch-only pairs: scan signals for dashboard display but never open trades
     if _forex_engine:
@@ -166,6 +165,43 @@ def on_candle_close() -> None:
         balance = acct.get("balance", 500.0)
         reset_daily_state(balance)
         logger.info("Daily drawdown counter reset")
+
+
+def _scan_forex_pairs(pairs: list, engine) -> None:
+    """
+    Run _process_pair for every active forex pair, isolating exceptions per
+    pair so a failure on one pair can never silently skip the pairs after it
+    for the rest of the cycle (see bugs_scheduler_reliability memory —
+    this loop previously had no exception isolation at all).
+
+    Records a per-pair "last scanned" timestamp in dashboard state, whether
+    or not the pair produced a signal — this is what the dashboard's bot
+    health indicator watches to detect a pair silently going dark.
+    """
+    for pair in pairs:
+        try:
+            _process_pair(pair, "forex", engine)
+            state.record_pair_scan(pair)
+        except Exception:
+            logger.error("Signal processing failed for %s — skipping this cycle", pair, exc_info=True)
+
+
+def _trending_structure_gate_applies(pair: str, market_structure: str) -> bool:
+    """
+    EMA-bounce is a mean-reversion strategy — it has 0% historical WR in
+    trending markets (uptrend: 0/9, downtrend: 0/3 in signal_log), so its
+    signals are blocked when market_structure is trending.
+
+    This does NOT apply to breakout-retest (or any future non-EMA-bounce
+    strategy) — that strategy's whole premise is trading a break of
+    structure INTO a trend, so blocking on "trending structure" would kill
+    most of its legitimate signals. Bug found 2026-07-03: this gate used to
+    apply unconditionally to every pair, which silently blocked most of
+    GBP_USD's breakout-retest signals after it was wired to that strategy —
+    see bugs_scheduler_reliability memory.
+    """
+    pair_strategy = getattr(config, "STRATEGY_OVERRIDE", {}).get(pair, "ema_bounce")
+    return pair_strategy == "ema_bounce" and market_structure in ("uptrend", "downtrend")
 
 
 def _process_pair(pair: str, market: str, engine) -> None:
@@ -259,11 +295,9 @@ def _process_pair(pair: str, market: str, engine) -> None:
         _block(f"Gate: {signal['gate_blocked']}")
         return
 
-    # ── Trending structure filter ─────────────────────────────────────────────
-    # EMA bounce is a mean-reversion strategy — it has 0% historical WR in
-    # trending markets (uptrend: 0/9, downtrend: 0/3 in signal_log).
+    # ── Trending structure filter — EMA-bounce only ───────────────────────────
     _mkt_struct = signal.get("market_structure", "")
-    if _mkt_struct in ("uptrend", "downtrend"):
+    if _trending_structure_gate_applies(pair, _mkt_struct):
         _struct_reason = f"Trending structure ({_mkt_struct}) — EMA bounce has no edge in trends"
         logger.info("STRUCTURE BLOCKED: %s %s score=%d — %s", pair, signal["direction"], score, _struct_reason)
         _audit_blocked(
@@ -830,9 +864,14 @@ def main() -> None:
     # Weekly WFO re-fit — Sunday 02:00 UTC, runs in background thread (non-blocking)
     if getattr(config, "WFO_ENABLED", True) and _oanda_connector:
         def _wfo_job():
+            # WFO only tunes strategy_ema_cci_macd params — skip pairs routed to a
+            # different strategy via STRATEGY_OVERRIDE (e.g. GBP_USD/breakout_retest),
+            # they'd otherwise be re-tuned weekly for a strategy they don't run.
+            _override = getattr(config, "STRATEGY_OVERRIDE", {})
+            _wfo_pairs = [p for p in config.FOREX_PAIRS if _override.get(p, "ema_bounce") == "ema_bounce"]
             threading.Thread(
                 target=wfo_optimizer.run_all_pairs,
-                args=(_oanda_connector.get_candles, config.FOREX_PAIRS),
+                args=(_oanda_connector.get_candles, _wfo_pairs),
                 kwargs={"market": "forex"},
                 daemon=True,
                 name="wfo-refit",

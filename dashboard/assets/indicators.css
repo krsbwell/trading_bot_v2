@@ -5,7 +5,14 @@
     top: 80px;
     right: 20px;
     width: 460px;
-    max-height: 82vh;
+    /* Hard pixel cap, not vh/calc/top+bottom — two earlier attempts using
+       viewport-relative sizing didn't visibly fix this (possibly an
+       ancestor element changes position:fixed's containing block, or some
+       other layout interaction that couldn't be confirmed without a real
+       browser). A fixed pixel value has no such dependency. 560px comfortably
+       fits below an 80px top offset on any display down to ~700px tall. */
+    height: 560px;
+    max-height: calc(100vh - 40px);   /* safety net only, for very short windows */
     background: #161b22;
     border: 1px solid #30363d;
     border-radius: 8px;
@@ -81,15 +88,30 @@
 
 /* Body / scroll area */
 .aip-body {
-    overflow-y: auto;
+    /* scroll (not auto) forces the scrollbar to always render, even on tabs
+       short enough not to need it — makes the scroll affordance impossible
+       to miss, and removes any doubt about whether overflow is engaging. */
+    overflow-y: scroll;
     padding: 8px 14px 14px;
     flex: 1;
+    min-height: 0;      /* flex items default to min-height:auto and won't
+                            shrink below content size without this */
+    /* Explicit height budget, independent of the outer panel's flex layout:
+       outer is 560px; header (~40px) + tabs (~36px) + a few px border ≈ 80px,
+       leaving 480px. Setting this directly on the scroll container itself
+       means it doesn't depend on flex correctly distributing the remaining
+       space — it's sized on its own terms. */
+    max-height: 480px;
 }
 
-/* Scrollbar */
-.aip-body::-webkit-scrollbar { width: 5px; }
+/* Scrollbar — widened from the original 5px and given a visible thumb
+   color so it reads as an obvious, grabbable control, not a hairline. */
+.aip-body::-webkit-scrollbar { width: 10px; }
 .aip-body::-webkit-scrollbar-track { background: #0d1117; }
-.aip-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+.aip-body::-webkit-scrollbar-thumb { background: #484f58; border-radius: 5px; border: 2px solid #0d1117; }
+.aip-body::-webkit-scrollbar-thumb:hover { background: #58a6ff; }
+/* Firefox */
+.aip-body { scrollbar-width: auto; scrollbar-color: #484f58 #0d1117; }
 
 /* Section heading */
 .aip-section {
