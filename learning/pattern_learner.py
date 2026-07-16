@@ -111,7 +111,11 @@ class PatternLearner:
         df = _encode_categoricals(df)
         avail = [f for f in FEATURES if f in df.columns]
         X = df[avail].apply(pd.to_numeric, errors="coerce").fillna(0)
-        y = (df.loc[X.index, "outcome"] == "win").astype(int)
+        # would_win/would_lose are shadow-resolved outcomes for signals that were
+        # scored but never traded (learning/shadow_outcomes.py) — trained on
+        # the same footing as real win/loss so the model also learns from
+        # near-misses and gate-rejected setups, not just trades actually taken.
+        y = df.loc[X.index, "outcome"].isin(["win", "would_win"]).astype(int)
 
         if len(X) < self.MIN_SAMPLES:
             logger.info("PatternLearner: too many unparseable rows — %d usable", len(X))
@@ -352,10 +356,15 @@ class PatternLearner:
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 def _load_closed(log_path: str) -> pd.DataFrame | None:
-    """Load signal_log.csv and return only win/loss rows. Returns None on any error."""
+    """
+    Load signal_log.csv and return win/loss rows — real trade outcomes plus
+    would_win/would_lose (shadow-resolved outcomes for signals that were
+    scored but never traded, see learning/shadow_outcomes.py). Returns None
+    on any error.
+    """
     try:
         df = pd.read_csv(log_path)
     except (FileNotFoundError, pd.errors.EmptyDataError):
         return None
-    closed = df[df["outcome"].isin(["win", "loss"])].copy()
+    closed = df[df["outcome"].isin(["win", "loss", "would_win", "would_lose"])].copy()
     return closed if len(closed) > 0 else None

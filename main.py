@@ -31,6 +31,7 @@ from risk.risk_manager import (
 )
 from learning.data_collector import record_signal, record_close, record_skip, clear_pending
 from learning.pattern_learner import PatternLearner
+from learning import shadow_outcomes
 from learning.feedback_loop import generate_suggestions, should_run as feedback_should_run
 from alerts.audio_alert import play_alert
 from alerts.telegram_alert import (
@@ -267,13 +268,15 @@ def _process_pair(pair: str, market: str, engine) -> None:
                     tg_signal(signal)
             except Exception:
                 pass
-        else:
-            record_skip(signal)
+        record_skip(signal)   # log for shadow-outcome resolution regardless of watching status
         return
 
     def _block(reason: str) -> None:
-        """Stamp the signal detail with a trade_blocked_reason for the dashboard."""
+        """Stamp the signal detail with a trade_blocked_reason for the dashboard,
+        and log the rejected signal for shadow-outcome resolution — covers every
+        gate below (ML/structure/session/news/duplicate/pre-trade/cooldown)."""
         state.update_signal_detail(pair, {**signal, "trade_blocked_reason": reason})
+        record_skip(signal)
 
     # ── ML tiered gate ───────────────────────────────────────────────────────
     # Signals scoring 55–64 are marginal — only trade when ML backs them up.
@@ -449,6 +452,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
                 tp_levels=tp,
                 size=size,
                 extra={"latency_ms": latency_ms},
+                trade_id=trade_id,   # matches record_signal()'s id so record_close() finds it
             )
             _sync_paper_state()
             logger.debug("Latency %s → %.1f ms", pair, latency_ms)
@@ -618,7 +622,7 @@ def _update_ml_stats() -> None:
     try:
         import pandas as pd
         df = pd.read_csv("data/signal_log.csv")
-        n  = len(df[df["outcome"].isin(["win", "loss"])])
+        n  = len(df[df["outcome"].isin(["win", "loss", "would_win", "would_lose"])])
     except Exception:
         n = 0
     state.update(ml_stats={"accuracy": None, "top_features": top, "n_samples": n})
@@ -806,10 +810,24 @@ def main() -> None:
     # ── Launch dashboard in background thread ─────────────────────────────────
     from dashboard.app import app as dash_app
     def _run_dash():
-        dash_app.run(host="0.0.0.0", port=8050, debug=False, use_reloader=False)
+        # threaded=True — the Werkzeug dev server otherwise handles one HTTP
+        # request at a time, so the browser's chart/price polling callbacks
+        # queue up behind whichever request is in flight (most noticeably
+        # during the ~30-min on_candle_close scan burst). threaded=True
+        # spawns a new thread per incoming request instead, so those polls
+        # get serviced concurrently rather than waiting in line.
+        dash_app.run(host="0.0.0.0", port=8050, debug=False, use_reloader=False,
+                     threaded=True)
     t = threading.Thread(target=_run_dash, daemon=True, name="dashboard")
     t.start()
     logger.info("Dashboard: http://localhost:8050")
+
+    # ── Stream health tracking (diagnostic — added 2026-07-06) ────────────────
+    # Populated by _on_stream_price below; read by _scheduler_heartbeat to help
+    # pin down the recurring on_candle_close misfires (see
+    # bugs_scheduler_reliability memory). Defined unconditionally so the
+    # heartbeat job never hits a NameError even if streaming isn't running.
+    _stream_health = {"last_tick": None}
 
     # ── OANDA price stream — real-time SL/TP monitoring ──────────────────────
     if config.MODE == "paper" and _oanda_connector and _paper_trader:
@@ -819,10 +837,22 @@ def main() -> None:
 
             def _on_stream_price(instrument: str, bid: float, ask: float) -> None:
                 """Called on every tick from the OANDA stream."""
+                _stream_health["last_tick"] = _time.time()
+                # Feed the dashboard's live price cache so the UI can show
+                # sub-second prices instead of polling REST every 5s — see
+                # state.get_live_price(). Cheap: just an in-memory dict write.
+                state.update_live_price(instrument, bid, ask)
                 if not _paper_trader or not _paper_trader.get_open_trade(instrument):
                     return
                 try:
+                    _tick_start = _time.monotonic()
                     closed = _paper_trader.tick_check(instrument, bid, ask)
+                    _tick_elapsed = _time.monotonic() - _tick_start
+                    if _tick_elapsed > 0.5:
+                        logger.warning(
+                            "STREAM: tick_check for %s took %.2fs (thread=%s)",
+                            instrument, _tick_elapsed, threading.current_thread().name,
+                        )
                     if closed:
                         _sync_paper_state()
                         logger.info(
@@ -861,6 +891,44 @@ def main() -> None:
     scheduler.add_job(_diagnostic_scan, CronTrigger(minute="10,20,40,50"), id="diag_scan")
     # Live candle feed — runs every 60 s to keep Signal Monitor current mid-bar
     scheduler.add_job(_live_diagnostic_scan, IntervalTrigger(seconds=60), id="live_scan")
+
+    # Diagnostic heartbeat (added 2026-07-06) — see bugs_scheduler_reliability
+    # memory. on_candle_close has silently missed its 30-min fire several
+    # times (20-90+ min gaps), recovering right around price-stream reconnect
+    # log lines. This job's only purpose is to prove, next time it happens,
+    # whether the scheduler's executor pool is starved entirely (this job
+    # also stops firing) or just specific jobs are queued/blocked (this job
+    # keeps firing on schedule while others miss) — and whether the price
+    # stream itself went silent for the whole gap.
+    def _scheduler_heartbeat():
+        last_tick = _stream_health.get("last_tick")
+        if last_tick is None:
+            since_tick = "no ticks yet"
+        else:
+            since_tick = f"{time.time() - last_tick:.0f}s ago"
+        logger.info(
+            "HEARTBEAT  thread=%s  last stream tick=%s",
+            threading.current_thread().name, since_tick,
+        )
+    scheduler.add_job(_scheduler_heartbeat, IntervalTrigger(seconds=30), id="heartbeat")
+
+    # Shadow-outcome resolver (added 2026-07-07) — walks 'skipped' signals
+    # (scored but never traded) forward through real candles to label them
+    # would_win/would_lose, so the ML trains on near-misses and gate-rejected
+    # setups too, not just trades actually taken (learning/shadow_outcomes.py).
+    # Runs hourly in a background thread — does its own OANDA candle fetches
+    # per pending pair, kept off the scheduler thread so it can never
+    # contribute to an on_candle_close freeze.
+    if _oanda_connector:
+        def _shadow_outcomes_job():
+            threading.Thread(
+                target=shadow_outcomes.resolve_pending,
+                args=(_oanda_connector,),
+                daemon=True,
+                name="shadow-outcomes",
+            ).start()
+        scheduler.add_job(_shadow_outcomes_job, IntervalTrigger(minutes=60), id="shadow_outcomes")
+
     # Weekly WFO re-fit — Sunday 02:00 UTC, runs in background thread (non-blocking)
     if getattr(config, "WFO_ENABLED", True) and _oanda_connector:
         def _wfo_job():

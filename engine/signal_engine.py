@@ -204,7 +204,7 @@ class SignalEngine:
         # Fetch condition diagnostics set by check_buy/sell_signal
         _diag = _diag_fn(pair, direction)
 
-        if final_score < 35:
+        if final_score < 40:
             _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
                    direction=direction,
                    ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
@@ -216,7 +216,7 @@ class SignalEngine:
                    cci_current=_diag.get("cci_current"),
                    macd_hist_val=_diag.get("macd_hist_val"),
                    h4_trend=h4_trend, d_trend=d_trend,
-                   result="NO_SIGNAL", reject_reason=f"Score {final_score} < 35 discard threshold")
+                   result="NO_SIGNAL", reject_reason=f"Score {final_score} < 40 discard threshold")
             return None
 
         # ── Compute SL/TP early — needed for chart overlay on WATCHING signals too ─

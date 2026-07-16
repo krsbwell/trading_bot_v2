@@ -78,6 +78,13 @@ _state: dict = {
     # every pair in it actually completed.
     "pair_scan_times": {},   # pair → datetime (UTC) of last successful scan
 
+    # ── Live prices from the OANDA price-stream thread (main.py) — pair →
+    # {"bid","ask","mid","ts"}. Lets the dashboard show sub-second prices
+    # instead of polling REST every 5s (which competes with the same shared
+    # connector during the 30-min scan burst). ts is a float epoch seconds,
+    # used to judge staleness.
+    "live_prices": {},
+
     # ── Paper trader reference (for dashboard order placement) ───────────────
     "paper_trader": None,
 
@@ -115,12 +122,34 @@ def record_pair_scan(pair: str) -> None:
         _state.setdefault("pair_scan_times", {})[pair] = datetime.now(timezone.utc)
 
 
+def update_live_price(pair: str, bid: float, ask: float) -> None:
+    """Record a fresh tick from the price-stream thread — see live_prices above."""
+    import time as _time
+    with _lock:
+        _state.setdefault("live_prices", {})[pair] = {
+            "bid": bid, "ask": ask, "mid": (bid + ask) / 2, "ts": _time.time(),
+        }
+
+
+def get_live_price(pair: str, max_age_s: float = 10.0) -> dict | None:
+    """
+    Return the cached live tick for `pair` if it's fresher than max_age_s,
+    else None (caller should fall back to a REST quote).
+    """
+    import time as _time
+    with _lock:
+        p = _state.get("live_prices", {}).get(pair)
+    if not p or (_time.time() - p["ts"]) > max_age_s:
+        return None
+    return p
+
+
 def update_signal(pair: str, score: int, direction: str,
                   timeframe: str = "H1") -> None:
     _threshold = get_key("min_score", config.MIN_CONFLUENCE_SCORE)
     status = ("SIGNAL"   if score >= _threshold else
               "WATCHING" if score >= 50          else
-              "SCANNING" if score >= 35          else "NEUTRAL")
+              "SCANNING" if score >= 40          else "NEUTRAL")
     with _lock:
         _state["signals"][pair] = {
             "score":     score,

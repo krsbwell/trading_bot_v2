@@ -75,11 +75,50 @@ def _deser(trade: dict) -> dict:
     return d
 
 
+class _InstrumentedLock:
+    """
+    threading.Lock wrapper — same context-manager interface, so every existing
+    `with self._lock:` call site is unaffected. Logs a WARNING if acquiring
+    takes >1s or if held for >1s. Added 2026-07-06 to catch the mechanism
+    behind recurring on_candle_close scheduler misfires (see
+    bugs_scheduler_reliability memory) — if the price-stream thread's tick
+    callback holds this lock for a long time, the scheduler thread would
+    block waiting for it on the next scan cycle. Purely diagnostic: no
+    behavior change on the fast path.
+    """
+    _SLOW_S = 1.0
+
+    def __init__(self):
+        self._lock = threading.Lock()
+
+    def __enter__(self):
+        start = time.monotonic()
+        self._lock.acquire()
+        waited = time.monotonic() - start
+        if waited > self._SLOW_S:
+            logger.warning(
+                "PaperTrader lock acquisition took %.1fs (thread=%s)",
+                waited, threading.current_thread().name,
+            )
+        self._acquired_at = time.monotonic()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        held = time.monotonic() - self._acquired_at
+        if held > self._SLOW_S:
+            logger.warning(
+                "PaperTrader lock held for %.1fs (thread=%s)",
+                held, threading.current_thread().name,
+            )
+        self._lock.release()
+        return False
+
+
 class PaperTrader:
 
     def __init__(self, starting_balance: float = 500.0,
                  save_path: str | Path | bool = None):
-        self._lock = threading.Lock()   # protects open_trades / closed_trades mutations
+        self._lock = _InstrumentedLock()   # protects open_trades / closed_trades mutations
         # save_path=False disables all disk I/O (used by backtest/WFO to avoid file contention)
         if save_path is False:
             self._save_path = None
@@ -188,11 +227,15 @@ class PaperTrader:
         tp_levels: dict,
         size: float,
         extra: dict | None = None,
+        trade_id: str | None = None,
     ) -> str | None:
         """
         Fill immediately at entry_price (market order).
         size: units (forex) or qty (crypto) — used as a raw multiplier for P&L.
         extra: optional dict of additional fields to store on the trade (e.g. latency_ms).
+        trade_id: caller-supplied id (e.g. to match learning.data_collector's
+            record_signal() id so record_close() can find the cached signal
+            when this trade closes) — auto-generated if not given.
         Returns trade_id string, or None if rejected (duplicate pair).
         """
         with self._lock:
@@ -206,7 +249,7 @@ class PaperTrader:
                 )
                 return None
 
-            trade_id = str(uuid.uuid4())[:8].upper()
+            trade_id = trade_id or str(uuid.uuid4())[:8].upper()
             trade = {
                 "id":            trade_id,
                 "pair":          pair,
@@ -278,6 +321,30 @@ class PaperTrader:
                 self.pending_orders.pop(i)
                 self._save_state()
                 logger.info("LIMIT ORDER CANCELLED  id=%s", order_id)
+                return True
+        return False
+
+    def modify_pending_order(self, order_id: str, limit_price: float = None,
+                             sl: float = None, tp1: float = None,
+                             tp2: float = None, tp3: float = None) -> bool:
+        """Update limit price / SL / TP levels on a pending order. Pass None to leave unchanged."""
+        for o in self.pending_orders:
+            if o["id"] == order_id:
+                if limit_price is not None: o["limit_price"] = limit_price
+                if sl          is not None: o["sl"]          = sl
+                if tp1         is not None: o["tp1"]          = tp1
+                if tp2         is not None: o["tp2"]          = tp2
+                if tp3         is not None: o["tp3"]          = tp3
+                self._save_state()
+                logger.info(
+                    "LIMIT ORDER MODIFIED  id=%s  limit=%s  SL=%s  TP1=%s  TP2=%s  TP3=%s",
+                    order_id,
+                    f"{limit_price:.5f}" if limit_price else "—",
+                    f"{sl:.5f}"  if sl  else "—",
+                    f"{tp1:.5f}" if tp1 else "—",
+                    f"{tp2:.5f}" if tp2 else "—",
+                    f"{tp3:.5f}" if tp3 else "—",
+                )
                 return True
         return False
 
@@ -437,7 +504,39 @@ class PaperTrader:
             "PAPER CLOSED  %s %s  reason=%s  exit=%.5f  total_pnl=%+.2f",
             t["direction"].upper(), t["pair"], reason, price, t["realised_pnl"],
         )
+        self._log_outcome(t)
         return True
+
+    def _log_outcome(self, t: dict) -> None:
+        """
+        Feed the closed trade to learning.data_collector.record_close() so it
+        merges with the cached signal features (from record_signal() at open
+        time) into signal_log.csv for ML training. Best-effort — a logging
+        failure must never break real trade closing.
+        """
+        try:
+            from learning.data_collector import record_close
+            pair = t.get("pair", "")
+            pip  = 0.01 if "JPY" in pair else 0.0001
+            entry, exit_price = t.get("entry", 0), t.get("exit_price", 0)
+            diff = (exit_price - entry) if t.get("direction") == "long" else (entry - exit_price)
+            pnl_pips   = diff / pip
+            pnl_dollar = t.get("realised_pnl", 0.0)
+            open_time, close_time = t.get("open_time"), t.get("close_time")
+            hold_hours = (
+                (close_time - open_time).total_seconds() / 3600
+                if open_time and close_time else 0.0
+            )
+            record_close(
+                trade_id     = t.get("id", ""),
+                outcome      = "win" if pnl_dollar > 0 else "loss",
+                pnl_pips     = pnl_pips,
+                pnl_dollar   = pnl_dollar,
+                hold_hours   = hold_hours,
+                tp_level_hit = t.get("close_reason", ""),
+            )
+        except Exception as exc:
+            logger.debug("record_close failed for trade %s: %s", t.get("id"), exc)
 
     # ── Real-time tick check (called every ~5 s from dashboard interval) ─────────
 

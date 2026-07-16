@@ -18,7 +18,7 @@ from dash import (
 import config
 from dashboard import state
 from dashboard.panels import (
-    signal_monitor_panel, open_trades_panel,
+    signal_monitor_panel, open_trades_panel, pending_orders_panel,
     account_stats_bar, trade_log_drawer, learning_panel,
 )
 from dashboard.chart_builder_twlc import build_chart_data
@@ -335,6 +335,7 @@ app.layout = html.Div(
                            "padding": "0.5rem 0.75rem", "marginBottom": "0.5rem"}),
                 html.Div(id="signal-monitor"),
                 html.Div(id="open-trades"),
+                html.Div(id="pending-trades"),
                 html.Div(id="news-panel", style={"marginTop": "0.5rem"}),
 
                 # ── Edit Trade panel (hidden until EDIT clicked) ───────────
@@ -402,7 +403,7 @@ app.layout = html.Div(
                     ),
                     *[html.Button(_TF_LABELS[tf],
                                   id={"type": "tf-btn", "index": tf}, n_clicks=0,
-                                  style=_tf_btn_style(tf == "H1"))
+                                  style=_tf_btn_style(tf == "M30"))
                       for tf in _ALL_TFS],
                     _sep(),
                     # MA button + compact dropdown panel anchored below it
@@ -767,7 +768,7 @@ app.layout = html.Div(
 
         # Stores
         dcc.Store(id="drawer-visible",    data=False),
-        dcc.Store(id="selected-tf",       data="H1"),
+        dcc.Store(id="selected-tf",       data="M30"),
         dcc.Store(id="chart-type-store",  data="candlestick"),
         dcc.Store(id="alert-action",      data=None),
         dcc.Store(id="chart-data-store",  data=None),
@@ -775,6 +776,7 @@ app.layout = html.Div(
         dcc.Store(id="ma-outside-click",  data=0),
         dcc.Store(id="open-trades-store",     data=[]),
         dcc.Store(id="edit-trade-store",      data=None),
+        dcc.Store(id="edit-pending-store",    data=None),
         dcc.Store(id="trade-modify-store",    data=None),
         dcc.Store(id="backtest-result-store", data=None),
 
@@ -1061,6 +1063,62 @@ app.layout = html.Div(
         ),
         html.Div(
             id="edit-modal-backdrop",
+            n_clicks=0,
+            style={"display": "none", "position": "fixed", "top": 0, "left": 0,
+                   "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.4)",
+                   "zIndex": 2999},
+        ),
+
+        # ── Edit Pending Order Floating Modal ─────────────────────────────────
+        html.Div(
+            id="edit-pending-modal",
+            style={
+                "display": "none",
+                "position": "fixed",
+                "top": "50%", "left": "50%",
+                "transform": "translate(-50%, -50%)",
+                "background": "#161b22",
+                "border": "1px solid #38b6ff",
+                "borderRadius": "8px",
+                "padding": "1.25rem 1.5rem",
+                "zIndex": 3000,
+                "minWidth": "340px",
+                "boxShadow": "0 8px 32px rgba(0,0,0,0.7)",
+            },
+            children=[
+                html.Div([
+                    html.Span(id="edit-pending-modal-title",
+                              style={"color": "#38b6ff", "fontWeight": 700,
+                                     "fontSize": "0.95rem"}),
+                    html.Button("×", id="edit-pending-modal-cancel-btn", n_clicks=0,
+                                style={"background": "transparent", "border": "none",
+                                       "color": "#8b949e", "cursor": "pointer",
+                                       "fontSize": "1.3rem", "marginLeft": "auto",
+                                       "padding": "0"}),
+                ], style={"display": "flex", "alignItems": "center",
+                           "marginBottom": "0.85rem"}),
+                html.Div([
+                    _order_field("Limit Price", "edit-pending-modal-limit-input", "#38b6ff"),
+                    _order_field("Stop Loss",   "edit-pending-modal-sl-input",    "#ff3366"),
+                    _order_field("TP 1",        "edit-pending-modal-tp1-input",   "#00ff88"),
+                    _order_field("TP 2",        "edit-pending-modal-tp2-input",   "#00ff88"),
+                    _order_field("TP 3",        "edit-pending-modal-tp3-input",   "#00ff88"),
+                ], style={"display": "grid", "gridTemplateColumns": "repeat(2, 1fr)",
+                           "gap": "0.4rem", "marginBottom": "0.6rem"}),
+                html.Button("✓ Update Order",
+                            id="edit-pending-modal-confirm-btn", n_clicks=0,
+                            style={"width": "100%", "background": "#003d1f",
+                                   "color": "#00ff88", "border": "1px solid #00ff88",
+                                   "borderRadius": "3px", "padding": "0.3rem",
+                                   "cursor": "pointer", "fontSize": "0.82rem",
+                                   "fontWeight": 700}),
+                html.Div(id="edit-pending-modal-result",
+                         style={"color": "#8b949e", "fontSize": "0.75rem",
+                                "marginTop": "0.3rem"}),
+            ],
+        ),
+        html.Div(
+            id="edit-pending-modal-backdrop",
             n_clicks=0,
             style={"display": "none", "position": "fixed", "top": 0, "left": 0,
                    "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.4)",
@@ -1359,7 +1417,7 @@ def select_tf(clicks):
     Input("selected-tf", "data"),
 )
 def highlight_active_tf(tf):
-    return [_tf_btn_style(t == (tf or "H1")) for t in _ALL_TFS]
+    return [_tf_btn_style(t == (tf or "M30")) for t in _ALL_TFS]
 
 
 # ── Chart type (Candles / Heikin-Ashi) ───────────────────────────────────────
@@ -2062,11 +2120,15 @@ def toggle_close_modal(close_clicks, cancel1, cancel2, confirm, backdrop_n, pair
     dec       = 3 if "JPY" in pair_v else 5
     dir_col   = "#00ff88" if direction == "long" else "#ff3366"
 
-    # Live price for current P&L display
+    # Live price for current P&L display — prefer the price-stream cache
+    # (sub-second) over a REST call, same reasoning as update_trades_and_account
     is_forex  = "_" in pair_v
     connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
     cur_price = t.get("last_price", entry)
-    if connector:
+    live = state.get_live_price(pair_v) if is_forex else None
+    if live:
+        cur_price = live["mid"]
+    elif connector:
         try:
             q = connector.get_current_quote(pair_v)
             cur_price = q.get("mid") or q.get("ask") or cur_price
@@ -2144,7 +2206,10 @@ def confirm_close_trade(n, store, pair):
     is_forex  = "_" in pair_v
     connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
     exit_price = t.get("last_price", t.get("entry", 0))
-    if connector:
+    live = state.get_live_price(pair_v) if is_forex else None
+    if live:
+        exit_price = live["mid"]
+    elif connector:
         try:
             q = connector.get_current_quote(pair_v)
             exit_price = q.get("mid") or q.get("ask") or exit_price
@@ -2321,6 +2386,121 @@ def confirm_edit_modal(confirm_n, be_n, store, sl, tp1, tp2, tp3):
                 open_trades_panel(trades, state.get_key("mode", "paper")))
 
     return no_update, no_update
+
+
+# ── Edit pending order modal: EDIT button → show floating modal ──────────────
+
+@app.callback(
+    Output("edit-pending-store",           "data"),
+    Output("edit-pending-modal",           "style"),
+    Output("edit-pending-modal-backdrop",  "style"),
+    Output("edit-pending-modal-title",     "children"),
+    Output("edit-pending-modal-limit-input", "value"),
+    Output("edit-pending-modal-sl-input",  "value"),
+    Output("edit-pending-modal-tp1-input", "value"),
+    Output("edit-pending-modal-tp2-input", "value"),
+    Output("edit-pending-modal-tp3-input", "value"),
+    Input({"type": "edit-pending-btn", "index": ALL}, "n_clicks"),
+    Input("edit-pending-modal-cancel-btn",  "n_clicks"),
+    Input("edit-pending-modal-confirm-btn", "n_clicks"),
+    Input("edit-pending-modal-backdrop",    "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_edit_pending_modal(edit_clicks, cancel_n, confirm_n, backdrop_n):
+    _show = {
+        "display": "block", "position": "fixed",
+        "top": "50%", "left": "50%",
+        "transform": "translate(-50%, -50%)",
+        "background": "#161b22", "border": "1px solid #38b6ff",
+        "borderRadius": "8px", "padding": "1.25rem 1.5rem",
+        "zIndex": 3000, "minWidth": "340px",
+        "boxShadow": "0 8px 32px rgba(0,0,0,0.7)",
+    }
+    _hide      = {**_show, "display": "none"}
+    _back_show = {"display": "block", "position": "fixed", "top": 0, "left": 0,
+                   "width": "100%", "height": "100%",
+                   "background": "rgba(0,0,0,0.4)", "zIndex": 2999}
+    _back_hide = {**_back_show, "display": "none"}
+    _blank = (None, _hide, _back_hide, "", None, None, None, None, None)
+
+    ctx = callback_context
+    if not ctx.triggered:
+        return (no_update,) * 9
+
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0]
+    tval      = ctx.triggered[0].get("value")
+
+    # Cancel/confirm/backdrop → close modal (only when actually clicked, i.e. value > 0)
+    if triggered in ("edit-pending-modal-cancel-btn", "edit-pending-modal-confirm-btn",
+                     "edit-pending-modal-backdrop"):
+        return _blank if tval else (no_update,) * 9
+
+    # Pattern-matched edit button fired with n_clicks=0 (DOM rebuild by interval) → ignore
+    if not tval:
+        return (no_update,) * 9
+
+    try:
+        oid_data = json.loads(triggered)
+    except (json.JSONDecodeError, AttributeError):
+        return (no_update,) * 9
+
+    if oid_data.get("type") != "edit-pending-btn":
+        return _blank
+
+    oid    = oid_data.get("index", "")
+    pt     = state.get_key("paper_trader")
+    orders = list(pt.pending_orders) if pt else []
+    o      = next((x for x in orders if x.get("id") == oid), None)
+    if not o:
+        return _blank
+
+    pair  = o.get("pair", "")
+    dec   = 3 if "JPY" in pair else 5
+    title = f"Edit Pending  {pair.replace('_', '/')}  {o.get('direction','').upper()}"
+    return (
+        {"id": oid},
+        _show, _back_show, title,
+        round(float(o.get("limit_price", 0)), dec),
+        round(float(o.get("sl",  0)), dec),
+        round(float(o.get("tp1", 0)), dec),
+        round(float(o.get("tp2", 0)), dec),
+        round(float(o.get("tp3", 0)), dec),
+    )
+
+
+@app.callback(
+    Output("edit-pending-modal-result", "children"),
+    Output("pending-trades",            "children", allow_duplicate=True),
+    Input("edit-pending-modal-confirm-btn", "n_clicks"),
+    State("edit-pending-store",             "data"),
+    State("edit-pending-modal-limit-input", "value"),
+    State("edit-pending-modal-sl-input",    "value"),
+    State("edit-pending-modal-tp1-input",   "value"),
+    State("edit-pending-modal-tp2-input",   "value"),
+    State("edit-pending-modal-tp3-input",   "value"),
+    prevent_initial_call=True,
+)
+def confirm_edit_pending(confirm_n, store, limit_price, sl, tp1, tp2, tp3):
+    if not confirm_n or not store:
+        return no_update, no_update
+
+    oid = store.get("id", "")
+    pt  = state.get_key("paper_trader")
+    if not pt:
+        return "✗ Paper trader unavailable", no_update
+
+    ok = pt.modify_pending_order(
+        oid,
+        limit_price = float(limit_price) if limit_price is not None else None,
+        sl          = float(sl)  if sl  is not None else None,
+        tp1         = float(tp1) if tp1 is not None else None,
+        tp2         = float(tp2) if tp2 is not None else None,
+        tp3         = float(tp3) if tp3 is not None else None,
+    )
+    pending = list(pt.pending_orders)
+    state.update(pending_orders=pending)
+    return ("✓ Order updated" if ok else "✗ Order not found",
+            pending_orders_panel(pending, state.get_key("mode", "paper")))
 
 
 # ── Sync open trades to chart (immediate on trade placed + every 5 s) ────────
@@ -3007,18 +3187,20 @@ def update_signals(_, _1s, threshold):
 # ── Open trades + account stats ───────────────────────────────────────────────
 
 @app.callback(
-    Output("open-trades",   "children"),
-    Output("account-stats", "children"),
-    Input("interval-5s",    "n_intervals"),
+    Output("open-trades",    "children"),
+    Output("pending-trades", "children"),
+    Output("account-stats",  "children"),
+    Input("interval-5s",     "n_intervals"),
 )
 def update_trades_and_account(_):
     s = state.get()
     pt = s.get("paper_trader")
     try:
         if pt is not None:
-            trades = list(pt.open_trades)
-            closed = list(pt.closed_trades)
-            state.update(open_trades=trades, closed_trades=closed)
+            trades  = list(pt.open_trades)
+            closed  = list(pt.closed_trades)
+            pending = list(pt.pending_orders)
+            state.update(open_trades=trades, closed_trades=closed, pending_orders=pending)
             acc_raw = pt.get_account()
             account = {
                 "balance":          acc_raw["balance"],
@@ -3031,15 +3213,20 @@ def update_trades_and_account(_):
         else:
             trades  = list(s.get("open_trades", []))
             closed  = list(s.get("closed_trades", []))
+            pending = list(s.get("pending_orders", []))
             account = s.get("account", {})
     except Exception as _acct_exc:
         logger.error("update_trades_and_account account read failed: %s", _acct_exc, exc_info=True)
         trades  = list(s.get("open_trades", []))
         closed  = list(s.get("closed_trades", []))
+        pending = list(s.get("pending_orders", []))
         account = s.get("account", {})
     mode    = s.get("mode",    "paper")
 
-    # ── Live P&L: update last_price for each open trade via 5s quote ─────────
+    # ── Live P&L: update last_price for each open trade ───────────────────────
+    # Forex pairs prefer the OANDA price-stream cache (sub-second, no network
+    # call here) — falls back to a REST quote only if the stream hasn't
+    # ticked that pair recently (e.g. not streamed, or reconnecting).
     current_prices = {}
     if trades:
         forex_conn  = s.get("forex_connector")
@@ -3048,7 +3235,14 @@ def update_trades_and_account(_):
             pair = t.get("pair", "")
             if pair in current_prices:
                 continue
-            conn = forex_conn if "_" in pair else crypto_conn
+            is_forex = "_" in pair
+            if is_forex:
+                live = state.get_live_price(pair)
+                if live:
+                    t["last_price"]      = live["mid"]
+                    current_prices[pair] = live["mid"]
+                    continue
+            conn = forex_conn if is_forex else crypto_conn
             if conn is None:
                 continue
             try:
@@ -3079,9 +3273,37 @@ def update_trades_and_account(_):
                     and t["close_time"].date() == today)
 
     return (open_trades_panel(trades, mode, current_prices=current_prices),
+            pending_orders_panel(pending, mode),
             account_stats_bar(account, daily_pnl, wr_all, wr_20, t_today, mode,
                               profit_factor  = account.get("profit_factor", 0.0),
                               avg_latency_ms = account.get("avg_latency_ms")))
+
+
+# ── Pending order: CANCEL button ──────────────────────────────────────────────
+
+@app.callback(
+    Output("pending-trades", "children", allow_duplicate=True),
+    Input({"type": "cancel-limit-btn", "index": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def cancel_pending_order(clicks):
+    ctx = callback_context
+    if not ctx.triggered or not ctx.triggered[0].get("value"):
+        return no_update
+
+    try:
+        oid = json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["index"]
+    except (json.JSONDecodeError, AttributeError, KeyError):
+        return no_update
+
+    pt = state.get_key("paper_trader")
+    if not pt:
+        return no_update
+
+    pt.cancel_limit_order(oid)
+    pending = list(pt.pending_orders)
+    state.update(pending_orders=pending)
+    return pending_orders_panel(pending, state.get_key("mode", "paper"))
 
 
 # ── Edit trade (sidebar panel): now superseded by the floating modal.

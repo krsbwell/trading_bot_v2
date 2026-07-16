@@ -99,22 +99,33 @@ def record_close(
 
 def record_skip(signal: dict, log_path: str = SIGNAL_LOG) -> None:
     """
-    Log a signal that scored 50–69 (not traded) with outcome='skipped'.
-    Also used for ML analysis — skipped signals reveal near-miss patterns.
+    Log a signal that was scored but not traded (gate-blocked, below threshold,
+    watching, etc.) with outcome='skipped'. Feeds the shadow-outcome resolver
+    (learning/shadow_outcomes.py), which later walks forward through candles
+    to label these 'would_win'/'would_lose' — near-miss and rejected setups
+    reveal whether the gates that blocked them were actually right to.
+
+    Best-effort: called from _process_pair on every live scan, so a logging
+    failure here must never interrupt real signal processing.
     """
-    row = _build_row(
-        signal        = signal,
-        position_size = 0,
-        risk_dollar   = 0,
-        outcome       = "skipped",
-        pnl_pips      = 0,
-        pnl_dollar    = 0,
-        hold_hours    = 0,
-        tp_level_hit  = "",
-        timestamp     = datetime.now(timezone.utc),
-    )
-    _write_row(log_path, SIGNAL_FIELDS, row)
-    logger.debug("Skipped signal logged — pair=%s  score=%s", signal.get("pair"), signal.get("score"))
+    if not signal.get("entry") or not signal.get("stop_loss"):
+        return   # nothing to replay later without a real entry/SL (e.g. ATR-gated)
+    try:
+        row = _build_row(
+            signal        = signal,
+            position_size = 0,
+            risk_dollar   = 0,
+            outcome       = "skipped",
+            pnl_pips      = 0,
+            pnl_dollar    = 0,
+            hold_hours    = 0,
+            tp_level_hit  = "",
+            timestamp     = datetime.now(timezone.utc),
+        )
+        _write_row(log_path, SIGNAL_FIELDS, row)
+        logger.debug("Skipped signal logged — pair=%s  score=%s", signal.get("pair"), signal.get("score"))
+    except Exception as exc:
+        logger.debug("record_skip failed for %s: %s", signal.get("pair"), exc)
 
 
 def pending_count() -> int:
@@ -140,9 +151,9 @@ def _build_row(
     tp_level_hit: str,
     timestamp: datetime,
 ) -> dict:
-    ema_periods  = signal.get("ema_periods", (0, 0, 0))
-    patterns     = signal.get("patterns", [])
-    tp_levels    = signal.get("tp_levels", {})
+    ema_periods  = signal.get("ema_periods") or (0, 0, 0)
+    patterns     = signal.get("patterns") or []
+    tp_levels    = signal.get("tp_levels") or {}
 
     return {
         "timestamp":            timestamp.isoformat(),

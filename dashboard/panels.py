@@ -422,6 +422,105 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Panel 3b — Pending Trades (unfilled limit orders)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def pending_orders_panel(orders: list, mode: str) -> html.Div:
+    """
+    orders : list of pending limit-order dicts (paper_trader.pending_orders)
+    mode   : "paper" | "live"
+    """
+    import config as _cfg
+    expiry_candles = getattr(_cfg, "LIMIT_ORDER_EXPIRY_CANDLES", 8)
+    badge_color    = _GOLD if mode == "paper" else _BULL
+    badge_label    = "PAPER MODE" if mode == "paper" else "LIVE"
+
+    cards = []
+    for o in orders:
+        pair       = o.get("pair", "—")
+        direction  = o.get("direction", "long")
+        limit      = o.get("limit_price", 0)
+        sl         = o.get("sl", 0)
+        tp1        = o.get("tp1", 0)
+        tp2        = o.get("tp2", 0)
+        tp3        = o.get("tp3", 0)
+        size       = o.get("size", 0)
+        oid        = o.get("id", pair)
+        dec        = 3 if "JPY" in pair else 5
+        pair_label = pair.replace("_", "/")
+        dir_col    = _BULL if direction == "long" else _BEAR
+
+        candles_left = max(0, expiry_candles - o.get("candles_missed", 0))
+
+        cards.append(html.Div([
+            html.Div([
+                html.Span(pair_label,
+                          style={"color": dir_col, "fontWeight": 700, "fontSize": "0.88rem",
+                                 **_mono}),
+                html.Span(f" {direction.upper()}",
+                          style={"color": dir_col, "fontSize": "0.78rem", "marginLeft": "6px"}),
+                html.Span("  LIMIT",
+                          style={"color": "#38b6ff", "fontSize": "0.65rem", "fontWeight": 700,
+                                 "marginLeft": "4px"}),
+                html.Span(f"  expires in {candles_left} candle{'s' if candles_left != 1 else ''}",
+                          style={"color": _MUTED, "fontSize": "0.7rem", "marginLeft": "8px"}),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.3rem"}),
+
+            html.Div([
+                html.Span(f"Limit {limit:.{dec}f}",
+                          style={"color": "#38b6ff", "fontSize": "0.75rem", **_mono}),
+                html.Span(f"  SL {sl:.{dec}f}",
+                          style={"color": _BEAR, "fontSize": "0.75rem", **_mono}),
+                html.Span(f"  TP1 {tp1:.{dec}f}",
+                          style={"color": _BULL, "fontSize": "0.75rem", **_mono}),
+                html.Span(f"  Lot {size}",
+                          style={"color": _MUTED, "fontSize": "0.72rem", "marginLeft": "6px"}),
+            ], style={"marginBottom": "0.2rem"}),
+
+            html.Div([
+                html.Span(f"TP2 {tp2:.{dec}f}",
+                          style={"color": _BULL, "fontSize": "0.72rem", **_mono,
+                                 "opacity": "0.7"}),
+                html.Span(f"  TP3 {tp3:.{dec}f}",
+                          style={"color": _BULL, "fontSize": "0.72rem", **_mono,
+                                 "opacity": "0.7"}),
+            ], style={"marginBottom": "0.3rem"}),
+
+            html.Div([
+                html.Button("EDIT", id={"type": "edit-pending-btn", "index": oid},
+                            n_clicks=0,
+                            style={"background": "#21262d", "color": "#ffd700",
+                                   "border": "1px solid #ffd700", "borderRadius": "3px",
+                                   "padding": "0.2rem 0.5rem", "cursor": "pointer",
+                                   "fontSize": "0.72rem", "marginRight": "4px"}),
+                html.Button("CANCEL", id={"type": "cancel-limit-btn", "index": oid},
+                            n_clicks=0,
+                            style={"background": _BEAR, "color": "#fff",
+                                   "border": "none", "borderRadius": "3px",
+                                   "padding": "0.2rem 0.5rem", "cursor": "pointer",
+                                   "fontSize": "0.72rem"}),
+            ], style={"display": "flex", "alignItems": "center"}),
+
+        ], style={"background": _CARD, "borderRadius": "4px",
+                  "padding": "0.55rem 0.7rem", "marginBottom": "0.4rem"}))
+
+    if not cards:
+        cards = [html.Div("No pending orders", style={"color": _MUTED, "textAlign": "center",
+                                                        "padding": "1rem"})]
+
+    return html.Div([
+        html.Div([
+            html.H4("Pending Trades", style={"color": _TEXT, "margin": 0, **_sans}),
+            html.Span(badge_label, style={"color": badge_color, "fontSize": "0.7rem",
+                                           "fontWeight": 700, "marginLeft": "0.75rem",
+                                           "border": f"1px solid {badge_color}",
+                                           "borderRadius": "3px", "padding": "1px 6px"}),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.75rem"}),
+        html.Div(cards),
+    ], style=_panel_style())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Panel 4 — Account Stats Bar
 # ═══════════════════════════════════════════════════════════════════════════════
 

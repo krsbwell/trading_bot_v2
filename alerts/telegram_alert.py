@@ -10,8 +10,11 @@ Setup:
        TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
        TELEGRAM_CHAT_ID=987654321
 """
+import json
 import logging
 import os
+import time
+from pathlib import Path
 
 import requests
 
@@ -20,9 +23,43 @@ logger = logging.getLogger(__name__)
 _TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 _CHAT_ID = os.getenv("TELEGRAM_CHAT_ID",   "")
 
+# ── Duplicate-alert guard ───────────────────────────────────────────────────
+# Persisted to disk (not just in-memory) because an in-process guard can't
+# catch duplicates from two separate bot processes running at once — the
+# actual cause found 2026-07-07 (a stuck/duplicate main.py instance meant two
+# processes independently evaluated the same candle close and each fired
+# their own alert, seconds apart). Best-effort: any I/O error is treated as
+# "not a duplicate" so a broken dedup file can never block a real alert.
+_DEDUP_PATH   = Path(__file__).parent.parent / "data" / "telegram_dedup.json"
+_DEDUP_WINDOW_S = 300   # 5 min — long enough to catch near-simultaneous
+                        # duplicate-process sends, short enough to still allow
+                        # a legitimate re-alert on the next 30-min candle close
+
 
 def is_configured() -> bool:
     return bool(_TOKEN and _CHAT_ID)
+
+
+def _is_duplicate(key: str) -> bool:
+    now = time.time()
+    try:
+        data = json.loads(_DEDUP_PATH.read_text()) if _DEDUP_PATH.exists() else {}
+    except Exception:
+        data = {}
+
+    last_sent = data.get(key)
+    is_dup    = last_sent is not None and (now - last_sent) < _DEDUP_WINDOW_S
+
+    if not is_dup:
+        data[key] = now
+        data = {k: v for k, v in data.items() if now - v < 3600}   # prune stale entries
+        try:
+            _DEDUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _DEDUP_PATH.write_text(json.dumps(data))
+        except Exception:
+            pass
+
+    return is_dup
 
 
 def _send(text: str) -> bool:
@@ -51,6 +88,10 @@ def send_signal(signal: dict) -> bool:
     entry     = signal.get("entry") or 0
     tf        = signal.get("timeframe", "H1")
     watching  = signal.get("watching", False)
+
+    if _is_duplicate(f"signal_{pair}_{direction}_{tf}"):
+        logger.debug("Telegram signal alert suppressed as duplicate: %s %s %s", pair, direction, tf)
+        return False
     sl        = signal.get("stop_loss")
     tp_lvls   = signal.get("tp_levels") or {}
     tp1       = tp_lvls.get("tp1")
@@ -89,6 +130,10 @@ def send_trade_opened(trade: dict) -> bool:
     dec   = 3 if "JPY" in pair else 5
     emoji = "📈" if d == "LONG" else "📉"
 
+    if _is_duplicate(f"opened_{pair}_{d}"):
+        logger.debug("Telegram trade-opened alert suppressed as duplicate: %s %s", pair, d)
+        return False
+
     text = (
         f"{emoji} <b>TRADE OPENED</b>  {pair}\n"
         f"Direction: <b>{d}</b>  |  ID: <code>{tid}</code>\n"
@@ -110,6 +155,10 @@ def send_trade_closed(trade: dict) -> bool:
     dec    = 3 if "JPY" in pair else 5
     emoji  = "✅" if pnl >= 0 else "❌"
     pnl_s  = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+
+    if tid and _is_duplicate(f"closed_{tid}"):
+        logger.debug("Telegram trade-closed alert suppressed as duplicate: %s", tid)
+        return False
 
     text = (
         f"{emoji} <b>TRADE CLOSED ({reason})</b>  {pair}\n"

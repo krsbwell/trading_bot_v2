@@ -11,8 +11,8 @@ def score_signal(ema_score: float, structure_score: float,
     Total max: 100
 
     >= MIN_CONFLUENCE_SCORE : fire alert + queue trade (default 60, slider can only raise)
-    35–59                   : WATCHING — shown on dashboard, no trade
-    < 35                    : discard
+    40–59                   : WATCHING — shown on dashboard, no trade
+    < 40                    : discard
     """
     # Clamp PA: contradicting candle patterns shouldn't cancel strong EMA+structure setups
     pa_clamped = max(0.0, float(pa_score))
