@@ -32,6 +32,9 @@ def build_chart_data(
     # ── Per-chart indicator overrides (from ind-settings-store) ───────────────
     cci_length: int     = None,   # None → use config.CCI_PERIOD
     cci_src: str        = None,   # None → "hlc3"
+    cci_ma_type: str    = None,   # None → "SMA" (CCI smoothing MA type)
+    cci_ma_length: int  = None,   # None → 14 (CCI smoothing MA length)
+    cci_bb_mult: float  = None,   # None → 2.0 (CCI's own BB-overlay multiplier)
     macd_fast: int      = None,   # None → use config.MACD_FAST
     macd_slow: int      = None,   # None → use config.MACD_SLOW
     macd_signal_: int   = None,   # None → use config.MACD_SIGNAL
@@ -110,9 +113,15 @@ def build_chart_data(
     #   BB:        only when ma_type == "SMA + Bollinger Bands"
     _CCI_PERIOD_USE    = cci_length if cci_length else config.CCI_PERIOD
     _CCI_SRC_USE       = cci_src if cci_src else "hlc3"
-    _CCI_SMOOTH_TYPE   = getattr(config, "CCI_SMOOTH_TYPE",   "SMA")
-    _CCI_SMOOTH_LENGTH = getattr(config, "CCI_SMOOTH_LENGTH", 14)
-    _CCI_BB_MULT       = getattr(config, "CCI_BB_MULT",       2.0)
+    # Previously always ignored the modal's MA Type / MA Length / BB Multiplier
+    # controls and fell back to getattr(config, "CCI_SMOOTH_TYPE"/... , default)
+    # — those config attributes never existed, so this was silently *always*
+    # "SMA"/14/2.0 regardless of what the user picked. Bug found 2026-07-20
+    # (Indicator Settings audit) — the client never sent these three values at
+    # all, not just a missing config default. Now wired end-to-end.
+    _CCI_SMOOTH_TYPE   = cci_ma_type if cci_ma_type else "SMA"
+    _CCI_SMOOTH_LENGTH = cci_ma_length if cci_ma_length else 14
+    _CCI_BB_MULT       = cci_bb_mult if cci_bb_mult else 2.0
 
     cci = []
     cci_ma_data  = []

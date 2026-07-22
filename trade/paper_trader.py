@@ -350,8 +350,13 @@ class PaperTrader:
 
     # ── Update (called on every candle close) ─────────────────────────────────
 
-    def update(self, pair: str, candle_high: float, candle_low: float, candle_close: float) -> None:
-        """Process one completed candle for all open trades and pending limit orders on `pair`."""
+    def update(self, pair: str, candle_high: float, candle_low: float, candle_close: float,
+               atr_value: float = None) -> None:
+        """
+        Process one completed candle for all open trades and pending limit
+        orders on `pair`. `atr_value` (current ATR in price units, not pips)
+        is only used when config.ATR_TRAILING_ENABLED — pass None otherwise.
+        """
         with self._lock:
             self._check_limit_fills(pair, candle_high, candle_low)
 
@@ -362,7 +367,7 @@ class PaperTrader:
                     still_open.append(trade)
                     continue
                 trade["last_price"] = candle_close
-                fully_closed = self._eval_candle(trade, candle_high, candle_low)
+                fully_closed = self._eval_candle(trade, candle_high, candle_low, atr_value)
                 if not fully_closed:
                     still_open.append(trade)
                 else:
@@ -413,26 +418,42 @@ class PaperTrader:
         if dirty:
             self._save_state()
 
-    def _eval_candle(self, t: dict, high: float, low: float) -> bool:
+    def _eval_candle(self, t: dict, high: float, low: float, atr_value: float = None) -> bool:
         d = t["direction"]
 
         # ── Trailing stop: advance SL after TP2 hit (final 25% leg only) ────────
         # Only activates after TP2 is captured so the first 75% plays out cleanly.
-        # A 50-pip+ gap respects typical H1 candle ranges and avoids noise exits.
-        trail_pips = getattr(__import__("config"), "TRAILING_STOP_PIPS", 0)
-        if trail_pips > 0 and t.get("tp2_hit"):
-            pip       = 0.01 if "JPY" in t.get("pair", "") else 0.0001
-            trail_gap = pip * trail_pips
-            # Use the candle close (last_price) as the reference; fall back to high/low.
-            ref_price = t.get("last_price") or (high if d == "long" else low)
-            if d == "long":
-                new_sl = ref_price - trail_gap
-                if new_sl > t["sl"]:       # only advance — never retreat
-                    t["sl"] = round(new_sl, 3 if "JPY" in t.get("pair","") else 5)
+        # ATR-scaled trail takes priority when enabled (adapts to volatility instead
+        # of one static pip distance for every market condition); falls back to the
+        # fixed-pip trail otherwise. Off by default (ATR_TRAILING_ENABLED=False) —
+        # same convention as BREAKEVEN_ENABLED, so this doesn't change live behavior
+        # until deliberately tested/enabled. See bugs_shadow_outcome_duplication-style
+        # caution: don't let a new mechanism silently alter what's already validated.
+        if t.get("tp2_hit"):
+            ref_price = t.get("last_price") or (high if d == "long" else low)   # shared by both trail modes
+            if config.ATR_TRAILING_ENABLED and atr_value:
+                trail_gap = atr_value * config.ATR_TRAILING_MULTIPLIER
+                if d == "long":
+                    new_sl = ref_price - trail_gap
+                    if new_sl > t["sl"]:       # only advance — never retreat
+                        t["sl"] = round(new_sl, 3 if "JPY" in t.get("pair", "") else 5)
+                else:
+                    new_sl = ref_price + trail_gap
+                    if new_sl < t["sl"]:       # only advance — never retreat
+                        t["sl"] = round(new_sl, 3 if "JPY" in t.get("pair", "") else 5)
             else:
-                new_sl = ref_price + trail_gap
-                if new_sl < t["sl"]:       # only advance — never retreat
-                    t["sl"] = round(new_sl, 3 if "JPY" in t.get("pair","") else 5)
+                trail_pips = getattr(__import__("config"), "TRAILING_STOP_PIPS", 0)
+                if trail_pips > 0:
+                    pip       = 0.01 if "JPY" in t.get("pair", "") else 0.0001
+                    trail_gap = pip * trail_pips
+                    if d == "long":
+                        new_sl = ref_price - trail_gap
+                        if new_sl > t["sl"]:       # only advance — never retreat
+                            t["sl"] = round(new_sl, 3 if "JPY" in t.get("pair","") else 5)
+                    else:
+                        new_sl = ref_price + trail_gap
+                        if new_sl < t["sl"]:       # only advance — never retreat
+                            t["sl"] = round(new_sl, 3 if "JPY" in t.get("pair","") else 5)
 
         # ── SL check ───────────────────────────────────────────────────────────
         sl_hit = (d == "long" and low <= t["sl"]) or \

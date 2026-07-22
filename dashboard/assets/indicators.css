@@ -32,7 +32,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 10px 14px 8px;
-    background: #0d1117;
+    background: #0f0f0f;
     border-bottom: 1px solid #30363d;
     cursor: move;
     user-select: none;
@@ -59,7 +59,7 @@
 /* Tab bar */
 .aip-tabs {
     display: flex;
-    background: #0d1117;
+    background: #0f0f0f;
     border-bottom: 1px solid #30363d;
     padding: 0 6px;
     gap: 0;
@@ -107,11 +107,11 @@
 /* Scrollbar — widened from the original 5px and given a visible thumb
    color so it reads as an obvious, grabbable control, not a hairline. */
 .aip-body::-webkit-scrollbar { width: 10px; }
-.aip-body::-webkit-scrollbar-track { background: #0d1117; }
-.aip-body::-webkit-scrollbar-thumb { background: #484f58; border-radius: 5px; border: 2px solid #0d1117; }
+.aip-body::-webkit-scrollbar-track { background: #0f0f0f; }
+.aip-body::-webkit-scrollbar-thumb { background: #484f58; border-radius: 5px; border: 2px solid #0f0f0f; }
 .aip-body::-webkit-scrollbar-thumb:hover { background: #58a6ff; }
 /* Firefox */
-.aip-body { scrollbar-width: auto; scrollbar-color: #484f58 #0d1117; }
+.aip-body { scrollbar-width: auto; scrollbar-color: #484f58 #0f0f0f; }
 
 /* Section heading */
 .aip-section {

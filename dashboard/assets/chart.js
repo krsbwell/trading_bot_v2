@@ -14,6 +14,7 @@
     let chart = null, S = {}, wm = null;
     let _lastPairTf = null, _currentPair = '', _currentTf = '', _currentRawTf = '';
     let _candleData = [];
+    let _suppressZoomSave = false;
     let _autoSaveTimer = null;
     var _lastChartData = null;
     let _paneResizeActive = false;  // prevents ResizeObserver from overriding managed heights
@@ -150,9 +151,16 @@
     function _hexToRgba(hex, alpha) {
         hex = (hex || '#ffd700').replace('#', '');
         if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
-        return 'rgba(' + parseInt(hex.substr(0,2),16) + ',' +
-                         parseInt(hex.substr(2,2),16) + ',' +
-                         parseInt(hex.substr(4,2),16) + ',' + alpha + ')';
+        var r = parseInt(hex.substr(0,2),16),
+            g = parseInt(hex.substr(2,2),16),
+            b = parseInt(hex.substr(4,2),16);
+        /* Achromatic colours (white/gray) have no hue to read through a low-alpha
+           blend over the chart background — at 4-10% they just look like a faint
+           shade of the background instead of "the colour I picked". Raise the
+           alpha floor for these so they stay visually identifiable as white/gray. */
+        var isAchromatic = (Math.max(r,g,b) - Math.min(r,g,b)) < 12;
+        if (isAchromatic && alpha < 0.20) alpha = 0.20;
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
     }
 
     /* ── Robust time ↔ pixel converters (extrapolate beyond visible range) ── */
@@ -836,7 +844,7 @@
             /* ── Measure box: user colour for border/fill, direction colour for label only ── */
             var ms     = _measureStats(box);
             var lblCol = ms.color;                          // green/red based on direction
-            var boxCol = box.color || '#8b949e';            // user-chosen colour (settable via dbl-click)
+            var boxCol = box.color || drawColor;             // user-chosen colour (settable via dbl-click)
             var bwM    = box.borderWidth || 1;
             box.el.style.border       = (isSel ? bwM+1 : bwM) + 'px dashed ' + boxCol;
             box.bgEl.style.background = _hexToRgba(boxCol, 0.07);
@@ -3056,7 +3064,7 @@
             var opSlider = document.createElement('input');
             opSlider.type='range'; opSlider.min='0'; opSlider.max='100'; opSlider.step='5';
             opSlider.value = Math.round((obj.fillOpacity||0.1)*100);
-            opSlider.style.cssText = 'flex:1;accent-color:#58a6ff;cursor:pointer;';
+            opSlider.style.cssText = 'flex:1;accent-color:#38b6ff;cursor:pointer;';
             var opVal = document.createElement('span');
             opVal.textContent = opSlider.value + '%';
             opVal.style.cssText = 'color:#e6edf3;min-width:30px;text-align:right;font-size:11px;';
@@ -3087,7 +3095,7 @@
         labelInp.type = 'text'; labelInp.placeholder = 'Custom label…';
         labelInp.value = obj.customLabel || '';
         labelInp.style.cssText =
-            'width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;' +
+            'width:100%;box-sizing:border-box;background:#0f0f0f;border:1px solid #30363d;' +
             'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
         labelInp.addEventListener('input', function() { obj.customLabel = labelInp.value; _updateDrawingAndSave(drawingType, obj); });
         tp.appendChild(_dsRow('Label', labelInp));
@@ -3099,7 +3107,7 @@
             inp.type='number'; inp.step='any';
             var v = getter(); inp.value = (typeof v==='number') ? fmtPrice(v) : (v||'');
             inp.style.cssText =
-                'width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;' +
+                'width:100%;box-sizing:border-box;background:#0f0f0f;border:1px solid #30363d;' +
                 'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
             inp.addEventListener('change', function() { var n=parseFloat(inp.value); if(!isNaN(n)){setter(n);_updateDrawingAndSave(drawingType, obj);} });
             coordP.appendChild(_dsRow(lbl, inp));
@@ -3111,7 +3119,7 @@
             tInp.type = 'datetime-local'; tInp.step = '60';
             tInp.value = new Date(obj.time * 1000).toISOString().slice(0, 16);
             tInp.style.cssText =
-                'width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;' +
+                'width:100%;box-sizing:border-box;background:#0f0f0f;border:1px solid #30363d;' +
                 'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
             tInp.addEventListener('change', function() {
                 var parsed = new Date(tInp.value + 'Z').getTime();
@@ -3137,7 +3145,7 @@
             cb.type = 'checkbox'; cb.value = tf;
             var vis = obj.visibility || [];
             cb.checked = (vis.length===0 || vis.indexOf(tf)>=0);
-            cb.style.cssText = 'accent-color:#58a6ff;cursor:pointer;';
+            cb.style.cssText = 'accent-color:#38b6ff;cursor:pointer;';
             cb.addEventListener('change', function() {
                 var cur = (obj.visibility && obj.visibility.length>0) ? obj.visibility.slice() : _ALL_VIS.slice();
                 if (cb.checked) { if (cur.indexOf(tf)<0) cur.push(tf); }
@@ -3542,9 +3550,9 @@
 
         chart = LC().createChart(el, {
             width: el.clientWidth, height: TOTAL_H,
-            layout: { background:{ type:'solid', color:'#0d1117' },
+            layout: { background:{ type:'solid', color:'#0f0f0f' },
                 textColor:'#e6edf3', fontFamily:"'IBM Plex Sans', sans-serif" },
-            grid: { vertLines:{ color:'#21262d' }, horzLines:{ color:'#21262d' } },
+            grid: { vertLines:{ visible: false }, horzLines:{ visible: false } },
             crosshair: {
                 mode: LC().CrosshairMode.Normal,
                 vertLine:{ color:'rgba(180,180,180,0.55)', width:1,
@@ -3560,7 +3568,7 @@
 
         S.candle = chart.addSeries(LC().CandlestickSeries, {
             upColor:'#00ff88', downColor:'#ff3366',
-            borderUpColor:'#00ff88', borderDownColor:'#ff3366',
+            borderUpColor:'#000000', borderDownColor:'#000000',
             wickUpColor:'#00ff88', wickDownColor:'#ff3366',
             priceFormat: priceFormat(_currentPair),
         }, 0);
@@ -3624,9 +3632,10 @@
                 updateAllTrendlines(); updateAllPos(); updateAllBoxes(); updateAllFibs(); updateAllHLines();
                 updateAllVLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts();
             });
-            /* Save zoom (time range) whenever the user scrolls/zooms, keyed per pair+TF */
+            /* Save zoom (time range) whenever the user scrolls/zooms, keyed per pair+TF.
+               Suppressed during load() — see _suppressZoomSave comment there. */
             chart.timeScale().subscribeVisibleTimeRangeChange(function(range) {
-                if (!range) return;
+                if (!range || _suppressZoomSave) return;
                 var zoomKey = 'apex_zoom_' + (_currentPair||'') + '_' + (_currentTf||'');
                 try { localStorage.setItem(zoomKey, JSON.stringify({ from: range.from, to: range.to })); } catch(e) {}
             });
@@ -3981,6 +3990,19 @@
     function load(data, fitIt) {
         if (!chart || !data) return;
         _lastChartData = data;
+        /* Suppress zoom auto-save for the duration of this load. Root cause
+           (2026-07-20): S.candle.setData() below, on a freshly (re)created
+           series, triggers lightweight-charts' own implicit auto-fit —
+           firing a visibleTimeRangeChange event with a default-ish wide
+           range BEFORE the explicit saved-zoom restore near the bottom of
+           this function ever runs. The save handler (subscribeVisibleTimeRangeChange,
+           already active from init()) would persist that transient auto-fit
+           range to localStorage, so the explicit restore below reads back an
+           already-clobbered value instead of the user's real saved zoom —
+           this is what looked like "zoom resets when switching TF and back."
+           Re-enabled once this function reaches its own explicit view-setting
+           logic, so genuine user zoom/pan after load still saves normally. */
+        _suppressZoomSave = true;
         try { S.candle.applyOptions({ priceFormat:priceFormat(data.pair||'') }); } catch(e) {}
         try { S.candle.setData(data.candlestick||[]); } catch(e) {}
 
@@ -4223,9 +4245,34 @@
                 if (zRaw) savedRange = JSON.parse(zRaw);
             } catch(e) {}
 
-            if (savedRange && savedRange.from && savedRange.to) {
+            /* Only trust the saved range if it actually overlaps the candle data we
+               just loaded — the backend only fetches the most recent _CANDLE_COUNT
+               bars (500 for intraday TFs), so a range saved while scrolled further
+               back in history than that window no longer exists in _candleData.
+               A separate, cheap safety check alongside _suppressZoomSave below
+               (the actual root cause of the 2026-07-20 zoom-reset bug) — this one
+               guards a genuinely different scenario: a user who panned deep into
+               history before switching TF, where restoring the exact saved range
+               could otherwise land outside the freshly-fetched window. */
+            var rangeUsable = false;
+            if (savedRange && savedRange.from && savedRange.to && _candleData.length > 0) {
+                var dataMin = _candleData[0].time;
+                var dataMax = _candleData[_candleData.length - 1].time;
+                rangeUsable = savedRange.to >= dataMin && savedRange.from <= dataMax;
+                if (!rangeUsable) {
+                    console.warn('[apex chart] saved zoom for', zoomKey,
+                        'is outside the loaded candle window — discarding and using default view',
+                        { savedRange: savedRange, dataMin: dataMin, dataMax: dataMax });
+                }
+            }
+
+            if (rangeUsable) {
                 /* Restore saved zoom */
-                try { chart.timeScale().setVisibleRange(savedRange); } catch(e) {
+                try {
+                    chart.timeScale().setVisibleRange(savedRange);
+                    console.debug('[apex chart] restored saved zoom for', zoomKey, savedRange);
+                } catch(e) {
+                    console.warn('[apex chart] setVisibleRange threw while restoring', zoomKey, e);
                     try { chart.timeScale().fitContent(); } catch(e2) {}
                 }
             } else if (_candleData.length > 0) {
@@ -4246,6 +4293,9 @@
                 try { chart.timeScale().fitContent(); } catch(e) {}
             }
         }
+        /* Resume normal save-on-user-zoom now that load()'s own data/view
+           setup (including any implicit auto-fit from setData()) is done. */
+        _suppressZoomSave = false;
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
@@ -4592,6 +4642,20 @@
         var newTf    = data.tf     || '';
         var newRawTf = data.raw_tf || data.tf || '';
         var pairTf   = newPair + '|' + newTf;
+
+        /* Discard a superseded response: the user may have already clicked a
+           different pair/TF while this one was still fetching (see the
+           latest-pair/tf-dummy clientside callbacks in app.py). Applying a
+           stale payload here is what corrupted per-TF zoom state — see the
+           comment above those callbacks for the full root-cause writeup. */
+        var latestPair = window._apexLatestPair;
+        var latestTf   = window._apexLatestTf;
+        if ((latestPair && latestPair !== newPair) || (latestTf && latestTf !== newRawTf)) {
+            console.debug('[apex chart] discarding superseded chart-data payload',
+                {payload: newPair + '/' + newRawTf, latest: latestPair + '/' + latestTf});
+            return;
+        }
+
         if (data.accountBalance) window._apexAccountBalance = data.accountBalance;
 
         if (chart && _lastPairTf !== null && pairTf !== _lastPairTf) {
@@ -4730,6 +4794,9 @@
             all[key] = {
                 cci_length:   _indSettings.cci.length,
                 cci_src:      _indSettings.cci.source,
+                cci_ma_type:   _indSettings.cci.maType,
+                cci_ma_length: _indSettings.cci.maLength,
+                cci_bb_mult:   _indSettings.cci.bbMult,
                 macd_fast:    _indSettings.macd.fast,
                 macd_slow:    _indSettings.macd.slow,
                 macd_signal:  _indSettings.macd.signal,
@@ -4926,6 +4993,28 @@
         try {
             if (S.rsi) S.rsi.applyOptions({ visible: !!r.visible, color: r.color || '#aa00ff', lineWidth: r.width || 1.5 });
         } catch(e) {}
+        /* RSI OB/OS reference lines — obLevel/osLevel were saved but never
+           drawn anywhere; mirrors the CCI upper/lower price-line pattern below. */
+        try {
+            if (S.rsi && S.rsi._priceLinesCreatedByPanel) {
+                S.rsi._priceLinesCreatedByPanel.forEach(function(pl){ try { S.rsi.removePriceLine(pl); } catch(e){} });
+            }
+            if (S.rsi) {
+                S.rsi._priceLinesCreatedByPanel = [];
+                if (r.visible) {
+                    ['obLevel', 'osLevel'].forEach(function(k) {
+                        if (r[k] == null) return;
+                        try {
+                            var pl = S.rsi.createPriceLine({
+                                price: r[k], color: (k === 'obLevel' ? r.obColor : r.osColor) || '#787b86',
+                                lineWidth: 1, lineStyle: 2, axisLabelVisible: true,
+                            });
+                            S.rsi._priceLinesCreatedByPanel.push(pl);
+                        } catch(e) {}
+                    });
+                }
+            }
+        } catch(e) {}
 
         /* Bollinger Bands */
         var b = _indSettings.bb || {};
@@ -4949,6 +5038,27 @@
         try {
             if (S.stochK) S.stochK.applyOptions({ visible: !!st.visible, color: st.kColor || '#2962ff', lineWidth: st.width || 1.5 });
             if (S.stochD) S.stochD.applyOptions({ visible: !!st.visible, color: st.dColor || '#ff6d00', lineWidth: st.width || 1.5 });
+        } catch(e) {}
+        /* Stochastic OB/OS reference lines — same dead-setting fix as RSI above. */
+        try {
+            if (S.stochK && S.stochK._priceLinesCreatedByPanel) {
+                S.stochK._priceLinesCreatedByPanel.forEach(function(pl){ try { S.stochK.removePriceLine(pl); } catch(e){} });
+            }
+            if (S.stochK) {
+                S.stochK._priceLinesCreatedByPanel = [];
+                if (st.visible) {
+                    ['obLevel', 'osLevel'].forEach(function(k) {
+                        if (st[k] == null) return;
+                        try {
+                            var pl = S.stochK.createPriceLine({
+                                price: st[k], color: '#787b86',
+                                lineWidth: 1, lineStyle: 2, axisLabelVisible: true,
+                            });
+                            S.stochK._priceLinesCreatedByPanel.push(pl);
+                        } catch(e) {}
+                    });
+                }
+            }
         } catch(e) {}
 
         /* Collapse/expand CCI and MACD panes based on visibility */
@@ -5198,9 +5308,23 @@
                 try { ps = JSON.parse(localStorage.getItem('apex_ind_profiles') || '{}'); } catch(e) {}
                 var p = ps[btn.dataset.load];
                 if (!p) return;
+                /* Previously only restored cci/macd — Save persists every group
+                   (see the Save handler above, which snapshots the whole
+                   _indSettings object), but Load rebuilt _indSettings from
+                   scratch with just these two keys, silently dropping
+                   rsi/bb/volume/stoch. Since _renderRSITab/_renderBBTab/
+                   _renderVolumeTab/_renderStochTab all read _indSettings.X
+                   without a fallback (unlike _applyIndVisualSettings, which
+                   uses `|| {}`), this actually threw a JS error the next time
+                   the modal rendered those tabs, not just a silent visibility
+                   reset. Bug found 2026-07-20 (Indicator Settings audit).*/
                 _indSettings = {
-                    cci:  Object.assign({}, _IND_DEFAULTS.cci,  p.cci  || {}),
-                    macd: Object.assign({}, _IND_DEFAULTS.macd, p.macd || {}),
+                    cci:    Object.assign({}, _IND_DEFAULTS.cci,    p.cci    || {}),
+                    macd:   Object.assign({}, _IND_DEFAULTS.macd,   p.macd   || {}),
+                    rsi:    Object.assign({}, _IND_DEFAULTS.rsi,    p.rsi    || {}),
+                    bb:     Object.assign({}, _IND_DEFAULTS.bb,     p.bb     || {}),
+                    volume: Object.assign({}, _IND_DEFAULTS.volume, p.volume || {}),
+                    stoch:  Object.assign({}, _IND_DEFAULTS.stoch,  p.stoch  || {}),
                 };
                 _saveIndSettings();
                 _applyIndVisualSettings();
@@ -5510,6 +5634,22 @@
         /* Refresh panel if open */
         if (_indPanelEl && _indPanelEl.style.display !== 'none') _renderIndTabs();
     };
+
+    /* Track the user's latest TF-button click, natively rather than via a Dash
+       clientside_callback, purely so this tracking signal updates before any
+       Dash-mediated processing of the click does — a synchronous, capturing-
+       phase DOM listener is the simplest way to guarantee that ordering.
+       Defense-in-depth for _apexUpdateChart's staleness guard (see the
+       window._apexLatestPair callback in app.py for what this does and does
+       NOT explain about the 2026-07-20 zoom-reset investigation). */
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('button');
+        if (!btn || !btn.id) return;
+        try {
+            var idObj = JSON.parse(btn.id);
+            if (idObj.type === 'tf-btn') window._apexLatestTf = idObj.index;
+        } catch (err) {}
+    }, true);
 
     /* ── bootstrap ───────────────────────────────────────────────────────── */
     function boot() {

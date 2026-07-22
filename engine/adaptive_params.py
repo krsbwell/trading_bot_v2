@@ -58,10 +58,19 @@ class AdaptiveParams:
             logger.warning("AdaptiveParams._save failed: %s", exc)
 
     def get(self, pair: str) -> dict:
-        """Return current adaptive params for pair. Falls back to BASE_PARAMS until first fit."""
+        """
+        Return adaptive param overrides for pair, or {} until this pair has a
+        real fit. Deliberately NOT falling back to BASE_PARAMS here: callers
+        merge this dict on top of WFO's tuned params (see signal_engine.py),
+        and a fallback dict would silently clobber WFO's cci_threshold with
+        the base default for every pair that hasn't been adaptively tuned
+        yet. The strategy functions already carry the same BASE_PARAMS
+        values as inline ap.get(key, default) fallbacks, so returning {}
+        here is safe — it only removes the redundant, overriding copy.
+        """
         if not getattr(config, "ADAPTIVE_PARAMS_ENABLED", True):
-            return dict(BASE_PARAMS)
-        return dict(self._state.get(pair, {}).get("params", BASE_PARAMS))
+            return {}
+        return dict(self._state.get(pair, {}).get("params", {}))
 
     def update(self, pair: str, closed_trades: list) -> bool:
         """

@@ -70,6 +70,8 @@ _DRAW_TOOL_META = [
 _DRAW_TOOL_MODES = [m for m, _, _ in _DRAW_TOOL_META]
 
 _POS_BTN_COLORS = {
+    # Each badge keeps its own dark chip background regardless of page theme,
+    # so text stays vivid (bright-on-dark), not the light-theme text-safe variant.
     "long-pos":  ("#003d1f", "#00ff88"),
     "short-pos": ("#3d0010", "#ff3366"),
 }
@@ -87,7 +89,8 @@ def _draw_btn_style(mode_name: str, active: bool = False) -> dict:
         }
     return _tf_btn_style(active)
 
-# 9 preset colors + custom picker
+# 9 preset colors + custom picker — a content palette (like the chart's own
+# drawing-tool swatches), left vivid regardless of the dashboard chrome theme.
 _DRAW_COLORS = [
     "#ffffff",   # White
     "#111111",   # Black
@@ -231,7 +234,7 @@ def _sep():
 
 app.layout = html.Div(
     id="root",
-    style={"backgroundColor": "#0d1117", "minHeight": "100vh",
+    style={"backgroundColor": "#0f0f0f", "minHeight": "100vh",
            "fontFamily": "'IBM Plex Sans', sans-serif", "color": "#e6edf3"},
     children=[
 
@@ -306,7 +309,7 @@ app.layout = html.Div(
                             type="number", min=1, max=100,
                             value=config.MIN_CONFLUENCE_SCORE,
                             debounce=True,
-                            style={"width": "46px", "background": "#0d1117",
+                            style={"width": "46px", "background": "#0f0f0f",
                                    "color": "#ffd700", "fontWeight": 700,
                                    "border": "1px solid #30363d", "borderRadius": "3px",
                                    "textAlign": "center", "fontSize": "0.8rem",
@@ -542,7 +545,7 @@ app.layout = html.Div(
                         # TradingView chart
                         html.Div(id="tvlw-chart",
                                  style={"height": "680px", "width": "100%",
-                                        "background": "#0d1117", "borderRadius": "4px",
+                                        "background": "#0f0f0f", "borderRadius": "4px",
                                         "overflow": "hidden"}),
 
                         # ── Floating Quick Trade Widget (TradingView-style) ──
@@ -1182,6 +1185,7 @@ app.layout = html.Div(
         html.Div(id="trades-chart-dummy",  style={"display": "none"}),
         html.Div(id="trade-modify-dummy", style={"display": "none"}),
         html.Div(id="chart-dummy",        style={"display": "none"}),
+        html.Div(id="latest-pair-dummy",  style={"display": "none"}),
         html.Div(id="draw-dummy",        style={"display": "none"}),
         html.Div(id="draw-lock-dummy",   style={"display": "none"}),
         html.Div(id="draw-dup-dummy",    style={"display": "none"}),
@@ -1287,6 +1291,9 @@ def update_chart(n_intervals, pair, tf, ema_settings, ind_comp, chart_type):
         ema_widths=ema_widths,
         cci_length   = _ind.get("cci_length"),
         cci_src      = _ind.get("cci_src"),
+        cci_ma_type   = _ind.get("cci_ma_type"),
+        cci_ma_length = _ind.get("cci_ma_length"),
+        cci_bb_mult   = _ind.get("cci_bb_mult"),
         macd_fast    = _ind.get("macd_fast"),
         macd_slow    = _ind.get("macd_slow"),
         macd_signal_ = _ind.get("macd_signal"),
@@ -1371,6 +1378,26 @@ def update_chart(n_intervals, pair, tf, ema_settings, ind_comp, chart_type):
 
     return result
 
+
+# ── Track the user's latest pair selection, purely client-side ────────────────
+# Defense-in-depth for _apexUpdateChart: update_chart() below does a real OANDA
+# fetch, so under load a response could in principle arrive after the user has
+# already switched to a different pair. window._apexLatestPair (set here) and
+# window._apexLatestTf (set by a native capturing click listener in chart.js,
+# not a Dash clientside callback — see the comment there) let
+# _apexUpdateChart detect and discard an already-superseded payload. NOTE:
+# this was NOT the cause of the "zoom resets when switching TF and back" bug
+# investigated 2026-07-20 — that turned out to be _suppressZoomSave in
+# chart.js (an implicit chart auto-fit clobbering the saved zoom during
+# load(), unrelated to response ordering). Kept as a real, if lower-probability,
+# safety net against genuine slow/out-of-order responses.
+app.clientside_callback(
+    """
+    function(pair) { window._apexLatestPair = pair || ''; return ''; }
+    """,
+    Output("latest-pair-dummy", "children"),
+    Input("pair-select", "value"),
+)
 
 # ── Push chart data to TVLC ───────────────────────────────────────────────────
 
@@ -3077,7 +3104,7 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
             name="NAV", line=dict(color="#38b6ff", width=1.5)
         ))
         fig.update_layout(
-            plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+            plot_bgcolor="#0f0f0f", paper_bgcolor="#0f0f0f",
             font=dict(color="#e6edf3", size=9),
             margin=dict(l=8, r=8, t=4, b=4),
             height=160,
@@ -3145,10 +3172,9 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
 @app.callback(
     Output("signal-monitor",  "children"),
     Input("interval-60s",     "n_intervals"),
-    Input("interval-1s",      "n_intervals"),
     Input("min-score-slider", "value"),
 )
-def update_signals(_, _1s, threshold):
+def update_signals(_, threshold):
     if threshold is not None:
         state.update(min_score=int(threshold))
 
@@ -3448,14 +3474,14 @@ def toggle_expand(n):
         return (
             {"flex": "0 0 100%", "paddingLeft": 0, "minWidth": 0},
             {"display": "none"},
-            {"height": "80vh", "width": "100%", "background": "#0d1117",
+            {"height": "80vh", "width": "100%", "background": "#0f0f0f",
              "borderRadius": "4px", "overflow": "hidden"},
         )
     return (
         {"flex": "0 0 75%", "paddingLeft": "0.25rem", "minWidth": 0},
         {"flex": "0 0 25%", "overflowY": "auto",
          "maxHeight": "760px", "paddingRight": "0.5rem", "minWidth": 0},
-        {"height": "680px", "width": "100%", "background": "#0d1117",
+        {"height": "680px", "width": "100%", "background": "#0f0f0f",
          "borderRadius": "4px", "overflow": "hidden"},
     )
 
@@ -3627,7 +3653,7 @@ def _render_news_panel(events: list):
                   "marginBottom": "0.3rem"}),
         html.Div(rows),
     ], style={
-        "background": "#0d1117", "borderRadius": "4px",
+        "background": "#0f0f0f", "borderRadius": "4px",
         "border": "1px solid #30363d", "padding": "0.5rem 0.6rem",
     })
     return panel, serialized
@@ -3778,7 +3804,7 @@ def show_news_event_detail(row_clicks, _close, _backdrop, events):
                 "fontSize": "0.72rem", "fontWeight": 700})),
             _news_detail_row("Country:", f"{cname} {flag}"),
             _news_detail_row("Currency:", currency),
-        ], style={"flex": 1, "background": "#0d1117", "borderRadius": "6px",
+        ], style={"flex": 1, "background": "#0f0f0f", "borderRadius": "6px",
                   "padding": "0.75rem 0.9rem", "border": "1px solid #21262d"}),
 
         # Latest Release column
@@ -3792,7 +3818,7 @@ def show_news_event_detail(row_clicks, _close, _backdrop, events):
             _news_detail_row("Consensus:", html.Span(consensus, style={
                 "color": "#e6edf3", "fontSize": "0.80rem"})),
             _news_detail_row("Actual:", html.Span(actual, style=actual_style)),
-        ], style={"flex": 1, "background": "#0d1117", "borderRadius": "6px",
+        ], style={"flex": 1, "background": "#0f0f0f", "borderRadius": "6px",
                   "padding": "0.75rem 0.9rem", "border": "1px solid #21262d"}),
     ], style={"display": "flex", "gap": "0.75rem"})
 

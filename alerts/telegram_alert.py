@@ -177,6 +177,20 @@ def send_drawdown_halt() -> bool:
     )
 
 
+def send_bot_down(minutes_stale: float) -> bool:
+    """Alert that main.py's scheduler heartbeat has gone stale (process likely dead)."""
+    return _send(
+        "🔴 <b>BOT DOWN</b>\n"
+        f"No heartbeat for {minutes_stale:.0f} min — main.py is likely not running.\n"
+        "No scans, no trades, no alerts until it's restarted."
+    )
+
+
+def send_bot_recovered() -> bool:
+    """Notify that the heartbeat is fresh again after a BOT DOWN alert."""
+    return _send("🟢 <b>BOT RECOVERED</b>\nHeartbeat is fresh again — main.py is running.")
+
+
 def send_wfo_started(pairs: list) -> bool:
     """Notify that a Walk-Forward Optimisation run has started."""
     return _send(

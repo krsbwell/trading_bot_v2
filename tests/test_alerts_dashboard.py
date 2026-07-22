@@ -179,6 +179,23 @@ class TestDashboardState:
         sig = state.get_key("signals", {}).get("EUR_USD", {})
         assert sig["status"] == "NEUTRAL"
 
+    def test_update_signal_respects_explicit_threshold(self):
+        # A pair whose real (WFO) gate is stricter than the global slider must
+        # show WATCHING, not SIGNAL, even though score clears the slider alone.
+        # Regression for the mismatch found 2026-07-20 (main.py::_process_pair).
+        from dashboard import state
+        state.update(min_score=51)
+        state.update_signal("NZD_USD", 52, "long", threshold=55)
+        sig = state.get_key("signals", {}).get("NZD_USD", {})
+        assert sig["status"] == "WATCHING"
+
+    def test_update_signal_threshold_none_falls_back_to_slider(self):
+        from dashboard import state
+        state.update(min_score=51)
+        state.update_signal("NZD_USD", 52, "long")
+        sig = state.get_key("signals", {}).get("NZD_USD", {})
+        assert sig["status"] == "SIGNAL"
+
     def test_cache_and_retrieve_candles(self):
         from dashboard import state
         import pandas as pd

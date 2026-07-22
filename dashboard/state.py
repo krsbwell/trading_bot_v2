@@ -145,8 +145,18 @@ def get_live_price(pair: str, max_age_s: float = 10.0) -> dict | None:
 
 
 def update_signal(pair: str, score: int, direction: str,
-                  timeframe: str = "H1") -> None:
-    _threshold = get_key("min_score", config.MIN_CONFLUENCE_SCORE)
+                  timeframe: str = "H1", threshold: int | None = None) -> None:
+    """
+    threshold: the actual effective score this pair needs to clear to trade
+               (max of the pair's WFO-tuned min_score and the global slider —
+               see main.py::_process_pair). Falls back to the global slider
+               alone when not supplied, e.g. for the score=0/no-signal calls
+               where the distinction doesn't matter. Without this, a pair
+               with a stricter WFO min_score than the slider would show
+               "SIGNAL" here while actually being held back as "watching" —
+               a real mismatch users hit found 2026-07-20.
+    """
+    _threshold = threshold if threshold is not None else get_key("min_score", config.MIN_CONFLUENCE_SCORE)
     status = ("SIGNAL"   if score >= _threshold else
               "WATCHING" if score >= 50          else
               "SCANNING" if score >= 40          else "NEUTRAL")

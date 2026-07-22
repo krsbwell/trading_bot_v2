@@ -13,7 +13,7 @@ _PANEL = "#161b22"
 _CARD  = "#21262d"
 _TEXT  = "#e6edf3"
 _MUTED = "#7d8590"
-_BG    = "#0d1117"
+_BG    = "#0f0f0f"
 
 _mono = {"fontFamily": "'JetBrains Mono', monospace"}
 _sans = {"fontFamily": "'IBM Plex Sans', sans-serif"}
@@ -179,7 +179,7 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
                 _trend_dot("bull" if direction == "long" else "bear"),
             ]),
             html.Td(), html.Td(),
-        ], style={"background": "#0d1117", "borderBottom": "1px solid #21262d"})
+        ], style={"background": "#0f0f0f", "borderBottom": "1px solid #21262d"})
 
         pair_color    = _MUTED if is_watch else _TEXT
         pair_label    = pair.replace("_", "/")
@@ -201,7 +201,7 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
                 html.Div([
                     html.Span(pair_label,
                               style={"color": pair_color, "fontSize": "0.85rem", **_mono}),
-                    html.Span(" W", style={"color": "#8b949e", "fontSize": "0.65rem",
+                    html.Span(" W", style={"color": "#7d8590", "fontSize": "0.65rem",
                                            "fontWeight": 700,
                                            "display": "inline" if is_watch else "none"}),
                 ]),
@@ -609,7 +609,7 @@ def equity_curve_chart(equity_curve: list) -> html.Div:
     fig.add_trace(go.Scatter(x=times, y=balance, name="Balance",
                              line=dict(color="#ffd700", width=1, dash="dot")))
     fig.update_layout(
-        plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+        plot_bgcolor="#0f0f0f", paper_bgcolor="#0f0f0f",
         font=dict(color="#e6edf3", size=10),
         margin=dict(l=8, r=8, t=8, b=8),
         height=180,

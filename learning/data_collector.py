@@ -97,6 +97,39 @@ def record_close(
     )
 
 
+def _is_duplicate_open_skip(pair: str, direction: str, entry_price: float, log_path: str) -> bool:
+    """
+    True if the most recently logged row for this (pair, direction,
+    entry_price) is still an unresolved 'skipped' row — i.e. this scan found
+    the same still-open setup as last cycle, not a genuinely new occurrence.
+
+    Without this check, a setup stuck behind the same gate (e.g. the
+    trending-structure gate holding an EMA-bounce signal during a sustained
+    trend) gets logged as a "new" signal every ~30 min for as long as it
+    stays blocked — one persistent setup logged 42 separate times over two
+    weeks was found dominating the score>=65 band's shadow-resolved win rate
+    (100% vs. the real, executed win rate of 41% in that band) and polluting
+    PatternLearner's training data, since every duplicate row is fed in as
+    an independent training example. See bugs_shadow_outcome_duplication memory.
+    """
+    if not os.path.exists(log_path):
+        return False
+    key = (pair, direction, round(float(entry_price), 5))
+    last_outcome = None
+    try:
+        with open(log_path, newline="") as f:
+            for row in csv.DictReader(f):
+                try:
+                    row_key = (row["pair"], row["direction"], round(float(row["entry_price"]), 5))
+                except (KeyError, ValueError, TypeError):
+                    continue
+                if row_key == key:
+                    last_outcome = row["outcome"]
+    except Exception:
+        return False   # best-effort — never block real logging over a read error
+    return last_outcome == "skipped"
+
+
 def record_skip(signal: dict, log_path: str = SIGNAL_LOG) -> None:
     """
     Log a signal that was scored but not traded (gate-blocked, below threshold,
@@ -111,6 +144,10 @@ def record_skip(signal: dict, log_path: str = SIGNAL_LOG) -> None:
     if not signal.get("entry") or not signal.get("stop_loss"):
         return   # nothing to replay later without a real entry/SL (e.g. ATR-gated)
     try:
+        pair, direction, entry = signal.get("pair", ""), signal.get("direction", ""), signal["entry"]
+        if _is_duplicate_open_skip(pair, direction, entry, log_path):
+            logger.debug("Skip not logged — same still-open setup as last cycle: %s %s", pair, direction)
+            return
         row = _build_row(
             signal        = signal,
             position_size = 0,

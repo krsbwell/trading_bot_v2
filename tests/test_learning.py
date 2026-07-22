@@ -156,6 +156,46 @@ class TestDataCollector:
         record_skip(_signal())
         assert pending_count() == 0
 
+    def test_record_skip_deduplicates_still_open_setup(self, tmp_path):
+        """A signal blocked by the same gate every scan cycle (same pair/
+        direction/entry) must not be re-logged while the previous row is
+        still unresolved — otherwise it gets counted as dozens of
+        independent training examples. See bugs_shadow_outcome_duplication."""
+        log = str(tmp_path / "signal_log.csv")
+        sig = _signal()
+        for _ in range(5):   # simulate 5 scan cycles finding the same blocked setup
+            record_skip(sig, log_path=log)
+        df = pd.read_csv(log)
+        assert len(df) == 1
+        assert df.iloc[0]["outcome"] == "skipped"
+
+    def test_record_skip_logs_again_after_resolution(self, tmp_path):
+        """Once the prior row for a setup has resolved (no longer 'skipped'),
+        a fresh occurrence of the same pair/direction/entry is a genuinely
+        new signal and should be logged again."""
+        log = str(tmp_path / "signal_log.csv")
+        sig = _signal()
+        record_skip(sig, log_path=log)
+        df = pd.read_csv(log)
+        df.loc[0, "outcome"] = "would_win"   # simulate shadow_outcomes resolving it
+        df.to_csv(log, index=False)
+
+        record_skip(sig, log_path=log)
+        df = pd.read_csv(log)
+        assert len(df) == 2
+
+    def test_record_skip_does_not_deduplicate_different_entry(self, tmp_path):
+        """Same pair/direction but a different entry price is a distinct
+        setup, not a re-scan of the same one — both rows should be kept."""
+        log = str(tmp_path / "signal_log.csv")
+        sig1 = _signal()
+        sig2 = _signal()
+        sig2["entry"] = 1.0950
+        record_skip(sig1, log_path=log)
+        record_skip(sig2, log_path=log)
+        df = pd.read_csv(log)
+        assert len(df) == 2
+
     def test_multiple_rows_appended(self, tmp_path):
         log = str(tmp_path / "signal_log.csv")
         for i in range(3):

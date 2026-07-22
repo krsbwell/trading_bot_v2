@@ -5,6 +5,13 @@ load_dotenv()
 MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 
 # Active trading pairs — updated 2026-07-02 (SESSION_START=04:00, ADX(28), 3500 M30 bars)
+# NOTE 2026-07-20: WR/PF/DD figures below are from the 2026-07-01/02 backtests and
+# have not been re-run since. Also, a merge-order bug in adaptive_params.get() was
+# silently discarding WFO's per-pair cci_threshold in live scoring (always fell back
+# to the hardcoded 20) — fixed 2026-07-20 (engine/adaptive_params.py). CCI settings
+# quoted below predate that fix and predate several since-run WFO cycles; check
+# data/wfo_params.json for what's actually live now rather than trusting these
+# inline numbers going forward.
 # USD_CAD: 46% WR  $+70.81  3.1% DD (28 trades) PF=2.08 — WFO-optimised: CCI=28, MACD=8/21/5 → 55.6% WR on last 30 days
 # NZD_USD: 36% WR  $+26.46  5.0% DD (25 trades) PF=1.43 — 2:1 R:R makes sub-50% WR profitable; promoted 2026-07-01
 # EUR_AUD: 33% WR  $+39.35  8.4% DD (42 trades) PF=1.42 — promoted 2026-07-02; best watch-pair PnL, solid sample size
@@ -66,6 +73,16 @@ MIN_CONFLUENCE_SCORE = 55      # Minimum score to trigger a trade (slider-adjust
 ALERT_DELAY_SECONDS  = 60      # Seconds the signal popup stays visible (trade opens immediately on signal)
 TRAILING_STOP_PIPS   = 15     # Trail SL 15 pips after TP2 is hit (0 = disabled)
 
+# ── ATR-adaptive trailing stop ────────────────────────────────────────────────
+# Replaces the fixed TRAILING_STOP_PIPS distance with ATR(period)*multiplier
+# when enabled, so the trail widens/tightens with volatility instead of using
+# one static pip distance for every market condition. Off by default — same
+# convention as BREAKEVEN_ENABLED below: a new risk mechanism shouldn't
+# silently change live behavior until deliberately tested/enabled per pair.
+ATR_TRAILING_ENABLED    = False
+ATR_TRAILING_MULTIPLIER = 2.0
+ATR_TRAILING_PERIOD     = 14
+
 # ── Duplicate trade protection ────────────────────────────────────────────────
 ALLOW_MULTIPLE_PER_PAIR    = False  # Allow multiple open positions for the same pair
 TRADE_COOLDOWN_HOURS       = 4      # Min hours after a pair's trade closes before re-entry
@@ -88,6 +105,11 @@ ADX_THRESHOLD = 28   # Hard-block signals when ADX(14) > this value (strong tren
 # ADX filter handles ranging vs trending; session gate just cuts deep-Asian hours.
 SESSION_START_UTC = 4   # 04:00 UTC — European pre-market / Sydney overlap
 SESSION_END_UTC   = 17  # 17:00 UTC — NY close
+
+# ── Watchdog (scripts/watchdog.py) ──────────────────────────────────────────
+# Scan cadence is 30 min (M30 close); 60 min gives one full cycle of buffer
+# for a slow API call before flagging the process as dead.
+WATCHDOG_STALE_MINUTES = 60
 
 # ── H4 trend gate ────────────────────────────────────────────────────────────
 H4_GATE_BLOCKING = True   # Hard-block counter-trend signals (True) vs diagnostic-only (False)
@@ -122,6 +144,15 @@ WFO_REFIT_DAYS = 7      # Days between re-fits per pair
 ADAPTIVE_PARAMS_ENABLED  = True   # Set False to lock all pairs at base thresholds
 ADAPTIVE_LOOKBACK_TRADES = 20     # How many recent closed trades to measure win rate from
 ADAPTIVE_REFIT_EVERY_N   = 5      # Minimum new trades before recalculating thresholds
+
+# ── ML score boost ────────────────────────────────────────────────────────────
+# confluence_scorer.score_signal() boosts the score ×1.10 when ml_win_prob > 0.65
+# (and penalizes ×0.70 when < 0.35), but ml_win_prob was always None at scoring
+# time — the real prediction was computed after the score, only for the post-hoc
+# block gate. Off by default pending backtest validation (2026-07-20), same
+# convention as ATR_TRAILING_ENABLED: this changes live trigger rate/frequency,
+# so it shouldn't flip on without a backtest comparison first.
+ML_SCORE_BOOST_ENABLED = False
 
 CCI_PERIOD  = 20
 MACD_FAST   = 12

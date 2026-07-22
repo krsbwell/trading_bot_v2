@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import pandas as pd
@@ -21,9 +22,17 @@ from engine.strategy_market_structure import (
 from engine.strategy_price_action import detect_patterns, score_price_action
 from engine.confluence_scorer import score_signal
 from engine.signal_audit import log_signal as _audit
+from learning.data_collector import _get_session
+from learning.pattern_learner import PatternLearner
 from risk.risk_manager import get_tp_levels
 
 logger = logging.getLogger(__name__)
+
+# Used only for the pre-score ML boost (config.ML_SCORE_BOOST_ENABLED) — cheap to
+# construct (no state beyond a counter; predict_win_prob() loads the model fresh
+# from disk on every call), kept separate from main.py's own PatternLearner
+# instance which owns retraining.
+_ml_model = PatternLearner()
 
 # get_candles signature: (instrument, granularity, count) → pd.DataFrame
 GetCandlesFn = Callable[[str, str, int], pd.DataFrame]
@@ -186,23 +195,58 @@ class SignalEngine:
         patterns = detect_patterns(df_h1)
         pa_score = max(score_price_action(patterns, direction), 0.0)
 
-        # ── Confluence ────────────────────────────────────────────────────────
-        final_score = score_signal(ema_score, struct_score, pa_score, ml_win_prob)
-
-        # ── Early ATR computation (needed for volatility gate) ────────────────
+        # ── Early ATR computation (needed for ML features below + volatility gate) ─
         _atr_series = calc_atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
         _atr_val    = float(_atr_series.iloc[-1])
         _pip_size   = 0.01 if "JPY" in pair.upper() else 0.0001
         _atr_pips   = _atr_val / _pip_size
+
+        # Fetch condition diagnostics set by check_buy/sell_signal (moved ahead of
+        # score_signal() so its cci/macd values can feed the ML boost below)
+        _diag = _diag_fn(pair, direction)
+
+        # ── ML score boost (config.ML_SCORE_BOOST_ENABLED, off by default) ──────
+        # Computed here — before score_signal() — so a high-confidence prediction
+        # can help a marginal signal cross MIN_CONFLUENCE_SCORE, not just suppress
+        # one after the fact (main.py's separate post-hoc block gate still applies
+        # regardless of this flag). Only fires when the caller didn't already
+        # supply a prediction (tests/other callers can still inject one directly).
+        if ml_win_prob is None and getattr(config, "ML_SCORE_BOOST_ENABLED", False):
+            try:
+                _c  = df_h1.iloc[-1]
+                _cr = _c["high"] - _c["low"]
+                _ml_features = {
+                    "confluence_score":    ema_score + struct_score + pa_score,
+                    "ema_score":           ema_score,
+                    "structure_score":     struct_score,
+                    "pa_score":            pa_score,
+                    "candle_body_ratio":   abs(_c["close"] - _c["open"]) / _cr if _cr > 0 else 0,
+                    "upper_wick_ratio":    (_c["high"] - max(_c["open"], _c["close"])) / _cr if _cr > 0 else 0,
+                    "lower_wick_ratio":    (min(_c["open"], _c["close"]) - _c["low"]) / _cr if _cr > 0 else 0,
+                    "cci_at_signal":       _diag.get("cci_current") or 0,
+                    "macd_hist_at_signal": _diag.get("macd_hist_val") or 0,
+                    "was_at_sr_zone":      any(z["lower"] <= entry <= z["upper"] for z in sr_zones if z["tested"]),
+                    "bos_confirmed":       bos_ok,
+                    "atr_pips":            _atr_pips,
+                    "hour_utc":            df_h1.index[-1].hour,
+                    "direction":           direction,
+                    "h4_trend":            h4_trend,
+                    "d_trend":             d_trend,
+                    "session":             _get_session(datetime.now(timezone.utc)),
+                    "market_structure":    structure,
+                }
+                ml_win_prob = _ml_model.predict_win_prob(_ml_features)
+            except Exception as exc:
+                logger.debug("ML score-boost prediction failed for %s: %s", pair, exc)
+
+        # ── Confluence ────────────────────────────────────────────────────────
+        final_score = score_signal(ema_score, struct_score, pa_score, ml_win_prob)
 
         logger.info(
             "Signal %s %s dir=%s score=%d (EMA=%.0f Struct=%.0f PA=%.0f H4=%s D=%s ATR=%.1f pips)",
             pair, market, direction, final_score,
             ema_score, struct_score, pa_score, h4_trend, d_trend, _atr_pips,
         )
-
-        # Fetch condition diagnostics set by check_buy/sell_signal
-        _diag = _diag_fn(pair, direction)
 
         if final_score < 40:
             _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],

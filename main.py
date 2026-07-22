@@ -10,6 +10,8 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -21,6 +23,7 @@ from connectors.alpaca_connector import AlpacaConnector
 from connectors.news_connector import is_news_blackout
 from connectors.forexfactory_connector import is_news_blackout as ff_is_news_blackout
 from engine.signal_engine import SignalEngine
+from engine.indicators import atr as _calc_atr
 from engine.adaptive_params import adaptive_params
 from engine.wfo_optimizer import wfo_optimizer
 from trade.paper_trader import PaperTrader
@@ -44,11 +47,26 @@ from alerts.telegram_alert import (
 from dashboard import state
 from engine.signal_audit import log_signal as _audit_blocked
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%H:%M:%S",
+_LOG_DIR = Path(__file__).parent / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_log_formatter = logging.Formatter(
+    "%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%H:%M:%S",
 )
+_log_file_handler = RotatingFileHandler(
+    # backupCount raised 3 -> 20 (2026-07-20): confirmed today that 3 backups
+    # (20MB total) isn't enough headroom — the 2026-07-19 scheduler-freeze
+    # evidence this handler exists to catch (see tasks/todo_scheduler_freeze.md)
+    # had already rotated out before it could be analyzed, just from one day's
+    # normal volume plus a handful of restarts. 20 backups (~100MB) gives a
+    # much longer window for a future freeze's heartbeat/lock-timing logs to
+    # actually survive until someone looks at them.
+    _LOG_DIR / "main.log", maxBytes=5 * 1024 * 1024, backupCount=20,
+)
+_log_file_handler.setFormatter(_log_formatter)
+_log_console_handler = logging.StreamHandler()
+_log_console_handler.setFormatter(_log_formatter)
+
+logging.basicConfig(level=logging.INFO, handlers=[_log_console_handler, _log_file_handler])
 logger = logging.getLogger(__name__)
 
 
@@ -68,6 +86,24 @@ _last_candle_hour  = None   # UTC hour of last on_candle_close() run (prevents r
 # Bot tick — runs on every H1 candle close
 # ══════════════════════════════════════════════════════════════════════════════
 
+_HEARTBEAT_PATH = Path(__file__).parent / "data" / "heartbeat.txt"
+
+
+def _write_heartbeat() -> None:
+    """
+    Record that the scheduler thread is alive and firing, independent of the
+    Dash dashboard (which runs in a thread inside this same process and goes
+    down with it — see bugs_process_death_no_logging memory: a full process
+    death takes the dashboard's health banner down too, so it can't be relied
+    on to detect this). A separate watchdog script (scripts/watchdog.py) can
+    read this file's mtime/contents from outside this process entirely.
+    """
+    try:
+        _HEARTBEAT_PATH.write_text(datetime.now(timezone.utc).isoformat())
+    except Exception:
+        pass
+
+
 def on_candle_close() -> None:
     """
     Main scheduled job. Runs every hour (on the hour).
@@ -82,6 +118,7 @@ def on_candle_close() -> None:
     global _last_candle_hour
     now_close = datetime.now(timezone.utc)
     current_hour = now_close.replace(minute=0, second=0, microsecond=0)
+    _write_heartbeat()   # scheduler fired — record this before any early return below
 
     # Guard against restart duplicates: if this hour was already fully processed
     # (e.g. bot restarted mid-hour), skip to avoid duplicate audit entries + double alerts.
@@ -100,9 +137,11 @@ def on_candle_close() -> None:
     # ── Account refresh ───────────────────────────────────────────────────────
     _refresh_account()
 
-    # ── Update open paper trades ──────────────────────────────────────────────
+    # ── Update open trades ─────────────────────────────────────────────────────
     if config.MODE == "paper" and _paper_trader:
         _tick_paper_trades()
+    elif config.MODE == "live":
+        _tick_live_trades()
 
     # ── Signal scan — active pairs (trade + alert) ───────────────────────────
     watch_pairs = getattr(config, "FOREX_WATCH", [])
@@ -210,23 +249,29 @@ def _process_pair(pair: str, market: str, engine) -> None:
         return
 
     _t_signal_start = time.perf_counter()
-    # Run signal engine first (no ML yet — features come from the signal itself)
     signal = engine.run(pair, market, ml_win_prob=None)
 
-    # After signal is generated, compute ML win-prob from real features
+    # ML win-prob for the tiered block gate below. When config.ML_SCORE_BOOST_ENABLED
+    # is on, signal_engine.py already computed this pre-score (engine/signal_engine.py)
+    # and attached it to the signal — reuse it rather than predicting twice. Otherwise
+    # (current default) fall back to the original post-hoc computation here.
     ml_prob = None
-    if signal and not signal.get("no_signal") and _pattern_learner:
-        try:
-            from learning.pattern_learner import FEATURES
-            from learning.data_collector import _get_session
-            features = {f: (signal.get(f) or 0) for f in FEATURES}
-            # session is not in the signal dict — derive from current UTC hour
-            features["session"] = _get_session(datetime.now(timezone.utc))
-            ml_prob = _pattern_learner.predict_win_prob(features)
-            if ml_prob is not None:
-                signal["ml_win_prob"] = ml_prob
-        except Exception as _ml_exc:
-            logger.debug("ML prediction failed: %s", _ml_exc)
+    if signal and not signal.get("no_signal"):
+        ml_prob = signal.get("ml_win_prob")
+        if ml_prob is None and _pattern_learner:
+            try:
+                from learning.pattern_learner import FEATURES
+                from learning.data_collector import _get_session
+                features = {f: (signal.get(f) or 0) for f in FEATURES}
+                # signal dict stores the final score under "score", not "confluence_score" —
+                # the generic comprehension above silently left this at 0 otherwise.
+                features["confluence_score"] = signal.get("score", 0)
+                features["session"] = _get_session(datetime.now(timezone.utc))
+                ml_prob = _pattern_learner.predict_win_prob(features)
+                if ml_prob is not None:
+                    signal["ml_win_prob"] = ml_prob
+            except Exception as _ml_exc:
+                logger.debug("ML prediction failed: %s", _ml_exc)
 
     if signal is None:
         state.update_signal(pair, 0, "—")
@@ -241,7 +286,13 @@ def _process_pair(pair: str, market: str, engine) -> None:
         return
 
     score = signal["score"]
-    state.update_signal(pair, score, signal["direction"], timeframe=tf)
+    # Sidebar "SIGNAL" badge must reflect the actual gate this pair has to clear —
+    # WFO can set a stricter per-pair min_score than the global slider, and that
+    # check happens inside signal_engine.run() regardless of the slider's value.
+    _pair_min_score = wfo_optimizer.get_params(pair).get("min_score", config.MIN_CONFLUENCE_SCORE)
+    _slider_min     = state.get_key("min_score", config.MIN_CONFLUENCE_SCORE)
+    _effective_threshold = max(_pair_min_score, _slider_min, 40)
+    state.update_signal(pair, score, signal["direction"], timeframe=tf, threshold=_effective_threshold)
     state.update_signal_detail(pair, signal)           # store full signal for chart overlay
     state.cache_candles(pair, config.TIMEFRAMES["primary"], None)  # invalidate H1 cache
 
@@ -470,6 +521,14 @@ def _process_pair(pair: str, market: str, engine) -> None:
         manager   = _trade_manager_fx if market == "forex" else _trade_manager_cx
         if manager:
             actual_id = manager.open_trade(signal)
+            _sync_live_state()
+            try:
+                if tg_enabled() and actual_id:
+                    t_opened = manager.get_open_trade(pair)
+                    if t_opened:
+                        tg_trade_opened(t_opened)
+            except Exception:
+                pass
         else:
             logger.warning("No trade manager for %s — signal logged but not traded", pair)
 
@@ -494,12 +553,22 @@ def _tick_paper_trades() -> None:
             if "_" not in pair:
                 _tf_map = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}
                 gran = _tf_map.get(gran, "1Hour")
-            df      = connector.get_candles(pair, gran, 2)
+            # Only fetch the extra candle history ATR needs when the feature is
+            # actually on — keeps today's API-call volume unchanged otherwise.
+            count   = config.ATR_TRAILING_PERIOD + 10 if config.ATR_TRAILING_ENABLED else 2
+            df      = connector.get_candles(pair, gran, count)
             if df is None or len(df) < 1:
                 continue
             last    = df.iloc[-1]
+            atr_value = None
+            if config.ATR_TRAILING_ENABLED and len(df) >= config.ATR_TRAILING_PERIOD:
+                try:
+                    atr_value = float(_calc_atr(df["high"], df["low"], df["close"],
+                                                 config.ATR_TRAILING_PERIOD).iloc[-1])
+                except Exception as exc:
+                    logger.debug("ATR calc failed for %s: %s", pair, exc)
             closed_before = {t["id"] for t in _paper_trader.closed_trades}
-            _paper_trader.update(pair, last["high"], last["low"], last["close"])
+            _paper_trader.update(pair, last["high"], last["low"], last["close"], atr_value=atr_value)
             _sync_paper_state()
             # Detect newly closed trades: update cooldown + Telegram
             newly_closed = [t for t in _paper_trader.closed_trades
@@ -522,6 +591,79 @@ def _tick_paper_trades() -> None:
                         pass
         except Exception as exc:
             logger.error("Paper tick failed for %s: %s", pair, exc)
+
+
+def _tick_live_trades() -> None:
+    """
+    Live-mode counterpart to _tick_paper_trades() — feeds the latest candle
+    to TradeManager so TP1/TP2/TP3, breakeven, and ATR trailing are actually
+    evaluated for real broker trades. Previously TradeManager.on_candle_close()
+    was never called anywhere, so live trades only ever had their initial
+    SL (attached at order placement) — nothing else would have fired.
+    """
+    for manager in (_trade_manager_fx, _trade_manager_cx):
+        if manager is None:
+            continue
+        for pair in manager.open_pairs():
+            connector = (_oanda_connector if "_" in pair else _alpaca_connector)
+            if connector is None:
+                continue
+            try:
+                gran = config.TIMEFRAMES["primary"]
+                if "_" not in pair:
+                    _tf_map = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}
+                    gran = _tf_map.get(gran, "1Hour")
+                count = config.ATR_TRAILING_PERIOD + 10 if config.ATR_TRAILING_ENABLED else 2
+                df    = connector.get_candles(pair, gran, count)
+                if df is None or len(df) < 1:
+                    continue
+                last = df.iloc[-1]
+                atr_value = None
+                if config.ATR_TRAILING_ENABLED and len(df) >= config.ATR_TRAILING_PERIOD:
+                    try:
+                        atr_value = float(_calc_atr(df["high"], df["low"], df["close"],
+                                                     config.ATR_TRAILING_PERIOD).iloc[-1])
+                    except Exception as exc:
+                        logger.debug("ATR calc failed for %s: %s", pair, exc)
+                closed_before = {t["id"] for t in manager.closed_trades}
+                manager.on_candle_close(
+                    pair,
+                    {"high": last["high"], "low": last["low"], "close": last["close"]},
+                    atr_value=atr_value,
+                )
+                _sync_live_state()
+                newly_closed = [t for t in manager.closed_trades if t["id"] not in closed_before]
+                if newly_closed:
+                    cooldowns = dict(state.get_key("trade_cooldowns", {}))
+                    for t in newly_closed:
+                        cooldowns[t["pair"]] = datetime.now(timezone.utc)
+                        logger.info(
+                            "Cooldown started for %s (trade %s closed, %dh cooldown)",
+                            t["pair"], t["id"], config.TRADE_COOLDOWN_HOURS,
+                        )
+                        adaptive_params.update(t["pair"], manager.closed_trades)
+                    state.update(trade_cooldowns=cooldowns)
+                if tg_enabled():
+                    for t in newly_closed:
+                        try:
+                            tg_trade_closed(t)
+                        except Exception:
+                            pass
+            except Exception as exc:
+                logger.error("Live tick failed for %s: %s", pair, exc)
+
+
+def _sync_live_state() -> None:
+    """Push TradeManager's open/closed trades into dashboard state — mirrors
+    _sync_paper_state(). Without this, live trades wouldn't appear on the
+    dashboard even though they're real broker positions."""
+    open_trades, closed_trades = [], []
+    for manager in (_trade_manager_fx, _trade_manager_cx):
+        if manager is None:
+            continue
+        open_trades.extend(manager.open_trades.values())
+        closed_trades.extend(manager.closed_trades)
+    state.update(open_trades=open_trades, closed_trades=closed_trades)
 
 
 def _backfill_equity_curve() -> None:
@@ -937,6 +1079,13 @@ def main() -> None:
             # they'd otherwise be re-tuned weekly for a strategy they don't run.
             _override = getattr(config, "STRATEGY_OVERRIDE", {})
             _wfo_pairs = [p for p in config.FOREX_PAIRS if _override.get(p, "ema_bounce") == "ema_bounce"]
+            # Run stalest (or never-fitted) pairs first — the sequential run_all_pairs
+            # loop can take ~2h across a full roster and has been killed mid-run by
+            # scheduler freezes, so a fixed config-order run always finished the same
+            # early pairs and starved the rest. Sorting by fitted_at ascending (missing
+            # entries sort first, "" < any ISO timestamp) means a crash costs the least.
+            _fitted = wfo_optimizer.summary()
+            _wfo_pairs.sort(key=lambda p: _fitted.get(p, {}).get("fitted_at", ""))
             threading.Thread(
                 target=wfo_optimizer.run_all_pairs,
                 args=(_oanda_connector.get_candles, _wfo_pairs),

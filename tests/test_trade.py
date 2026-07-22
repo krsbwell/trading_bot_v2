@@ -11,8 +11,13 @@ Subsequent candles must use low > entry so the breakeven SL is not triggered.
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import logging
+import threading
+import time
+from pathlib import Path
+
 import pytest
-from trade.paper_trader import PaperTrader
+from trade.paper_trader import PaperTrader, _InstrumentedLock
 from trade.trade_manager import TradeManager
 import risk.risk_manager as rm
 import config
@@ -223,6 +228,94 @@ class TestPaperTraderTP:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# PaperTrader — ATR-adaptive trailing stop
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPaperTraderATRTrailing:
+    @pytest.fixture(autouse=True)
+    def _patch_trade_config(self, monkeypatch):
+        monkeypatch.setattr(config, "BREAKEVEN_ENABLED", False)
+        monkeypatch.setattr(config, "TRAILING_STOP_PIPS", 15)
+        monkeypatch.setattr(config, "ATR_TRAILING_ENABLED", False)
+        monkeypatch.setattr(config, "ATR_TRAILING_MULTIPLIER", 2.0)
+
+    def _to_tp2(self, pt, tp, direction="long"):
+        """Drive a fresh trade through TP1 and TP2 so trailing can activate."""
+        if direction == "long":
+            pt.update("EUR_USD", tp["tp1"] + 0.001, 1.0795, tp["tp1"])
+            pt.update("EUR_USD", tp["tp2"] + 0.001, 1.0802, tp["tp2"])
+        else:
+            pt.update("EUR_USD", 1.0805, tp["tp1"] - 0.001, tp["tp1"])
+            pt.update("EUR_USD", 1.0803, tp["tp2"] - 0.001, tp["tp2"])
+
+    # tp3 for these entry/sl combos sits at 1.0880 (long) / 1.0720 (short) —
+    # trailing-candle highs/lows below deliberately stay clear of it so the
+    # remaining 25% isn't fully closed by TP3 before trailing can be observed.
+
+    def test_atr_trailing_disabled_falls_back_to_pip_trail(self):
+        """Flag off: an atr_value is passed in but ignored — the existing
+        fixed-pip trail still applies, unchanged behavior."""
+        pt = PaperTrader(10_000)
+        tp = _tp(1.0800, 1.0780, "long")
+        pt.open_trade("EUR_USD", "long", 1.0800, 1.0780, tp, 10_000)
+        self._to_tp2(pt, tp)
+        sl_before = pt.open_trades[0]["sl"]
+        pt.update("EUR_USD", 1.0865, 1.0855, 1.0860, atr_value=0.0020)
+        t = pt.open_trades[0]
+        # Fixed 15-pip trail from close 1.0860 = 1.0860 - 0.0015 = 1.0845
+        assert abs(t["sl"] - 1.0845) < 1e-9
+        assert t["sl"] > sl_before
+
+    def test_atr_trailing_enabled_long(self, monkeypatch):
+        monkeypatch.setattr(config, "ATR_TRAILING_ENABLED", True)
+        pt = PaperTrader(10_000)
+        tp = _tp(1.0800, 1.0780, "long")
+        pt.open_trade("EUR_USD", "long", 1.0800, 1.0780, tp, 10_000)
+        self._to_tp2(pt, tp)
+        sl_before = pt.open_trades[0]["sl"]
+        pt.update("EUR_USD", 1.0865, 1.0855, 1.0860, atr_value=0.0020)
+        t = pt.open_trades[0]
+        # ATR(0.0020) * multiplier(2.0) = 0.0040 trail from close 1.0860
+        assert abs(t["sl"] - 1.0820) < 1e-9   # 1.0860 - 0.0040
+        assert t["sl"] > sl_before
+
+    def test_atr_trailing_enabled_short(self, monkeypatch):
+        monkeypatch.setattr(config, "ATR_TRAILING_ENABLED", True)
+        pt = PaperTrader(10_000)
+        tp = _tp(1.0800, 1.0820, "short")
+        pt.open_trade("EUR_USD", "short", 1.0800, 1.0820, tp, 10_000)
+        self._to_tp2(pt, tp, direction="short")
+        sl_before = pt.open_trades[0]["sl"]
+        pt.update("EUR_USD", 1.0745, 1.0735, 1.0740, atr_value=0.0020)
+        t = pt.open_trades[0]
+        assert abs(t["sl"] - 1.0780) < 1e-9   # 1.0740 + 0.0040
+        assert t["sl"] < sl_before
+
+    def test_atr_trailing_only_advances_never_retreats(self, monkeypatch):
+        monkeypatch.setattr(config, "ATR_TRAILING_ENABLED", True)
+        pt = PaperTrader(10_000)
+        tp = _tp(1.0800, 1.0780, "long")
+        pt.open_trade("EUR_USD", "long", 1.0800, 1.0780, tp, 10_000)
+        self._to_tp2(pt, tp)
+        pt.update("EUR_USD", 1.0865, 1.0855, 1.0860, atr_value=0.0020)   # SL -> 1.0820
+        sl_after_first_trail = pt.open_trades[0]["sl"]
+        assert abs(sl_after_first_trail - 1.0820) < 1e-9
+        # A much wider ATR now would compute 1.0865 - 0.0200 = 1.0665, well
+        # below the current 1.0820 SL — must not retreat.
+        pt.update("EUR_USD", 1.0870, 1.0860, 1.0865, atr_value=0.0100)
+        assert pt.open_trades[0]["sl"] == sl_after_first_trail
+
+    def test_atr_trailing_inactive_before_tp2(self, monkeypatch):
+        monkeypatch.setattr(config, "ATR_TRAILING_ENABLED", True)
+        pt = PaperTrader(10_000)
+        tp = _tp(1.0800, 1.0780, "long")
+        pt.open_trade("EUR_USD", "long", 1.0800, 1.0780, tp, 10_000)
+        sl_before = pt.open_trades[0]["sl"]
+        pt.update("EUR_USD", 1.0805, 1.0795, 1.0800, atr_value=0.0050)   # no TP hit yet
+        assert pt.open_trades[0]["sl"] == sl_before
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # PaperTrader — manual close & stats
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -348,7 +441,9 @@ class TestTradeManagerForex:
         assert tm.open_trades[tid]["tp1_hit"] is True
         assert len(conn.closes) == 1
 
-    def test_tp1_sl_moved_to_breakeven(self):
+    def test_tp1_sl_moved_to_breakeven(self, monkeypatch):
+        monkeypatch.setattr(config, "BREAKEVEN_ENABLED", True)
+        monkeypatch.setattr(config, "BREAKEVEN_BUFFER_PIPS", 0)
         conn = MockForexConnector()
         tm = TradeManager(conn, "forex")
         tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
@@ -356,6 +451,17 @@ class TestTradeManagerForex:
         tm.on_candle_close("EUR_USD", {"high": tp1 + 0.001, "low": 1.0795, "close": tp1})
         assert len(conn.sl_updates) == 1
         assert abs(conn.sl_updates[0]["sl"] - 1.0800) < 1e-9
+
+    def test_tp1_breakeven_off_by_default_leaves_sl_unchanged(self):
+        """BREAKEVEN_ENABLED defaults False (backtest-validated) — TP1 must
+        not move the SL when it's off, matching PaperTrader's behavior."""
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
+        tp1 = tm.open_trades[tid]["tp1"]
+        tm.on_candle_close("EUR_USD", {"high": tp1 + 0.001, "low": 1.0795, "close": tp1})
+        assert len(conn.sl_updates) == 0
+        assert abs(tm.open_trades[tid]["sl"] - 1.0780) < 1e-9
 
     def test_full_tp_sequence_removes_trade(self):
         conn = MockForexConnector()
@@ -386,3 +492,228 @@ class TestTradeManagerForex:
         tm.open_trade(_signal(pair="GBP_USD", entry=1.25, sl=1.248))
         assert "EUR_USD" in tm.open_pairs()
         assert "GBP_USD" in tm.open_pairs()
+
+    def test_get_open_trade_by_pair(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(pair="EUR_USD"))
+        t = tm.get_open_trade("EUR_USD")
+        assert t is not None and t["id"] == tid
+
+    def test_get_open_trade_missing_pair_returns_none(self):
+        tm = TradeManager(MockForexConnector(), "forex")
+        assert tm.get_open_trade("XYZ_ABC") is None
+
+    def test_sl_close_added_to_closed_trades(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
+        tm.on_candle_close("EUR_USD", {"high": 1.0785, "low": 1.0772, "close": 1.0775})
+        assert len(tm.closed_trades) == 1
+        assert tm.closed_trades[0]["id"] == tid
+        assert tm.closed_trades[0]["close_reason"] == "sl"
+        assert tm.closed_trades[0]["realised_pnl"] < 0   # loss on a long SL hit
+
+    def test_tp3_full_close_realised_pnl_positive(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
+        t = tm.open_trades[tid]
+        tm.on_candle_close("EUR_USD", {"high": t["tp1"] + 0.001, "low": 1.0795, "close": t["tp1"]})
+        tm.on_candle_close("EUR_USD", {"high": t["tp2"] + 0.001, "low": 1.0802, "close": t["tp2"]})
+        tm.on_candle_close("EUR_USD", {"high": t["tp3"] + 0.001, "low": 1.0810, "close": t["tp3"]})
+        assert len(tm.closed_trades) == 1
+        assert tm.closed_trades[0]["close_reason"] == "tp3"
+        assert tm.closed_trades[0]["realised_pnl"] > 0
+
+    def test_record_close_called_on_full_close(self, monkeypatch):
+        """Previously only PaperTrader closes ever reached the ML training
+        data — a live close must feed learning.data_collector too."""
+        calls = []
+        import learning.data_collector as dc
+        monkeypatch.setattr(dc, "record_close", lambda **kw: calls.append(kw))
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
+        tm.on_candle_close("EUR_USD", {"high": 1.0785, "low": 1.0772, "close": 1.0775})
+        assert len(calls) == 1
+        assert calls[0]["trade_id"] == tid
+        assert calls[0]["outcome"] == "loss"
+
+    def test_atr_trailing_via_on_candle_close(self, monkeypatch):
+        monkeypatch.setattr(config, "ATR_TRAILING_ENABLED", True)
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
+        t = tm.open_trades[tid]
+        tm.on_candle_close("EUR_USD", {"high": t["tp1"] + 0.001, "low": 1.0795, "close": t["tp1"]})
+        tm.on_candle_close("EUR_USD", {"high": t["tp2"] + 0.001, "low": 1.0802, "close": t["tp2"]})
+        # Trailing candle — kept clear of tp3 (1.0880) so it isn't closed early.
+        tm.on_candle_close(
+            "EUR_USD", {"high": 1.0865, "low": 1.0855, "close": 1.0860}, atr_value=0.0020,
+        )
+        # ATR(0.0020) * multiplier(2.0) = 0.0040 trail from close 1.0860 -> 1.0820
+        assert abs(tm.open_trades[tid]["sl"] - 1.0820) < 1e-9
+        assert any(abs(u["sl"] - 1.0820) < 1e-9 for u in conn.sl_updates)
+
+    def test_atr_trailing_disabled_by_default_via_on_candle_close(self):
+        """Flag off (default): TP2 alone must not move the SL at all — this
+        class has no fixed-pip trailing fallback (unlike PaperTrader), it's
+        purely additive and only active when explicitly enabled."""
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
+        t = tm.open_trades[tid]
+        tm.on_candle_close("EUR_USD", {"high": t["tp1"] + 0.001, "low": 1.0795, "close": t["tp1"]})
+        tm.on_candle_close("EUR_USD", {"high": t["tp2"] + 0.001, "low": 1.0802, "close": t["tp2"]})
+        sl_updates_before = len(conn.sl_updates)
+        tm.on_candle_close(
+            "EUR_USD", {"high": 1.0865, "low": 1.0855, "close": 1.0860}, atr_value=0.0020,
+        )
+        assert len(conn.sl_updates) == sl_updates_before
+        assert abs(tm.open_trades[tid]["sl"] - 1.0780) < 1e-9   # unchanged
+
+
+# ── _InstrumentedLock (scheduler-freeze diagnostic, tasks/todo_scheduler_freeze.md) ──
+
+class TestInstrumentedLock:
+    def test_behaves_as_a_normal_mutual_exclusion_lock(self):
+        lock = _InstrumentedLock()
+        order = []
+
+        def worker():
+            with lock:
+                order.append("worker-in")
+                time.sleep(0.05)
+                order.append("worker-out")
+
+        t = threading.Thread(target=worker)
+        with lock:
+            t.start()
+            time.sleep(0.15)   # worker must block here, not interleave
+            order.append("main-holds")
+        t.join(timeout=2)
+        assert order == ["main-holds", "worker-in", "worker-out"]
+
+    def test_reentrant_use_across_sequential_with_blocks_does_not_deadlock(self):
+        lock = _InstrumentedLock()
+        with lock:
+            pass
+        with lock:   # second, independent acquisition must succeed
+            pass
+
+    def test_warns_when_acquisition_is_slow(self, caplog):
+        lock = _InstrumentedLock()
+        lock._SLOW_S = 0.05   # instance override, doesn't touch the class default
+        acquired = threading.Event()
+
+        def hold():
+            with lock:
+                acquired.set()
+                time.sleep(0.15)   # holds well past _SLOW_S while main tries to acquire
+
+        t = threading.Thread(target=hold)
+        t.start()
+        assert acquired.wait(timeout=2)   # don't race the acquire itself
+        with caplog.at_level(logging.WARNING):
+            with lock:   # blocks ~0.15s waiting for `hold` to release
+                pass
+        t.join(timeout=2)
+        assert any("lock acquisition took" in r.message for r in caplog.records)
+
+    def test_warns_when_held_too_long(self, caplog):
+        lock = _InstrumentedLock()
+        lock._SLOW_S = 0.05
+        with caplog.at_level(logging.WARNING):
+            with lock:
+                time.sleep(0.1)
+        assert any("lock held for" in r.message for r in caplog.records)
+
+    def test_no_warning_on_fast_acquire_and_release(self, caplog):
+        lock = _InstrumentedLock()
+        with caplog.at_level(logging.WARNING):
+            with lock:
+                pass
+        assert not any("lock" in r.message for r in caplog.records)
+
+
+# ── TradeManager disk persistence (tasks/todo.md, added 2026-07-20) ─────────────
+
+class TestTradeManagerPersistence:
+    def test_open_trade_survives_restart(self, tmp_path):
+        path = tmp_path / "live_state.json"
+        tm1 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        tid = tm1.open_trade(_signal(entry=1.0800, sl=1.0780))
+
+        tm2 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        assert tid in tm2.open_trades
+        assert tm2.open_trades[tid]["pair"]      == "EUR_USD"
+        assert tm2.open_trades[tid]["entry"]     == 1.0800
+        assert tm2.open_trades[tid]["direction"] == "long"
+
+    def test_partial_close_state_survives_restart(self, tmp_path):
+        path = tmp_path / "live_state.json"
+        tm1 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        tid = tm1.open_trade(_signal(entry=1.0800, sl=1.0780))
+        t = tm1.open_trades[tid]
+        tm1.on_candle_close("EUR_USD", {"high": t["tp1"] + 0.001, "low": 1.0795, "close": t["tp1"]})
+        assert tm1.open_trades[tid]["tp1_hit"] is True
+
+        tm2 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        restored = tm2.open_trades[tid]
+        assert restored["tp1_hit"] is True
+        assert abs(restored["remaining"] - 0.60) < 1e-9
+        assert restored["realised_pnl"] != 0.0
+
+    def test_full_close_moves_trade_to_closed_and_survives_restart(self, tmp_path):
+        path = tmp_path / "live_state.json"
+        tm1 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        tid = tm1.open_trade(_signal(entry=1.0800, sl=1.0780))
+        t = tm1.open_trades[tid]
+        # Drive price through TP1 -> TP2 -> TP3 so the trade fully closes
+        tm1.on_candle_close("EUR_USD", {"high": t["tp1"] + 0.001, "low": 1.0795, "close": t["tp1"]})
+        tm1.on_candle_close("EUR_USD", {"high": t["tp2"] + 0.001, "low": 1.0802, "close": t["tp2"]})
+        tm1.on_candle_close("EUR_USD", {"high": t["tp3"] + 0.001, "low": 1.0804, "close": t["tp3"]})
+        assert tid not in tm1.open_trades
+        assert any(c["id"] == tid for c in tm1.closed_trades)
+
+        tm2 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        assert tid not in tm2.open_trades
+        assert any(c["id"] == tid for c in tm2.closed_trades)
+        assert tm2.closed_trades[-1]["close_reason"] == "tp3"
+
+    def test_manual_close_survives_restart(self, tmp_path):
+        path = tmp_path / "live_state.json"
+        tm1 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        tid = tm1.open_trade(_signal())
+        tm1.close_trade(tid)
+        assert tid not in tm1.open_trades
+
+        tm2 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        assert tid not in tm2.open_trades
+
+    def test_save_path_false_disables_disk_io(self, tmp_path, monkeypatch):
+        import trade.trade_manager as tm_mod
+        monkeypatch.setattr(tm_mod, "_DEFAULT_SAVE_DIR", tmp_path)
+        tm = TradeManager(MockForexConnector(), "forex", save_path=False)
+        tm.open_trade(_signal())
+        assert list(tmp_path.iterdir()) == []   # nothing written anywhere
+
+    def test_missing_state_file_starts_empty_not_erroring(self, tmp_path):
+        tm = TradeManager(MockForexConnector(), "forex", save_path=tmp_path / "does_not_exist.json")
+        assert tm.open_trades == {}
+        assert tm.closed_trades == []
+
+    def test_corrupt_state_file_starts_empty_not_erroring(self, tmp_path):
+        path = tmp_path / "live_state.json"
+        path.write_text("{not valid json", encoding="utf-8")
+        tm = TradeManager(MockForexConnector(), "forex", save_path=path)
+        assert tm.open_trades == {}
+        assert tm.closed_trades == []
+
+    def test_default_save_path_is_per_market(self, tmp_path, monkeypatch):
+        import trade.trade_manager as tm_mod
+        monkeypatch.setattr(tm_mod, "_DEFAULT_SAVE_DIR", tmp_path)
+        TradeManager(MockForexConnector(), "forex").open_trade(_signal())
+        assert (tmp_path / "live_state_forex.json").exists()
+        assert not (tmp_path / "live_state_crypto.json").exists()

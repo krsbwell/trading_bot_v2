@@ -35,6 +35,21 @@ from trade.paper_trader import PaperTrader
 
 _STRUCT_MAP = {"bullish": "uptrend", "bearish": "downtrend", "ranging": "ranging"}
 
+_ml_model_singleton = None
+
+
+def _ml_model():
+    """
+    Lazy-loaded PatternLearner, only imported/constructed when
+    config.ML_SCORE_BOOST_ENABLED is actually on — keeps xgboost/sklearn off
+    the import path for every normal (flag-off) backtest run.
+    """
+    global _ml_model_singleton
+    if _ml_model_singleton is None:
+        from learning.pattern_learner import PatternLearner
+        _ml_model_singleton = PatternLearner()
+    return _ml_model_singleton
+
 
 def _bt_session(dt) -> str:
     h = dt.hour if hasattr(dt, "hour") else 12
@@ -162,7 +177,14 @@ def run_backtest(
 
         # Tick open trades against current candle
         row = df_h1.iloc[i]
-        pt.update(pair, float(row["high"]), float(row["low"]), float(row["close"]))
+        atr_value = None
+        if config.ATR_TRAILING_ENABLED and len(slice_h1) >= config.ATR_TRAILING_PERIOD:
+            try:
+                atr_value = float(_atr_fn(slice_h1["high"], slice_h1["low"], slice_h1["close"],
+                                           config.ATR_TRAILING_PERIOD).iloc[-1])
+            except Exception:
+                atr_value = None
+        pt.update(pair, float(row["high"]), float(row["low"]), float(row["close"]), atr_value=atr_value)
 
         equity.append({"bar_idx": i, "balance": pt.balance, "nav": pt.balance + pt._calc_unrealized()})
         peak = max(peak, pt.balance)
@@ -194,7 +216,28 @@ def run_backtest(
         patterns = detect_patterns(slice_h1)
         pa_score = max(0.0, score_price_action(patterns, direction))
 
-        final_score = score_signal(ema_score, struct_score, pa_score)
+        # ML score boost (config.ML_SCORE_BOOST_ENABLED, off by default — see
+        # config.py). Features must be computed before scoring so a real
+        # prediction can influence final_score, same as engine/signal_engine.py's
+        # live wiring. "confluence_score" here is the pre-boost raw sum
+        # (ema+struct+pa), matching what a live signal's feature row looked
+        # like historically (boost never fired before today, so signal_log.csv's
+        # training data has confluence_score == the unboosted sum) — patched to
+        # the true final_score below, after scoring, for the seed row that
+        # actually gets saved.
+        ml_win_prob = None
+        if getattr(config, "ML_SCORE_BOOST_ENABLED", False):
+            _provisional = _bt_sig_features(
+                pair, direction, bar_time, slice_h1, slice_h4,
+                ema_score, struct_score, pa_score, ema_score + struct_score + pa_score,
+                structure, sr_zones, bos_ok, patterns, entry,
+            )
+            try:
+                ml_win_prob = _ml_model().predict_win_prob(_provisional)
+            except Exception:
+                ml_win_prob = None
+
+        final_score = score_signal(ema_score, struct_score, pa_score, ml_win_prob)
 
         if final_score < min_score:
             continue
