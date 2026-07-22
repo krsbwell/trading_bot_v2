@@ -29,25 +29,23 @@ def calculate_position_size(account_balance: float, entry: float,
 
 def get_tp_levels(entry: float, stop_loss: float, direction: str) -> dict:
     """
-    Return TP1/TP2/TP3 at 1.0R / 2.5R / 4.0R.
+    Return TP1/TP2/TP3 at 1.5R / 2.5R / 3.5R.
 
-    TP1 at 1.0R (changed from 1.5R):
-      Hitting TP1 more reliably is more important than squeezing extra ticks from
-      it. At 1.0R, TP1 fires before most reversals, banks 40% of the position,
-      and moves the SL to breakeven+buffer — protecting capital while leaving
-      the majority of the position open for the TP2/TP3 continuation move.
-
-    TP2 at 2.5R / TP3 at 4.0R (tightened from 3R / 5R):
-      Keeps meaningful R:R while being more achievable in a trending session,
-      increasing the frequency of TP2 and TP3 hits and reducing reliance on the
-      rare 5R home-run trades that were the only way to stay positive before.
+    Changed 2026-07-22 from 1.0R/2.5R/4.0R after backtesting both across the
+    5 active pairs (USD_CAD, GBP_CAD, NZD_USD, EUR_AUD, GBP_USD) on 3500 bars
+    each: 4 of 5 pairs improved on PnL (GBP_USD and GBP_CAD notably so, PF
+    2.26->2.56 and PnL +11% respectively), only EUR_AUD's profit factor
+    declined (2.09->1.83, PnL roughly flat). Max drawdown ticked up slightly
+    on every pair (a wider TP1 means more open-risk time before the first
+    partial close), but not by enough to offset the PnL gains. See
+    tasks/todo.md's 2026-07-22 entries for the full comparison table.
     """
     dist = abs(entry - stop_loss)
     mult = 1 if direction == "long" else -1
     return {
-        "tp1": round(entry + mult * dist * 1.0, 5),   # 1.0:1 RR, close 40%
+        "tp1": round(entry + mult * dist * 1.5, 5),   # 1.5:1 RR, close 40%
         "tp2": round(entry + mult * dist * 2.5, 5),   # 2.5:1 RR, close 35%
-        "tp3": round(entry + mult * dist * 4.0, 5),   # 4.0:1 RR, close 25%
+        "tp3": round(entry + mult * dist * 3.5, 5),   # 3.5:1 RR, close 25%
     }
 
 

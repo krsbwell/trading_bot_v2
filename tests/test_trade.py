@@ -248,7 +248,7 @@ class TestPaperTraderATRTrailing:
             pt.update("EUR_USD", 1.0805, tp["tp1"] - 0.001, tp["tp1"])
             pt.update("EUR_USD", 1.0803, tp["tp2"] - 0.001, tp["tp2"])
 
-    # tp3 for these entry/sl combos sits at 1.0880 (long) / 1.0720 (short) —
+    # tp3 for these entry/sl combos sits at 1.0870 (long) / 1.0730 (short) —
     # trailing-candle highs/lows below deliberately stay clear of it so the
     # remaining 25% isn't fully closed by TP3 before trailing can be observed.
 
@@ -301,8 +301,10 @@ class TestPaperTraderATRTrailing:
         sl_after_first_trail = pt.open_trades[0]["sl"]
         assert abs(sl_after_first_trail - 1.0820) < 1e-9
         # A much wider ATR now would compute 1.0865 - 0.0200 = 1.0665, well
-        # below the current 1.0820 SL — must not retreat.
-        pt.update("EUR_USD", 1.0870, 1.0860, 1.0865, atr_value=0.0100)
+        # below the current 1.0820 SL — must not retreat. High kept at 1.0868,
+        # clear of the 1.0870 tp3 (see class comment above), so the remaining
+        # 25% stays open and trailing can actually be observed.
+        pt.update("EUR_USD", 1.0868, 1.0860, 1.0865, atr_value=0.0100)
         assert pt.open_trades[0]["sl"] == sl_after_first_trail
 
     def test_atr_trailing_inactive_before_tp2(self, monkeypatch):
@@ -548,7 +550,7 @@ class TestTradeManagerForex:
         t = tm.open_trades[tid]
         tm.on_candle_close("EUR_USD", {"high": t["tp1"] + 0.001, "low": 1.0795, "close": t["tp1"]})
         tm.on_candle_close("EUR_USD", {"high": t["tp2"] + 0.001, "low": 1.0802, "close": t["tp2"]})
-        # Trailing candle — kept clear of tp3 (1.0880) so it isn't closed early.
+        # Trailing candle — kept clear of tp3 (1.0870) so it isn't closed early.
         tm.on_candle_close(
             "EUR_USD", {"high": 1.0865, "low": 1.0855, "close": 1.0860}, atr_value=0.0020,
         )

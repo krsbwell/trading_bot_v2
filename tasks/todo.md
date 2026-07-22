@@ -1,4 +1,268 @@
-# Dashboard theme reverted to dark (#0f0f0f bg) + grid lines removed (2026-07-21, same day)
+# Change: TP R:R updated to 1.5R / 2.5R / 3.5R (2026-07-22) — LIVE-AFFECTING
+
+## Why
+User asked to test and, if it improved results, adopt TP1=1.5R / TP2=2.5R /
+TP3=3.5R (was 1.0R/2.5R/4.0R). Backtested on real OANDA data across all 5
+active pairs, 3500 bars each (using the now-fixed deterministic
+`run_backtest()` — see the entry below this one for why that fix mattered
+here specifically: the *previous* TP sweep earlier today ran before that
+fix existed, so this comparison was redone clean rather than trusted from
+memory):
+
+| Pair | Current PF/PnL | Requested (1.5/2.5/3.5) PF/PnL |
+|---|---|---|
+| USD_CAD | 1.86 / $54.89 | 1.81 / $57.92 |
+| GBP_CAD | 2.30 / $103.53 | 2.29 / $115.30 |
+| NZD_USD | 1.20 / $11.46 | 1.21 / $13.72 |
+| EUR_AUD | 2.09 / $71.99 | 1.83 / $69.27 — the one pair that got worse |
+| GBP_USD | 2.26 / $47.93 | 2.56 / $58.41 — clearly better |
+
+4 of 5 pairs improved on PnL; profit factor improved or held flat on 3 of
+them. Only EUR_AUD declined (PF 2.09→1.83; PnL itself barely moved,
+-$2.72). Every pair's max drawdown ticked up slightly (a later TP1 means
+more open-risk time before the first 40% locks in), but not enough to
+offset the gains. Net positive across the roster — adopted.
+
+## What changed
+- `risk/risk_manager.py::get_tp_levels()`: TP1/TP2/TP3 multiples changed
+  from 1.0R/2.5R/4.0R to 1.5R/2.5R/3.5R. Docstring updated with the
+  backtest rationale.
+- `tests/test_trade.py`: one test
+  (`TestPaperTraderATRTrailing::test_atr_trailing_only_advances_never_retreats`)
+  had a hardcoded candle high (1.0870) that, for the fixture's entry/SL
+  (1.0800/1.0780), exactly coincided with the *new* TP3 level — same
+  arithmetic coincidence the class's own comment already warned about for
+  the *old* TP3 (1.0880), just landing in a different spot now. Adjusted
+  the price to 1.0868 (stays clear of the new 1.0870 TP3) and updated the
+  two stale comments that cited the old TP3 price (1.0880/1.0720 →
+  1.0870/1.0730). No other tests were affected — the shared `_tp()` test
+  helper calls the real `get_tp_levels()`, so everything else picked up
+  the new levels automatically.
+- Dashboard R:R displays (`dashboard/panels.py`) compute R:R live from
+  actual trade data, not hardcoded to the old ratios — nothing to update
+  there.
+
+## Review
+242/242 tests pass. This is a **live-trading-affecting change** — every
+new trade opened by paper or live mode from now on uses the new TP levels;
+in-progress trades opened before this change keep whatever TP levels they
+were assigned at open time (stored per-trade, not recalculated).
+**How to notice a recurrence/regression**: watch realised PF/PnL on
+paper trades over the next couple of weeks and compare against this
+table's backtested expectation per pair; if EUR_AUD's live results
+degrade further than this backtest suggested, that's the pair to
+reconsider first.
+
+---
+
+# Fix: backtester never computed real d_trend + found/fixed a bigger determinism bug (2026-07-22)
+
+## Why
+Follow-up to the research pass below: user asked to fix the flagged
+infrastructure gap so D-trend-alignment (and any other daily-timeframe idea)
+becomes actually testable. `backtest.runner.run_backtest()` only ever
+fetched H1 and H4 candles, so `d_trend` in every recorded signal silently
+stayed at its `"neutral"` fallback default forever.
+
+## What changed
+
+**1. `backtest/runner.py::run_backtest()` gained an optional `df_d` param.**
+When supplied, `d_trend` is computed the same way `engine/signal_engine.py`
+does live — close vs EMA20 on the last *fully closed* daily candle (looked
+up via `Series.asof(bar_time.normalize() - 1 day)`, so it's impossible for
+a bar to see a same-day-or-later daily candle — no lookahead). When omitted,
+behavior is byte-identical to before (`d_trend` stays `"neutral"`) — fully
+backward compatible, confirmed via test.
+- `_bt_sig_features()` now takes a `d_trend` param instead of hardcoding the
+  literal.
+- New helpers `_prep_daily_trend()` / `_d_trend_at()` do the precompute-once
+  + per-bar lookup.
+- CLI (`backtest/runner.py`'s `__main__` block) and the dashboard's
+  "Standard backtest mode" callback (`dashboard/app.py`) now fetch 200 Daily
+  candles and pass them through — best-effort, a failed fetch just leaves
+  `d_trend` at `"neutral"` (it's a logged feature, never a trading gate, so
+  there's nothing to hard-fail on). `run_walk_forward()` / WFO's grid search
+  / `pattern_learner.py`'s seeding call were deliberately left unchanged —
+  none of them need `d_trend`, and `df_d` being optional means they're
+  unaffected either way.
+
+**2. Found a second, more consequential bug while verifying the first fix
+was behavior-neutral**: called `run_backtest()` twice in one process with
+byte-identical arguments (same pair, same candle data) and got **different
+trade counts and different total PnL both times** — nothing to do with
+`d_trend`. Root cause: `engine/strategy_ema_cci_macd.py`'s module-level EMA
+auto-fit cache (`_cache`) persists across calls and isn't scoped to a single
+backtest run, so a second call for the same pair can silently reuse an EMA
+period fit computed against a different bar range than its own current
+progression. Confirmed by calling `clear_cache()` between the two runs —
+made them identical.
+
+This matters beyond just my testing: **`run_walk_forward()` and WFO's grid
+search both call `run_backtest()` many times for the same pair, by design**
+(that's the whole point of a sweep/grid search) — every one of those calls
+after the first could have been silently contaminated by leftover cache
+state from the previous call, for as long as this bug has existed. Not
+saying any specific past WFO result is wrong — no way to retroactively
+verify that — but the mechanism for it being wrong was real and live in
+every multi-call backtest comparison, including several run this session
+(ATR trailing sweep, breakeven sweep, TP R:R sweep).
+
+**Fix**: `run_backtest()` now calls `clear_cache()` on all three strategy
+modules (`strategy_ema_cci_macd`, `strategy_breakout_retest`,
+`strategy_trend_follow` — the latter two only clear diagnostics dicts,
+harmless either way, but included for consistency) as the very first thing
+it does. This guarantees every call starts from clean state regardless of
+what ran before it in the same process — callers no longer need to
+remember to clear anything themselves.
+
+## Tests added
+`tests/test_backtest_dtrend_and_determinism.py` (7 new tests):
+- Repeated identical calls now produce identical results (the actual bug).
+- A different pair backtested in between doesn't contaminate the original.
+- `d_trend` stays `"neutral"` without `df_d` (backward compat).
+- `d_trend` correctly resolves `"bull"`/`"bear"` with a clearly-trending
+  synthetic `df_d`.
+- `df_d` never changes which trades are taken or their PnL — confirmed
+  identical trade count/PnL with and without it, only the logged `d_trend`
+  field differs.
+- Too-short `df_d` (<20 bars) falls back to `"neutral"` without crashing.
+
+## Review
+242 tests pass (235 → 242). Re-verified end-to-end against real OANDA data
+after the determinism fix: `d_trend` now shows a genuine bull/bear mix
+(14/13 on a 27-trade USD_CAD run) instead of 100% neutral, trade
+count/PnL are byte-identical with vs. without `df_d` (confirms d_trend
+truly doesn't influence trading decisions, only what gets logged), and
+repeated calls with identical arguments now return identical results.
+**How to notice a recurrence**: if a future backtest sweep script shows
+suspicious result drift between configs that shouldn't affect trade
+timing, check whether `run_backtest()` is still clearing caches at entry
+(`git blame`/grep for the three `_clear_*_cache()` calls near the top of
+the function) before assuming the strategy change itself is responsible.
+
+## Follow-up (same day): D-trend alignment hypothesis tested — rejected
+
+Added an `require_d_trend_alignment` param to `run_backtest()` (off by
+default, EXPERIMENTAL, not wired into any live strategy file) — when on,
+a signal only opens if `d_trend` agrees with its direction. Backtested on
+all 5 active pairs, 3500 bars each, gate off vs on:
+
+| Pair | Off: PF / PnL | On: PF / PnL |
+|---|---|---|
+| USD_CAD | 1.87 / $55.42 | 2.50 / $64.36 — better |
+| GBP_CAD | 2.24 / $98.62 | 1.91 / $47.83 — worse |
+| NZD_USD | 1.21 / $12.36 | 0.88 / **-$5.82** — flips to a net loser |
+| EUR_AUD | 2.09 / $71.99 | 1.06 / $4.31 — PnL down 94% |
+| GBP_USD | 2.26 / $47.93 | 1.17 / $4.48 — PnL down 91%, trades nearly halved |
+
+Only USD_CAD improved; the other four got meaningfully worse, two
+severely. Same shape of result as the ATR-trailing and breakeven
+rejections: an intuitively appealing extra filter reduces trade count
+without a matching quality improvement — Daily trend often lags or
+diverges from the H4 trend already required, so demanding both to agree
+mostly just removes trades that were fine. **Rejected — `require_d_trend_alignment` stays off, not adopted anywhere.** One pair improving isn't
+enough to justify it given the broader pattern (same reasoning already
+applied to keeping GBP_CAD off breakout-retest despite it testing well on
+other pairs).
+
+## Not done here (out of scope for this pass)
+The EUR_USD stale-signal-duplication bug flagged in the research pass below
+is still open (unrelated file, different root cause, not requested this
+round).
+
+---
+
+# Strategy improvement research pass (2026-07-22) — no change adopted, real findings below
+
+## Why
+User asked directly: given fast analysis and full repo access, why hasn't the
+strategy's win rate been improved — proactively research genuinely new
+angles, not just react to specific requests like the ATR-trailing/breakeven
+work earlier.
+
+## What was checked
+
+**1. Shadow signal-log mining (`data/signal_log.csv`, 178 rows, 120 after
+exact-dup removal).** Found a real bug in the process: **EUR_USD has 10 rows
+spanning 2026-06-30→2026-07-22 with the exact identical entry/SL/TP prices
+(1.08000/1.078/1.082)** — a stale/cached signal getting re-logged as "new"
+every scan for three weeks, all tagged `would_win`, inflating that slice to a
+fake 100% win rate. EUR_USD isn't even an active or watched pair anymore, so
+this doesn't affect live trading, but it silently corrupts this file for
+analysis purposes. Root cause not yet dug into — likely the same class of
+issue as [[bugs_shadow_outcome_duplication]] (a shadow-tracked setup that
+never resolves keeps re-logging). Worth a follow-up if this file is going to
+keep being used for analysis.
+
+Separately found: **`pnl_pips` is 0.0 for effectively every row** —
+49/49 `would_win`, 38/38 `would_lose`, and most real `win`/`loss` rows too.
+Only the categorical outcome label is usable; magnitude-of-outcome analysis
+isn't possible from this file as currently populated.
+
+After removing the contaminated EUR_USD rows and restricting to the 5
+currently active pairs, two patterns that looked promising on the raw data
+(NZD_USD 18.8% WR "underperforming" its 36% promotion backtest; short-side
+54.5% WR vs long-side 41.5%) **both evaporated once filtered to signals that
+actually cleared each pair's own WFO min_score (55)** — the qualifying
+sample shrank to 27 rows total across all 5 pairs over 2.5 months, direction
+skew reversed, and NZD_USD's real qualifying sample was just 3 signals.
+**Conclusion: there isn't enough live signal volume yet for reliable
+pattern-mining from logs — real backtesting against price history has far
+more statistical power right now.**
+
+**2. TP R:R multiple sweep** (`risk_manager.get_tp_levels`, currently
+1.0R/2.5R/4.0R — never touched by WFO's grid search, only ever hand-tuned).
+Backtested on USD_CAD/GBP_USD/GBP_CAD, 3500 bars each, same candle data
+across all variants per pair:
+
+| Config | USD_CAD PF/PnL | GBP_USD PF/PnL | GBP_CAD PF/PnL |
+|---|---|---|---|
+| current (1.0/2.5/4.0) | 1.82 / $52.98 | 2.26 / $47.93 | 2.11 / $93.42 |
+| old pre-tighten (1.5/3.0/5.0) | 1.32 / $24.64 | 1.64 / $22.73 | 1.88 / $65.90 |
+| tighter (0.75/2.0/3.0) | 1.54 / $43.32 | 2.24 / $38.12 | 2.02 / $69.29 |
+| TP1 later (1.3/2.5/4.0) | 1.73 / $52.40 | 2.44 / $54.43 | 2.00 / $88.74 |
+
+Confirms the earlier hand-tightening from 1.5/3.0/5.0 to the current values
+was a genuine improvement (this is the first time it's been backtest-
+validated rather than just asserted in a code comment). Neither new variant
+tested (tighter, later-TP1) beats current cleanly across all three pairs —
+TP1-later wins on GBP_USD, loses on GBP_CAD, roughly flat on USD_CAD.
+**No change adopted — current R:R levels hold up.**
+
+**3. D-trend alignment as a signal gate** (`d_trend` is computed and logged
+today but never gates anything, unlike `h4_trend` which is a hard gate).
+Pulled real backtest trade logs (122 trades across 4 pairs) to check —
+**found every single trade shows `d_trend='neutral'`**, which is itself the
+finding: `backtest.runner.run_backtest()` only ever fetches H1 and H4 candle
+data, never Daily, so `d_trend` inside the backtest silently stays at its
+uninitialized default the whole time (matches `engine/signal_engine.py:110`'s
+`h4_trend = d_trend = "neutral"` fallback). This means **this hypothesis is
+currently untestable** without first threading real Daily-candle data through
+the backtester — a real infrastructure gap, not a dead-end finding. Confirmed
+`d_trend` isn't used as a decision input anywhere in
+`engine/strategy_ema_cci_macd.py` today (display/logging only), so this gap
+doesn't invalidate the TP R:R results above — those don't depend on d_trend.
+
+## Recommendation
+No strategy or config change made this pass — everything tested either
+confirmed the current setup is already good (TP R:R) or ruled itself out as
+untestable/unreliable given current data (D-trend, shadow-log mining). Two
+concrete, scoped follow-ups worth doing, neither started here:
+1. Root-cause the EUR_USD stale-signal duplication (data-integrity bug,
+   doesn't affect live trading but corrupts analysis).
+2. Wire real Daily-candle fetching into `backtest.runner.run_backtest()` so
+   D-trend-alignment (and any other daily-timeframe idea) can actually be
+   backtested — currently impossible to test honestly.
+
+## Review
+All numbers from real `backtest.runner.run_backtest()` runs against live
+OANDA candle data (same methodology as the ATR-trailing and breakeven
+validations), not estimates. No files changed — this was a research-only
+pass; `config.py` and strategy files are untouched.
+
+---
+
+
 
 ## Why
 After trying the `#9c9c9c` light theme below, user found it "doesn't seem

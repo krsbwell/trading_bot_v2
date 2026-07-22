@@ -3566,10 +3566,23 @@
                 secondsVisible:false, rightOffset:5, shiftVisibleRangeOnNewBar:false },
         });
 
+        /* Double-click anywhere on the chart canvas (candles or empty space —
+           NOT a drawing, which has its own dblclick handler on a separate
+           overlay element and never reaches this) toggles the CCI/MACD panes
+           on and off, to quickly reclaim vertical space for the price chart.
+           Reset on every init() (pair/TF reload reloads _indSettings fresh),
+           so a "hidden" flag from a previous pair can't leak into this one. */
+        _indPanesHidden = false;
+        _indPanesSavedVisible = null;
+        chart.subscribeDblClick(function(param) {
+            if (!param || !param.point) return;
+            _toggleIndicatorPanes();
+        });
+
         S.candle = chart.addSeries(LC().CandlestickSeries, {
-            upColor:'#00ff88', downColor:'#ff3366',
-            borderUpColor:'#000000', borderDownColor:'#000000',
-            wickUpColor:'#00ff88', wickDownColor:'#ff3366',
+            upColor:'#26a69a', downColor:'#ff3366',
+            borderVisible: false,
+            wickUpColor:'#26a69a', wickDownColor:'#ff3366',
             priceFormat: priceFormat(_currentPair),
         }, 0);
         /* TWLC v5: markers are a separate plugin, not series.setMarkers() */
@@ -4845,6 +4858,31 @@
             });
             S.macd.setData(recolored);
         } catch(e) {}
+    }
+
+    /* Double-click-on-chart quick toggle — shows/hides the CCI + MACD panes
+       without touching their saved "Visible" checkbox state in the Indicator
+       Settings modal; toggling back restores exactly what was active before. */
+    var _indPanesHidden = false;
+    var _indPanesSavedVisible = null;
+    function _toggleIndicatorPanes() {
+        if (!_indSettings) return;
+        if (!_indPanesHidden) {
+            _indPanesSavedVisible = {
+                cci:  !!(_indSettings.cci  && _indSettings.cci.visible),
+                macd: !!(_indSettings.macd && _indSettings.macd.visible),
+            };
+            if (_indSettings.cci)  _indSettings.cci.visible  = false;
+            if (_indSettings.macd) _indSettings.macd.visible = false;
+            _indPanesHidden = true;
+        } else {
+            if (_indPanesSavedVisible) {
+                if (_indSettings.cci)  _indSettings.cci.visible  = _indPanesSavedVisible.cci;
+                if (_indSettings.macd) _indSettings.macd.visible = _indPanesSavedVisible.macd;
+            }
+            _indPanesHidden = false;
+        }
+        _applyIndVisualSettings();
     }
 
     /* Apply visual settings to live chart series (no reload needed) */

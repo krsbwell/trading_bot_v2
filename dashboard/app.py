@@ -3058,11 +3058,21 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
     except Exception as exc:
         return f"Data fetch failed: {exc}", html.Div()
 
+    # Daily candles for d_trend — best-effort, only used as a logged feature
+    # (not a trading gate), so a failed fetch just leaves it at "neutral".
+    df_d = None
+    try:
+        gran_d = "D" if is_forex else "1Day"
+        df_d = connector.get_candles(pair, gran_d, 200)
+    except Exception:
+        pass
+
     from backtest.runner import run_backtest
     res    = run_backtest(pair, df_h1, df_h4,
                           starting_balance=balance,
                           min_score=state.get_key("min_score", config.MIN_CONFLUENCE_SCORE),
-                          market=market)
+                          market=market,
+                          df_d=df_d)
 
     if "error" in res:
         return f"Backtest error: {res['error']}", no_update

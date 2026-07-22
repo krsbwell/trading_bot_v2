@@ -22,7 +22,10 @@ import pandas as pd
 import config
 from engine.strategy_ema_cci_macd import (
     check_buy_signal, check_sell_signal, get_best_emas, get_stop_loss,
+    clear_cache as _clear_ema_cache,
 )
+from engine.strategy_breakout_retest import clear_cache as _clear_breakout_cache
+from engine.strategy_trend_follow import clear_cache as _clear_trend_cache
 from engine.strategy_market_structure import (
     detect_pivots, classify_structure, detect_bos_choch, get_sr_zones, score_structure,
 )
@@ -59,11 +62,46 @@ def _bt_session(dt) -> str:
     return "asian"
 
 
+def _prep_daily_trend(df_d: "pd.DataFrame | None"):
+    """
+    Precompute a (daily_close, daily_ema20) pair of Series for fast per-bar
+    d_trend lookups. Returns None if df_d is missing or too short — callers
+    then fall back to the "neutral" default, same as before this existed.
+    """
+    if df_d is None or len(df_d) < 20:
+        return None
+    try:
+        return df_d["close"], _ema_fn(df_d["close"], 20)
+    except Exception:
+        return None
+
+
+def _d_trend_at(daily_prep, bar_time) -> str:
+    """
+    d_trend as of the last FULLY CLOSED daily candle strictly before
+    bar_time's calendar day — never the still-forming "today" bar, so this
+    can't leak lookahead into the backtest.
+    """
+    if daily_prep is None:
+        return "neutral"
+    d_close, d_ema = daily_prep
+    try:
+        cutoff    = pd.Timestamp(bar_time).normalize() - pd.Timedelta(days=1)
+        close_val = d_close.asof(cutoff)
+        ema_val   = d_ema.asof(cutoff)
+        if pd.isna(close_val) or pd.isna(ema_val):
+            return "neutral"
+        return "bull" if close_val > ema_val else "bear"
+    except Exception:
+        return "neutral"
+
+
 def _bt_sig_features(
     pair: str, direction: str, bar_time,
     slice_h1: pd.DataFrame, slice_h4: pd.DataFrame,
     ema_score: float, struct_score: float, pa_score: float, final_score: float,
     structure: str, sr_zones: list, bos_ok: bool, patterns: list, entry: float,
+    d_trend: str = "neutral",
 ) -> dict:
     """Compute the full ML feature set at signal time for seeding PatternLearner."""
     try:
@@ -112,7 +150,7 @@ def _bt_sig_features(
         "upper_wick_ratio":    round(_uw,  4),
         "lower_wick_ratio":    round(_lw,  4),
         "h4_trend":            _h4_trend,
-        "d_trend":             "neutral",
+        "d_trend":             d_trend,
         "market_structure":    _STRUCT_MAP.get(structure, "ranging"),
         "was_at_sr_zone":      int(_was_sr),
         "bos_confirmed":       int(bos_ok),
@@ -137,6 +175,8 @@ def run_backtest(
     buy_fn=check_buy_signal,
     sell_fn=check_sell_signal,
     stop_loss_fn=get_stop_loss,
+    df_d: "pd.DataFrame | None" = None,
+    require_d_trend_alignment: bool = False,
 ) -> dict:
     """
     Run a full backtest for one pair.
@@ -145,6 +185,22 @@ def run_backtest(
     signatures as strategy_ema_cci_macd's. Default to EMA-bounce; pass
     engine.strategy_trend_follow's or engine.strategy_breakout_retest's
     functions to backtest those strategies instead.
+
+    df_d: optional Daily-granularity candles for the same pair/period. When
+    omitted, d_trend in the recorded signal features stays "neutral" for
+    every trade (the pre-existing behavior — d_trend isn't a decision input
+    anywhere in the strategies, only a logged/display feature, so omitting
+    it doesn't change which trades are taken). When supplied, d_trend is
+    computed from the last fully-closed daily candle before each bar, same
+    method engine/signal_engine.py uses live (close vs EMA20).
+
+    require_d_trend_alignment: EXPERIMENTAL, off by default, untested in
+    live trading — when True, a signal only opens a trade if d_trend agrees
+    with its direction (long needs "bull", short needs "bear"; "neutral"
+    never qualifies either way). Requires df_d to be meaningful — with no
+    df_d, d_trend is always "neutral" and this blocks every trade. Purely
+    for backtesting this specific hypothesis; not wired into any live
+    strategy file.
 
     Returns a dict with:
         trades          : list of closed trade dicts
@@ -155,6 +211,19 @@ def run_backtest(
         total_signals   : int
         signal_log      : list of {bar_idx, direction, score, entry, sl, tp1}
     """
+    # Strategy modules keep module-level state across calls (EMA auto-fit
+    # cache in particular) that otherwise leaks between repeated backtests
+    # for the same pair in one process — e.g. run_walk_forward()'s grid
+    # search and WFO both call this function many times back-to-back for
+    # the same pair. Without clearing first, a later call can silently
+    # reuse an EMA fit computed against a different bar range than its own,
+    # making results non-reproducible even with byte-identical arguments
+    # (confirmed: two back-to-back calls with the exact same df_h1/df_h4
+    # produced different trade counts and PnL before this fix).
+    _clear_ema_cache()
+    _clear_breakout_cache()
+    _clear_trend_cache()
+
     if len(df_h1) < _WARMUP + 50 or len(df_h4) < 50:
         logger.warning("Backtest %s: insufficient data (%d primary, %d confirm)", pair, len(df_h1), len(df_h4))
         return {"error": "insufficient_data"}
@@ -163,9 +232,11 @@ def run_backtest(
     equity      = []
     signal_log  = []
     peak        = starting_balance
+    daily_prep  = _prep_daily_trend(df_d)
 
     for i in range(_WARMUP, len(df_h1)):
         bar_time = df_h1.index[i]
+        d_trend  = _d_trend_at(daily_prep, bar_time)
 
         # Build H1 slice up to and including bar i
         slice_h1 = df_h1.iloc[:i + 1].copy()
@@ -204,6 +275,11 @@ def run_backtest(
         else:
             direction, ema_score = "short", sell_score
 
+        if require_d_trend_alignment:
+            _wants = "bull" if direction == "long" else "bear"
+            if d_trend != _wants:
+                continue
+
         pivots_h1    = detect_pivots(slice_h1)
         structure    = classify_structure(pivots_h1)
         pivots_h4    = detect_pivots(slice_h4)
@@ -230,7 +306,7 @@ def run_backtest(
             _provisional = _bt_sig_features(
                 pair, direction, bar_time, slice_h1, slice_h4,
                 ema_score, struct_score, pa_score, ema_score + struct_score + pa_score,
-                structure, sr_zones, bos_ok, patterns, entry,
+                structure, sr_zones, bos_ok, patterns, entry, d_trend,
             )
             try:
                 ml_win_prob = _ml_model().predict_win_prob(_provisional)
@@ -258,7 +334,7 @@ def run_backtest(
             pair, direction, bar_time,
             slice_h1, slice_h4,
             ema_score, struct_score, pa_score, final_score,
-            structure, sr_zones, bos_ok, patterns, entry,
+            structure, sr_zones, bos_ok, patterns, entry, d_trend,
         )
         pt.open_trade(pair=pair, direction=direction, entry_price=entry,
                       sl=stop_loss, tp_levels=tp_levels, size=size,
@@ -510,10 +586,21 @@ if __name__ == "__main__":
     df_h1 = conn.get_candles(args.pair, primary, args.bars)
     df_h4 = conn.get_candles(args.pair, confirm, args.bars // 2)
 
+    # Daily candles for d_trend — 200 bars comfortably covers even the
+    # largest bar counts this CLI is normally run with; best-effort, a
+    # failed/short fetch just leaves d_trend at "neutral" (unchanged from
+    # before this existed), it's a logged feature, not a trading gate.
+    df_d = None
+    try:
+        df_d = conn.get_candles(args.pair, "D", 200)
+    except Exception as exc:
+        logger.warning("Daily candle fetch failed (d_trend will stay 'neutral'): %s", exc)
+
     res = run_backtest(args.pair, df_h1, df_h4,
                        starting_balance=args.balance,
                        market="forex" if "_" in args.pair else "crypto",
-                       buy_fn=_buy_fn, sell_fn=_sell_fn, stop_loss_fn=_sl_fn)
+                       buy_fn=_buy_fn, sell_fn=_sell_fn, stop_loss_fn=_sl_fn,
+                       df_d=df_d)
 
     if "error" in res:
         logger.error("Backtest failed: %s", res["error"])
