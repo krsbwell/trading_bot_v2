@@ -1,0 +1,32 @@
+"""
+Per-pair strategy function dispatch — shared by the live signal engine and
+the backtester so both always route a pair to the same buy/sell/stop-loss/
+diagnostics functions, per config.STRATEGY_OVERRIDE. A pair not listed
+there uses "ema_bounce".
+
+Kept dependency-free of engine.signal_engine and backtest.runner (only
+imports the strategy modules themselves + config) so both of those can
+import from here without a circular import.
+"""
+import config
+from engine.strategy_ema_cci_macd import (
+    check_buy_signal as _ema_buy, check_sell_signal as _ema_sell,
+    get_stop_loss as _ema_sl, get_last_diag as _ema_diag,
+)
+from engine.strategy_breakout_retest import (
+    check_buy_signal as _br_buy, check_sell_signal as _br_sell,
+    get_stop_loss as _br_sl, get_last_diag as _br_diag,
+)
+
+# All 4 (buy, sell, stop-loss, diagnostics) must route together, since a
+# pair's diagnostics only exist in whichever module's check_buy/sell_signal
+# actually ran for it.
+STRATEGY_FNS = {
+    "ema_bounce":      (_ema_buy, _ema_sell, _ema_sl, _ema_diag),
+    "breakout_retest": (_br_buy, _br_sell, _br_sl, _br_diag),
+}
+
+
+def resolve_strategy(pair: str):
+    name = getattr(config, "STRATEGY_OVERRIDE", {}).get(pair, "ema_bounce")
+    return STRATEGY_FNS.get(name, STRATEGY_FNS["ema_bounce"])

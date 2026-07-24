@@ -192,9 +192,9 @@ def run_backtest(
     min_score: int = config.MIN_CONFLUENCE_SCORE,
     market: str = "forex",
     adaptive: dict | None = None,
-    buy_fn=check_buy_signal,
-    sell_fn=check_sell_signal,
-    stop_loss_fn=get_stop_loss,
+    buy_fn=None,
+    sell_fn=None,
+    stop_loss_fn=None,
     df_d: "pd.DataFrame | None" = None,
     require_d_trend_alignment: bool = False,
 ) -> dict:
@@ -202,9 +202,18 @@ def run_backtest(
     Run a full backtest for one pair.
 
     buy_fn/sell_fn/stop_loss_fn: signal/stop-loss functions with the same
-    signatures as strategy_ema_cci_macd's. Default to EMA-bounce; pass
-    engine.strategy_trend_follow's or engine.strategy_breakout_retest's
-    functions to backtest those strategies instead.
+    signatures as strategy_ema_cci_macd's. Default to None, which resolves
+    per `pair` via engine.strategy_dispatch.resolve_strategy() — the same
+    config.STRATEGY_OVERRIDE-driven dispatch the live signal engine uses
+    (e.g. GBP_USD -> breakout_retest). Pass explicit functions to force a
+    specific strategy regardless of pair (used by the CLI's --strategy flag
+    and by tests). Before this default existed (2026-07-24), every caller
+    that didn't explicitly pass these — the dashboard's Backtest and
+    Walk-Forward buttons, run_walk_forward()'s own internal calls, and the
+    weekly WFO refit job — silently backtested/tuned GBP_USD against
+    EMA-bounce instead of the breakout_retest strategy it actually runs
+    live, making its WFO-tuned params meaningless (breakout_retest doesn't
+    even read the same adaptive keys WFO searches over).
 
     df_d: optional Daily-granularity candles for the same pair/period. When
     omitted, d_trend in the recorded signal features stays "neutral" for
@@ -231,6 +240,13 @@ def run_backtest(
         total_signals   : int
         signal_log      : list of {bar_idx, direction, score, entry, sl, tp1}
     """
+    if buy_fn is None or sell_fn is None or stop_loss_fn is None:
+        from engine.strategy_dispatch import resolve_strategy
+        _resolved_buy, _resolved_sell, _resolved_sl, _ = resolve_strategy(pair)
+        buy_fn        = buy_fn        or _resolved_buy
+        sell_fn       = sell_fn       or _resolved_sell
+        stop_loss_fn  = stop_loss_fn  or _resolved_sl
+
     # Strategy modules keep module-level state across calls (EMA auto-fit
     # cache in particular) that otherwise leaks between repeated backtests
     # for the same pair in one process — e.g. run_walk_forward()'s grid

@@ -216,6 +216,13 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         cci_at_touch_val = float(cci_win.min())
         # CCI must be below -cci_threshold at touch (adaptive: tighter when win rate is low)
         c4 = cci_at_touch_val < -cci_threshold
+        # ── CCI-touch gate: hard-block when CCI_TOUCH_GATE_BLOCKING=True ─────
+        if not c4 and config.CCI_TOUCH_GATE_BLOCKING:
+            _buy_diag[pair] = dict(c1=c1, c2=c2, c3=c3, c4=False, c5=False,
+                                   c6=False, c7=False, cci_at_touch_val=cci_at_touch_val,
+                                   cci_current=float(cci_h1.iloc[-1]),
+                                   macd_hist_val=float(macd_hist.iloc[-1]))
+            return 0.0   # CCI not oversold at touch — skip entirely
         c5 = cci_h1.iloc[-1] > -30
         # MACD: require macd_bars_needed of last 3 bars positive
         if len(macd_hist) >= 3:
@@ -321,6 +328,13 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         cci_at_touch_val = float(cci_win.max())
         # CCI must be above +cci_threshold at touch (adaptive: tighter when win rate is low)
         c4 = cci_at_touch_val > cci_threshold
+        # ── CCI-touch gate: hard-block when CCI_TOUCH_GATE_BLOCKING=True ─────
+        if not c4 and config.CCI_TOUCH_GATE_BLOCKING:
+            _sell_diag[pair] = dict(c1=c1, c2=c2, c3=c3, c4=False, c5=False,
+                                    c6=False, c7=False, cci_at_touch_val=cci_at_touch_val,
+                                    cci_current=float(cci_h1.iloc[-1]),
+                                    macd_hist_val=float(macd_hist.iloc[-1]))
+            return 0.0   # CCI not overbought at touch — skip entirely
         c5 = cci_h1.iloc[-1] < 30
         # MACD: require macd_bars_needed of last 3 bars negative
         if len(macd_hist) >= 3:

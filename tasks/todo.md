@@ -1,3 +1,121 @@
+# Fix: backtest/WFO silently used the wrong strategy for GBP_USD (2026-07-24) — LIVE-AFFECTING
+
+## Why
+Found while testing the CCI-touch gate (below): `run_backtest()` defaulted
+`buy_fn`/`sell_fn`/`stop_loss_fn` to the EMA-bounce functions directly, so
+every caller that didn't explicitly override them — the dashboard's
+Backtest and Walk-Forward buttons, `run_walk_forward()`'s own internal
+grid-search calls, and the **weekly live WFO refit job**
+(`engine/wfo_optimizer.py`) — silently tested/tuned GBP_USD against
+EMA-bounce, even though GBP_USD actually runs `strategy_breakout_retest`
+live (`config.STRATEGY_OVERRIDE`). Worse: `strategy_breakout_retest`
+doesn't even read most of what WFO's grid searches over (`CCI_PERIOD`,
+`MACD_*`, `cci_threshold`, `touch_lookback`, `adx_threshold` — its own
+`check_buy_signal` only reads `retest_band_mult`, not in the WFO grid at
+all), so GBP_USD's stored WFO params were doubly meaningless.
+
+## What changed
+- New `engine/strategy_dispatch.py`: the per-pair strategy dispatch table
+  (`STRATEGY_FNS`) and `resolve_strategy(pair)` resolver, extracted out of
+  `engine/signal_engine.py` (which had its own private copy) so both the
+  live signal engine and the backtester can share one source of truth
+  without a circular import (this module has zero dependency on either).
+- `engine/signal_engine.py`: now imports `resolve_strategy` from the new
+  module instead of defining its own; behavior unchanged.
+- `backtest/runner.py::run_backtest()`: `buy_fn`/`sell_fn`/`stop_loss_fn`
+  now default to `None` and auto-resolve per `pair` via
+  `strategy_dispatch.resolve_strategy()` when not explicitly passed.
+  Explicit overrides (the CLI's `--strategy` flag, tests using stub
+  functions) are unaffected — this only changes what happens when nothing
+  is passed, which every affected caller does.
+- Checked all tests that pass `pair="GBP_USD"` to `run_backtest()` before
+  changing the default — only one (`test_repeated_calls_with_different_
+  pairs_dont_cross_contaminate`), and it only asserts EUR_USD's own
+  results are unaffected by an interleaved GBP_USD call, not what strategy
+  GBP_USD itself used. Safe.
+- **Verified end-to-end**: `run_backtest("GBP_USD", df_h1, df_h4)` with no
+  strategy args now produces byte-identical results (17 trades, PF=2.57,
+  PnL=$58.85) to an explicit `breakout_retest` call — confirms the
+  resolution now actually works, not just "doesn't crash."
+- All 252 tests pass.
+
+## Follow-through: re-fit GBP_USD's WFO params
+Triggered `wfo_optimizer.run_all_pairs(..., ["GBP_USD"], ...)` manually
+rather than waiting for the weekly cycle. Old params (fit 2026-06-25,
+almost certainly against EMA-bounce): `min_score=55`, WR=33.3%, 9 trades,
+composite score=0.999. New fit (correctly against breakout_retest):
+`min_score=50`, WR=63.6%, 11 trades, composite score=4.0. Saved to
+`data/wfo_params.json` — takes effect automatically (same as it does for
+every pair, weekly, with no manual gate).
+
+**Validated over a longer window before trusting the IS fit** (3500 M30
+bars, real backtest, not just WFO's own shorter in-sample window):
+
+| min_score | WR | PF | PnL | MaxDD | trades |
+|---|---|---|---|---|---|
+| 55 (old) | 50.0% | 2.29 | $47.43 | 3.1% | 16 |
+| 50 (new) | 45.5% | 1.94 | $79.71 | 7.1% | 33 |
+
+Real trade-off, not a clean win: +68% PnL and more trade volume, but PF
+drops and MaxDD more than doubles. Flagged to the user rather than treating
+the WFO fit as automatically correct — this is just WFO now correctly
+targeting the right strategy, not a manually-reviewed change like the
+other three today. Left as-is (WFO's own output already live) pending the
+user's call on whether to keep it or pin back to 55.
+
+## Review
+Root-cause fix, not a per-call patch — one shared resolver used
+everywhere, so this class of bug can't recur at a new call site the way it
+would have if each caller (dashboard, WFO, run_walk_forward) had been
+individually patched.
+
+---
+
+# Test: CCI-at-touch (c4) hard gate — tested, rejected (2026-07-24)
+
+## Why
+While explaining a marginal USD_CAD trade to the user (confluence_score 56,
+just 1 point above the 55 threshold, entered despite failing c4 — CCI
+reached only -19.67 against a required -30), offered to test whether
+making c4 a hard gate (like c2/H4) would improve results, the same way
+every other condition-strictness question has been tested this week.
+
+## What was tested
+Added `config.CCI_TOUCH_GATE_BLOCKING` (default `False`, no live behavior
+change) + a hard-block check in both `check_buy_signal`/`check_sell_signal`
+in `engine/strategy_ema_cci_macd.py`, mirroring the existing c2/H4 hard-gate
+pattern. Backtested soft-scored (current) vs hard-gated across all 5
+active pairs, 3500 M30 bars each, under today's live settings:
+
+| Pair | Current (soft-scored) | Hard gate |
+|---|---|---|
+| USD_CAD | PF 2.54, PnL $74.47, 22 trades | PF 1.76, PnL $36.11, 17 trades — worse |
+| GBP_CAD | PF 3.47, PnL $128.51, 26 trades | PF 3.30, PnL $36.53, 8 trades — PF ~same, PnL collapses |
+| NZD_USD | PF 1.85, PnL $45.32, 20 trades | PF 2.52, PnL $45.76, 14 trades — PF up, PnL flat |
+| EUR_AUD | PF 2.42, PnL $75.32, 27 trades | PF 1.76, PnL $21.91, 14 trades — worse |
+| GBP_USD | n/a — see below | n/a |
+
+**GBP_USD row excluded**: same methodology gap as the H4-gate test two
+entries below — the sweep script doesn't pass GBP_USD's real
+`strategy_breakout_retest` functions into `run_backtest()`, so it silently
+tested EMA-bounce instead. `CCI_TOUCH_GATE_BLOCKING` isn't referenced
+anywhere in `strategy_breakout_retest.py`, so the real live GBP_USD
+strategy is unaffected by this flag regardless — not worth re-running.
+
+## Result: rejected
+Even NZD_USD — the best candidate, since c4 is its own historically
+weakest condition too — barely moves total PnL despite a real PF gain,
+because the hard gate cuts trade count by 30%+ across every pair. Same
+shape of result as ATR trailing, breakeven, and the Daily-trend gate
+(see [[project_strategy_research_2026_07_22]]): another confirmation
+filter reduces trade volume without a matching quality improvement.
+**Not shipped.** `CCI_TOUCH_GATE_BLOCKING` stays at its default `False` —
+zero live behavior change. Flag and hard-gate code left in place
+(commented rationale in `config.py`) in case a different mechanism is
+worth trying later, same convention as `ATR_TRAILING_ENABLED`.
+
+---
+
 # Change: NZD_USD given its own H4-gate override — loosened (2026-07-24) — LIVE-AFFECTING
 
 ## Why

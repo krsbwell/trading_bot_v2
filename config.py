@@ -155,6 +155,17 @@ H4_GATE_BLOCKING_PER_PAIR: dict = {
     "NZD_USD": False,
 }
 
+# ── CCI-at-touch gate (c4) ───────────────────────────────────────────────────
+# c4 requires CCI to be sufficiently extreme (oversold/overbought) at the exact
+# EMA-touch bar. Currently soft-scored (contributes to the 6-condition ratio
+# but never blocks alone) — this is the single weakest condition across all
+# logged signals (~28% pass rate, the persistent "bottleneck" in the Signal
+# Quality panel). Off by default pending backtest validation (2026-07-24):
+# same convention as H4_GATE_BLOCKING/ML_SCORE_BOOST_ENABLED — a change that
+# alters live trigger rate/frequency shouldn't flip on without a comparison
+# first.
+CCI_TOUCH_GATE_BLOCKING = False
+
 
 def h4_gate_blocking_for(pair: str) -> bool:
     """Resolve H4_GATE_BLOCKING for a pair — H4_GATE_BLOCKING_PER_PAIR wins if set."""

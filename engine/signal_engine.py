@@ -6,14 +6,8 @@ import pandas as pd
 
 import config
 from engine.indicators import ema, atr as calc_atr, cci, macd_histogram
-from engine.strategy_ema_cci_macd import (
-    check_buy_signal as _ema_buy, check_sell_signal as _ema_sell,
-    get_best_emas, get_stop_loss as _ema_sl, get_last_diag as _ema_diag,
-)
-from engine.strategy_breakout_retest import (
-    check_buy_signal as _br_buy, check_sell_signal as _br_sell,
-    get_stop_loss as _br_sl, get_last_diag as _br_diag,
-)
+from engine.strategy_ema_cci_macd import get_best_emas
+from engine.strategy_dispatch import resolve_strategy
 from engine.adaptive_params import adaptive_params
 from engine.wfo_optimizer import wfo_optimizer
 from engine.strategy_market_structure import (
@@ -36,20 +30,6 @@ _ml_model = PatternLearner()
 
 # get_candles signature: (instrument, granularity, count) → pd.DataFrame
 GetCandlesFn = Callable[[str, str, int], pd.DataFrame]
-
-# Per-pair strategy dispatch — a pair not in config.STRATEGY_OVERRIDE uses
-# "ema_bounce". All 4 (buy, sell, stop-loss, diagnostics) must route together,
-# since a pair's diagnostics only exist in whichever module's check_buy/sell_signal
-# actually ran for it.
-_STRATEGY_FNS = {
-    "ema_bounce":      (_ema_buy, _ema_sell, _ema_sl, _ema_diag),
-    "breakout_retest": (_br_buy, _br_sell, _br_sl, _br_diag),
-}
-
-
-def _resolve_strategy(pair: str):
-    name = getattr(config, "STRATEGY_OVERRIDE", {}).get(pair, "ema_bounce")
-    return _STRATEGY_FNS.get(name, _STRATEGY_FNS["ema_bounce"])
 
 
 class SignalEngine:
@@ -86,7 +66,7 @@ class SignalEngine:
         Returns a signal dict when score >= MIN_CONFLUENCE_SCORE, else None.
         Signals scoring 50–69 are logged but return None (no trade fired).
         """
-        _buy_fn, _sell_fn, _sl_fn, _diag_fn = _resolve_strategy(pair)
+        _buy_fn, _sell_fn, _sl_fn, _diag_fn = resolve_strategy(pair)
 
         # Suppress audit writes for diagnostic-only calls (e.g. _diagnostic_scan in main.py)
         _do_audit = (lambda **kw: None) if no_audit else _audit
