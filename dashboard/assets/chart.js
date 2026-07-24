@@ -3570,11 +3570,11 @@
            NOT a drawing, which has its own dblclick handler on a separate
            overlay element and never reaches this) toggles the CCI/MACD panes
            on and off, to quickly reclaim vertical space for the price chart.
-           Reset on every init() (pair/TF reload reloads _indSettings fresh),
-           so a "hidden" flag from a previous pair can't leak into this one. */
-        _indPanesHidden = false;
-        _indPanesSavedVisible = null;
+           Persisted per-pair (apex_ind_panes_hidden_<pair> — see
+           _enforceIndPanesHidden()) so it survives TF switches and periodic
+           data refreshes, not just reset on every init() like it used to be. */
         chart.subscribeDblClick(function(param) {
+            if (drawMode) return; // draw tool active: let the click handler place the drawing instead
             if (!param || !param.point) return;
             _toggleIndicatorPanes();
         });
@@ -3627,6 +3627,7 @@
 
         requestAnimationFrame(function() {
             _loadIndSettings();
+            _enforceIndPanesHidden();
             _resizePanes();
         });
 
@@ -4860,27 +4861,44 @@
         } catch(e) {}
     }
 
-    /* Double-click-on-chart quick toggle — shows/hides the CCI + MACD panes
+    /* Double-click-on-chart quick toggle — shows/hides the CCI + MACD panes,
        without touching their saved "Visible" checkbox state in the Indicator
-       Settings modal; toggling back restores exactly what was active before. */
-    var _indPanesHidden = false;
-    var _indPanesSavedVisible = null;
+       Settings modal (that's still whatever it was — see _cciChanged()/
+       _macdChanged(), which explicitly clear this flag so a deliberate
+       settings-panel edit always wins over a stale quick-hide).
+
+       Persisted to localStorage per pair (not held in an in-memory flag)
+       specifically so it survives every kind of chart-data refresh — TF
+       switch, pair switch, the periodic interval-60s tick — instead of
+       silently reverting after a few minutes of normal use. Bug found
+       2026-07-24: an earlier fix only stopped the periodic-refresh case
+       from undoing the hide; switching timeframes still reset it, because
+       init() (which every TF/pair switch goes through) reloaded settings
+       straight from localStorage, and the hide was never written there. */
+    function _indPanesHiddenKey() { return 'apex_ind_panes_hidden_' + (_currentPair || 'default'); }
+
+    function _isIndPanesHidden() {
+        try { return localStorage.getItem(_indPanesHiddenKey()) === '1'; } catch(e) { return false; }
+    }
+
+    /* Re-applies the hidden state on top of whatever _indSettings currently
+       holds — called after every settings (re)load so the hide can never be
+       silently dropped by an unrelated refresh. Idempotent / cheap. */
+    function _enforceIndPanesHidden() {
+        if (!_indSettings || !_isIndPanesHidden()) return;
+        if (_indSettings.cci)  _indSettings.cci.visible  = false;
+        if (_indSettings.macd) _indSettings.macd.visible = false;
+    }
+
     function _toggleIndicatorPanes() {
         if (!_indSettings) return;
-        if (!_indPanesHidden) {
-            _indPanesSavedVisible = {
-                cci:  !!(_indSettings.cci  && _indSettings.cci.visible),
-                macd: !!(_indSettings.macd && _indSettings.macd.visible),
-            };
+        if (!_isIndPanesHidden()) {
             if (_indSettings.cci)  _indSettings.cci.visible  = false;
             if (_indSettings.macd) _indSettings.macd.visible = false;
-            _indPanesHidden = true;
+            try { localStorage.setItem(_indPanesHiddenKey(), '1'); } catch(e) {}
         } else {
-            if (_indPanesSavedVisible) {
-                if (_indSettings.cci)  _indSettings.cci.visible  = _indPanesSavedVisible.cci;
-                if (_indSettings.macd) _indSettings.macd.visible = _indPanesSavedVisible.macd;
-            }
-            _indPanesHidden = false;
+            try { localStorage.removeItem(_indPanesHiddenKey()); } catch(e) {}
+            _loadIndSettings();   // restore whatever the real saved preference is
         }
         _applyIndVisualSettings();
     }
@@ -5522,6 +5540,11 @@
     function _bindCCIEvents(tab) {
         /* Helper: read input, update _indSettings.cci, save, apply */
         function _cciChanged(isComp) {
+            /* An explicit settings-panel edit always wins over a stale
+               quick-hide from the chart double-click (chart.js:_toggleIndicatorPanes) —
+               otherwise a later refresh could re-hide CCI right after the
+               user just turned it back on here. */
+            try { localStorage.removeItem(_indPanesHiddenKey()); } catch(e) {}
             var c = _indSettings.cci;
             c.length    = parseInt(tab.querySelector('#aip-cci-length').value)   || c.length;
             c.source    = tab.querySelector('#aip-cci-source').value             || c.source;
@@ -5594,6 +5617,9 @@
     /* ── Bind MACD events ─────────────────────────────────────────────────── */
     function _bindMACDEvents(tab) {
         function _macdChanged(isComp) {
+            /* Same reasoning as _cciChanged() above — an explicit
+               settings-panel edit always wins over a stale quick-hide. */
+            try { localStorage.removeItem(_indPanesHiddenKey()); } catch(e) {}
             var m = _indSettings.macd;
             m.fast         = parseInt(tab.querySelector('#aip-macd-fast').value)       || m.fast;
             m.slow         = parseInt(tab.querySelector('#aip-macd-slow').value)       || m.slow;
@@ -5661,10 +5687,16 @@
        Only reload from localStorage if _indSettings isn't populated yet
        (first load — a genuine pair/TF switch already reloads fresh via
        init()'s own _loadIndSettings() call). Reloading unconditionally here
-       clobbered the double-click quick-hide toggle (_toggleIndicatorPanes,
-       an in-memory-only mutation) every time the 60s live-data timer fired,
-       even for the same pair/TF — that's what made hidden panes reappear
-       on their own. Bug found 2026-07-22. */
+       clobbered the double-click quick-hide toggle every time the 60s
+       live-data timer fired, even for the same pair/TF (bug found
+       2026-07-22, fixed by this guard).
+
+       _enforceIndPanesHidden() runs on every call here regardless — this is
+       what makes the quick-hide toggle survive TF switches (bug found
+       2026-07-24: the 2026-07-22 fix alone didn't cover that case, since
+       init() reloads _indSettings fresh from localStorage on every TF/pair
+       switch, and the hide itself is stored under a separate persisted key
+       now, not as an in-memory-only mutation of _indSettings). */
     window._apexApplyIndSettings = function(indParams) {
         if (!_indSettings) _loadIndSettings();
         /* If Python used different params (e.g. first load), reconcile */
@@ -5675,6 +5707,7 @@
             if (indParams.macd_slow)  _indSettings.macd.slow   = indParams.macd_slow;
             if (indParams.macd_signal) _indSettings.macd.signal = indParams.macd_signal;
         }
+        _enforceIndPanesHidden();
         _applyIndVisualSettings();
         /* Refresh panel if open */
         if (_indPanelEl && _indPanelEl.style.display !== 'none') _renderIndTabs();

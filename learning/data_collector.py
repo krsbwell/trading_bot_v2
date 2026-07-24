@@ -33,8 +33,16 @@ SIGNAL_FIELDS = [
     "atr_pips", "h4_trend", "d_trend",
     "market_structure", "was_at_sr_zone", "bos_confirmed",
     "ml_win_prob_at_entry", "outcome", "pnl_pips", "pnl_dollar",
-    "hold_hours", "session", "hour_utc",
+    "hold_hours", "session", "hour_utc", "source",
 ]
+# source: "live" (record_close/record_skip — a genuine bot evaluation, whether
+# it became a real trade or a shadow-resolved skip) vs "seed" (backtest
+# replay — the seeding feature that wrote these was removed 2026-07-24 since
+# its output could never be told apart from live data and had gone stale
+# relative to the live strategy config; SOURCE_SEED is kept only so old
+# rows already tagged "seed" keep being correctly excluded everywhere).
+SOURCE_LIVE = "live"
+SOURCE_SEED = "seed"
 
 # In-memory store: trade_id → {signal, position_size, risk_dollar, open_time}
 _pending: dict[str, dict] = {}
@@ -233,6 +241,7 @@ def _build_row(
         "hold_hours":           round(hold_hours, 2),
         "session":              _get_session(timestamp),
         "hour_utc":             timestamp.hour,
+        "source":               SOURCE_LIVE,
     }
 
 

@@ -76,7 +76,7 @@ def _synthetic_log(n_win=40, n_loss=20, pattern="bullish_pin_bar", pair="EUR_USD
             "market_structure": "uptrend", "was_at_sr_zone": 1, "bos_confirmed": 1,
             "ml_win_prob_at_entry": "",
             "outcome": "win", "pnl_pips": 20, "pnl_dollar": 100,
-            "hold_hours": 4, "session": "london",
+            "hold_hours": 4, "session": "london", "source": "live",
         })
     for i in range(n_loss):
         row = rows[0].copy()

@@ -21,6 +21,12 @@ Design choices (see tasks/todo.md for full rationale):
   - No H4/confirm-TF alignment gate (unlike the other two strategies) — kept
     out for this first pass to isolate the core breakout-retest mechanic;
     can be added later if backtest results suggest it would help.
+  - Optional consolidation gate (config.BREAKOUT_CONSOLIDATION_FILTER_ENABLED,
+    off by default) — added 2026-07-29 once this became the roster's
+    primary trend strategy: unlike ADX, a compressed 34/100/200 EMA ribbon
+    stays compressed through the exact window where a fakeout BOS happens
+    inside chop, so it catches what the ADX gate's design note above says
+    ADX itself can't reliably catch here.
 """
 import logging
 
@@ -28,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from engine.indicators import atr, macd_full
+from engine.indicators import atr, ema, macd_full
 from engine.strategy_market_structure import detect_pivots, classify_structure, detect_bos_choch
 from engine.strategy_price_action import detect_patterns, _BULLISH, _BEARISH
 
@@ -46,6 +52,21 @@ def get_last_diag(pair: str, direction: str) -> dict:
 
 def _get_pip(pair: str) -> float:
     return 0.01 if "JPY" in pair.upper() else 0.0001
+
+
+def _is_consolidated(df_h1: pd.DataFrame) -> bool:
+    """True when the 34/100/200 EMA ribbon is compressed (ATR-normalized
+    spread below config.BREAKOUT_MIN_MA_SPREAD_ATR) — same ribbon the chart
+    already plots. Needs enough bars for EMA200 to be meaningful; with too
+    little data, don't block (can't judge reliably either way)."""
+    if not config.BREAKOUT_CONSOLIDATION_FILTER_ENABLED or len(df_h1) < 200:
+        return False
+    atr_val = float(atr(df_h1["high"], df_h1["low"], df_h1["close"], 14).iloc[-1])
+    if not atr_val or np.isnan(atr_val):
+        return False
+    emas = [ema(df_h1["close"], p).iloc[-1] for p in (34, 100, 200)]
+    spread_atr = (max(emas) - min(emas)) / atr_val
+    return spread_atr < config.BREAKOUT_MIN_MA_SPREAD_ATR
 
 
 def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
@@ -72,6 +93,12 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     # ── Session gate — same window as the other two strategies ───────────────
     last_bar_hour = df_h1.index[-1].hour
     if not (config.SESSION_START_UTC <= last_bar_hour < config.SESSION_END_UTC):
+        return 0.0
+
+    # ── Consolidation gate (optional) — skip fakeout BOS inside chop ─────────
+    if _is_consolidated(df_h1):
+        _buy_diag[pair] = dict(c1=False, c2=False, c3=False, c4=False, c5=False,
+                               broken_level=None, patterns=[], consolidated=True)
         return 0.0
 
     pivots    = detect_pivots(df_h1)
@@ -126,6 +153,11 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
 
     last_bar_hour = df_h1.index[-1].hour
     if not (config.SESSION_START_UTC <= last_bar_hour < config.SESSION_END_UTC):
+        return 0.0
+
+    if _is_consolidated(df_h1):
+        _sell_diag[pair] = dict(c1=False, c2=False, c3=False, c4=False, c5=False,
+                                broken_level=None, patterns=[], consolidated=True)
         return 0.0
 
     pivots    = detect_pivots(df_h1)

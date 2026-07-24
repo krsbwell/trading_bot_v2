@@ -2,7 +2,9 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
+MODE = "demo"   # "paper" (pure simulation, no OANDA orders) / "demo" (real
+                # orders on OANDA practice account) / "live" (real orders on
+                # real-money OANDA account) — change ONLY this line
 
 # Active trading pairs — updated 2026-07-02 (SESSION_START=04:00, ADX(28), 3500 M30 bars)
 # NOTE 2026-07-20: WR/PF/DD figures below are from the 2026-07-01/02 backtests and
@@ -22,7 +24,14 @@ MODE = "paper"   # "paper" or "live" — change ONLY this line to go live
 #          pair was only PF=1.11 (thin) — breakout-retest is a genuinely stronger, independent signal here.
 # GBP_CHF: 24% win rate  $-26.65   8.9% DD — removed 2026-06-30; worst M30 performer; CHF low-vol kills M30 edge
 # AUD_USD: 12% win rate  — removed; unacceptable live performance
-FOREX_PAIRS  = ["USD_CAD", "NZD_USD", "EUR_AUD", "GBP_CAD", "GBP_USD"]
+#
+# CHF_JPY + EUR_JPY promoted 2026-07-29 from a fresh 3500-bar re-run (both
+# EMA-bounce): CHF_JPY 32 trades PF=1.67 $+51.37; EUR_JPY (first-ever
+# backtest for this pair) 25 trades PF=1.67 $+41.85. Promoted specifically
+# for trade-frequency: both have a large enough sample to trust (established
+# rule: ~30+ trades reliable, <15 not) and add real trade volume without
+# touching any existing pair's gates/thresholds. See tasks/todo.md 2026-07-29.
+FOREX_PAIRS  = ["USD_CAD", "NZD_USD", "EUR_AUD", "GBP_CAD", "GBP_USD", "CHF_JPY", "EUR_JPY"]
 
 # Per-pair strategy override — a pair not listed here uses the default
 # (strategy_ema_cci_macd / "EMA-bounce"). Only strategy_breakout_retest is
@@ -41,12 +50,13 @@ STRATEGY_OVERRIDE = {
 # All results below: SESSION_START=04:00, SESSION_END=17:00, ADX(28), 3500 M30 bars (re-run 2026-07-02)
 # EUR_CHF: 30% WR  $+10.46  4.0% DD (10 trades) PF=1.70 — best PF but too few trades to be confident it holds; held back 2026-07-02
 # AUD_JPY: 36% WR  $+36.84  7.1% DD (44 trades) PF=1.32 — added 2026-07-02 from 15-pair screen; solid sample, positive
-# EUR_CAD: 35% WR  $+36.08  5.4% DD (34 trades) PF=1.44 — added 2026-07-02 from 15-pair screen; solid sample, positive
-# CHF_JPY: 32% WR  $+11.72  6.7% DD (50 trades) PF=1.09 — added 2026-07-02; thin edge but largest sample of the whole screen
+# EUR_CAD: 35% WR  $+36.08  5.4% DD (34 trades) PF=1.44 — added 2026-07-02; re-run 2026-07-29 came back ~breakeven
+#          (PF=1.00, $+0.24) — left on watch, not promoted, numbers drifted since original add.
 # EUR_GBP: 50% WR  $+21.00  2.0% DD (6 trades)  PF=3.93 — added 2026-07-02; best ratio of the screen but too few trades to trust yet
 # CAD_CHF: 33% WR  $+13.69  3.1% DD (9 trades)  PF=1.96 — added 2026-07-02; good ratio, too few trades to trust yet
 # NZD_CHF: 36% WR  $+6.92   5.1% DD (11 trades) PF=1.30 — added 2026-07-02; modest, too few trades to trust yet
-FOREX_WATCH  = ["EUR_CHF", "AUD_JPY", "EUR_CAD", "CHF_JPY", "EUR_GBP", "CAD_CHF", "NZD_CHF"]
+# CHF_JPY: promoted to FOREX_PAIRS 2026-07-29 — see above.
+FOREX_WATCH  = ["EUR_CHF", "AUD_JPY", "EUR_CAD", "EUR_GBP", "CAD_CHF", "NZD_CHF"]
 
 # Rejected / removed — losing money, not watched (re-test only if the strategy or gates change)
 # EUR_USD: 23% WR  $-16.51  9.7% DD (30 trades) PF=0.80 — removed from watch 2026-07-02; unsuited to EMA mean-reversion regardless of filters
@@ -57,9 +67,6 @@ FOREX_WATCH  = ["EUR_CHF", "AUD_JPY", "EUR_CAD", "CHF_JPY", "EUR_GBP", "CAD_CHF"
 # Rejected 2026-07-02 (15-pair screen, all losing money):
 # EUR_NZD -$31.26/14.4%DD | GBP_AUD -$1.58/9.1%DD | GBP_NZD -$35.27/17.4%DD (worst) |
 # AUD_CHF -$38.01/PF=0.23 (worst ratio) | AUD_CAD -$14.23 | NZD_CAD -$15.43 | CAD_JPY -$15.51 | NZD_JPY -$8.32
-CRYPTO_PAIRS = []   # EMA-bounce is a forex mean-reversion strategy — does not suit crypto trending behaviour
-                    # BTC: 19% win rate, -$149 P&L, 29.6% DD | ETH: -$6.96 | both removed after backtest
-
 TIMEFRAMES = {
     "primary": "M30",   # Signal generation (was H1 — M30 gives 2× decision points per hour)
     "confirm": "H4",    # Trend filter gate. Changed 2026-07-23 from H1 back to a real
@@ -127,12 +134,38 @@ ATR_MAX_PIPS = 35    # Skip signals during extreme volatility (ATR > 35 pips)
 ADX_THRESHOLD = 28   # Hard-block signals when ADX(14) > this value (strong trend)
                      # 28 is standard; WFO will tune per pair (grid: 22, 28, 33)
 
+# ── Breakout-retest consolidation gate ──────────────────────────────────────
+# Opposite intent from the ADX gate above: breakout-retest is a trend
+# strategy, so it should skip entries when the market is compressed/ranging
+# instead of trending. Measures the same 34/100/200 EMA ribbon the chart
+# shows — when the three EMAs sit close together (small ATR-normalized
+# spread), the market is consolidating and a "break of structure" is more
+# likely a fakeout than a real trend start. Off by default until backtested;
+# see tasks/todo.md 2026-07-29.
+BREAKOUT_CONSOLIDATION_FILTER_ENABLED = False
+BREAKOUT_MIN_MA_SPREAD_ATR = 0.5   # (max-min of EMA34/100/200) / ATR(14) must clear this
+
 # ── Session gate ─────────────────────────────────────────────────────────────
 # 04:00 UTC captures European pre-market positioning (Frankfurt/Paris banks begin
 # at ~05:00 UTC) and Sydney overlap — important for EUR/AUD and EUR/CHF.
 # ADX filter handles ranging vs trending; session gate just cuts deep-Asian hours.
 SESSION_START_UTC = 4   # 04:00 UTC — European pre-market / Sydney overlap
 SESSION_END_UTC   = 17  # 17:00 UTC — NY close
+
+# ── Weekend close ────────────────────────────────────────────────────────────
+# Force-close every open trade at SESSION_END_UTC on Fridays — avoids holding
+# through the weekend gap (FX markets close after Friday and reopen Sunday
+# evening; a large weekend news gap can blow straight through a normal SL).
+# Added 2026-07-29, user request. Python weekday(): Monday=0 … Friday=4.
+WEEKEND_CLOSE_ENABLED     = True
+WEEKEND_CLOSE_WEEKDAY_UTC = 4   # Friday
+# Starting this many hours before SESSION_END_UTC on Friday, close a trade
+# as soon as it's in profit rather than waiting for the hard deadline —
+# "try to end trades in profit as best as possible" (user request
+# 2026-07-29). A trade that's still not in profit rides to the hard
+# SESSION_END_UTC cutoff and force-closes there regardless — the weekend-gap
+# safety guarantee is absolute, the profit-seeking is best-effort on top of it.
+WEEKEND_CLOSE_PROFIT_WINDOW_HOURS = 3
 
 # ── Watchdog (scripts/watchdog.py) ──────────────────────────────────────────
 # Scan cadence is 30 min (M30 close); 60 min gives one full cycle of buffer
@@ -230,14 +263,6 @@ MACD_SIGNAL = 9
 OANDA_API_KEY    = os.getenv("OANDA_LIVE_API_KEY" if MODE == "live" else "OANDA_API_KEY")
 OANDA_ACCOUNT_ID = os.getenv("OANDA_LIVE_ACCOUNT_ID" if MODE == "live" else "OANDA_ACCOUNT_ID")
 OANDA_ENV        = "live" if MODE == "live" else "practice"
-
-# Alpaca — auto-selects paper vs live based on MODE
-ALPACA_API_KEY = os.getenv("ALPACA_LIVE_KEY" if MODE == "live" else "ALPACA_PAPER_KEY")
-ALPACA_SECRET  = os.getenv("ALPACA_LIVE_SECRET" if MODE == "live" else "ALPACA_PAPER_SECRET")
-ALPACA_BASE_URL = (
-    "https://api.alpaca.markets" if MODE == "live"
-    else "https://paper-api.alpaca.markets"
-)
 
 # Telegram notifications (leave blank to disable)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

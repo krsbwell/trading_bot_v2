@@ -362,7 +362,7 @@ def run_backtest(
         # Place simulated trade
         stop_loss = stop_loss_fn(pair, slice_h1, direction)
         tp_levels = get_tp_levels(entry, stop_loss, direction, pair)
-        size      = calculate_position_size(pt.balance, entry, stop_loss, market, pair)
+        size      = calculate_position_size(pt.balance, entry, stop_loss, pair)
         if size <= 0:
             continue
 
@@ -405,33 +405,6 @@ def run_backtest(
         dd        = (peak_eq - pt_eq["nav"]) / peak_eq if peak_eq > 0 else 0
         max_dd    = max(max_dd, dd)
 
-    # Build seed rows: closed trade signal features + outcome for PatternLearner seeding.
-    # Includes real price levels + pnl_pips (same formula as
-    # paper_trader.py's _log_outcome() for live closes) — previously omitted
-    # here, leaving every seeded row's entry/sl/tp blank and pnl_pips at a
-    # hardcoded 0 in learning/pattern_learner.py::seed_from_backtest, even
-    # though every closed trade already carries this data.
-    seed_rows = []
-    for t in closed:
-        sig = t.get("_sig")
-        if not sig:
-            continue
-        _pip  = 0.01 if "JPY" in pair else 0.0001
-        _entry, _exit = t.get("entry", 0), t.get("exit_price", 0)
-        _diff = (_exit - _entry) if t.get("direction") == "long" else (_entry - _exit)
-        seed_rows.append({
-            **sig,
-            "outcome":      "win" if t.get("realised_pnl", 0) > 0 else "loss",
-            "realised_pnl": round(t.get("realised_pnl", 0), 4),
-            "entry_price":  _entry,
-            "stop_loss":    t.get("sl", ""),
-            "tp1":          t.get("tp1", ""),
-            "tp2":          t.get("tp2", ""),
-            "tp3":          t.get("tp3", ""),
-            "tp_level_hit": t.get("close_reason", ""),
-            "pnl_pips":     round(_diff / _pip, 1),
-        })
-
     return {
         "pair":           pair,
         "bars":           len(df_h1),
@@ -446,7 +419,6 @@ def run_backtest(
         "trades":         closed,
         "equity_curve":   equity,
         "signal_log":     signal_log,
-        "seed_rows":      seed_rows,
     }
 
 
@@ -656,7 +628,7 @@ if __name__ == "__main__":
 
     res = run_backtest(args.pair, df_h1, df_h4,
                        starting_balance=args.balance,
-                       market="forex" if "_" in args.pair else "crypto",
+                       market="forex",
                        buy_fn=_buy_fn, sell_fn=_sell_fn, stop_loss_fn=_sl_fn,
                        df_d=df_d)
 

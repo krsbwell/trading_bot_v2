@@ -718,4 +718,3 @@ class TestTradeManagerPersistence:
         monkeypatch.setattr(tm_mod, "_DEFAULT_SAVE_DIR", tmp_path)
         TradeManager(MockForexConnector(), "forex").open_trade(_signal())
         assert (tmp_path / "live_state_forex.json").exists()
-        assert not (tmp_path / "live_state_crypto.json").exists()

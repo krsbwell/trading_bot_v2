@@ -55,8 +55,8 @@ class SignalEngine:
         """
         Run the full signal pipeline for one pair.
 
-        pair             : "EUR_USD" (Oanda) or "BTC/USD" (Alpaca)
-        market           : "forex" or "crypto"
+        pair             : "EUR_USD" (Oanda)
+        market           : "forex"
         ml_win_prob      : win probability from PatternLearner (None until 50 trades)
         candles_override : (df_primary, df_confirm) tuple — skips the API fetch and
                            uses supplied DataFrames instead. Used by _live_diagnostic_scan

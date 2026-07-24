@@ -1,3 +1,766 @@
+# Change: Add MODE="demo" — real OANDA orders on the practice account (2026-07-30) — LIVE-AFFECTING, PENDING APPROVAL
+
+## Why
+User connected MyFXBook to their OANDA account and found real trade history
+appears there — correcting my earlier claim that OANDA demo accounts don't
+record history. Root cause of "no history at all": the bot currently runs
+`MODE="paper"` (`config.py:5`), which uses `PaperTrader` — pure internal
+simulation, per its own docstring ("simulates broker execution with no real
+orders", `trade/paper_trader.py:2`). No orders are ever sent to OANDA at
+all, demo or otherwise, so there's nothing for OANDA to report to MyFXBook.
+User's ask: bot should place real automated orders on the OANDA demo/
+practice account so OANDA records them and MyFXBook mirrors that history.
+
+Key finding: real order placement already exists and is fully wired —
+`connectors/oanda_connector.py`'s `place_market_order`/`close_trade`/
+`set_sl_tp`/`get_open_trades`, used by `trade/trade_manager.py`'s
+`TradeManager`, invoked from `main.py` — currently gated purely behind
+`config.MODE == "live"`. Problem: today's "live" mode also flips
+`OANDA_ENV` to `"live"` and swaps in `OANDA_LIVE_API_KEY`/
+`OANDA_LIVE_ACCOUNT_ID` (`config.py:260-263`) — i.e. it targets real-money
+trading, not the practice account. No existing mode places real orders
+against the practice/demo account only.
+
+Also noticed: `.env`'s `OANDA_LIVE_ACCOUNT_ID` is currently set to the
+exact same value as `OANDA_ACCOUNT_ID` (101-001-9445956-001) — almost
+certainly a placeholder, not a real live account ID. Not touching this
+file/value as part of this change (see "explicitly not doing" below).
+
+User's decision on naming (asked directly via AskUserQuestion): three
+modes — `"demo"` places real orders on the OANDA practice account,
+`"live"` places real orders on the real-money account, `"paper"` (kept)
+stays pure internal simulation with zero OANDA order calls.
+
+## Plan
+- [x] `config.py`: change `MODE` value from `"paper"` to `"demo"`; update
+      the comment to document all 3 valid values. No change needed to the
+      `OANDA_ENV`/`OANDA_API_KEY`/`OANDA_ACCOUNT_ID` ternaries at
+      `config.py:260-263` — they already fall through to practice
+      credentials for any `MODE` other than `"live"`, so `"demo"` already
+      resolves correctly there with zero changes.
+- [x] `main.py`: 3 spots gate the *real* trading path strictly on
+      `config.MODE == "live"` and need to also treat `"demo"` as real
+      trading (everywhere else already uses `if MODE=="paper": ... else:
+      ...`, so `"demo"` falls into the existing TradeManager branch
+      automatically — verified lines 446/531/557/574/618/813/1008/1017-19/
+      1060 need no change):
+  - line 139 (`_tick_live_trades` dispatch)
+  - line 638 (weekend-close real-trade branch)
+  - line 850 (`_reconcile_live_positions` startup guard)
+- [x] Update `main.py`'s top-of-file module docstring (currently says
+      "Live mode: set MODE = \"live\"...") to also document `"demo"` mode.
+- [x] Run the full test suite — confirm zero regressions. (Tests
+      instantiate `PaperTrader`/`TradeManager` directly and never
+      reference `config.MODE`, so expected to be inert — will verify, not
+      assume.)
+- [x] Explicit flag, not silent: once `MODE="demo"` ships, the bot places
+      REAL orders on the OANDA practice account starting the next
+      scheduler tick after restart. Recommend restarting deliberately
+      (paper-mode's open trades/state won't carry over — `TradeManager`
+      keeps separate state in `data/live_state_forex.json`) and watching
+      the first few trades closely.
+
+## Review
+`config.py`: `MODE` changed `"paper"` → `"demo"`, comment expanded to
+document all 3 values. `main.py`: 3 exact-match `config.MODE == "live"` /
+`!= "live"` checks changed to `in ("demo", "live")` / `not in ("demo",
+"live")` (candle-close trade tick, weekend-close real-trade branch,
+startup broker-reconciliation guard) — everywhere else in the file already
+used `if MODE=="paper": ... else: ...`, which routes `"demo"` into the
+existing `TradeManager`/`OandaConnector` real-order path with no code
+change. Module docstring updated to document all 3 modes. Total diff: 2
+lines in `config.py`, 3 one-word changes + a docstring update in
+`main.py` — no new abstractions, no behavior change for `"paper"` or
+`"live"` (byte-identical to before for both).
+
+**Verification**: `ast.parse()` (UTF-8) on both files — clean. Full test
+suite: 237/237 pass, zero regressions (tests never reference
+`config.MODE`, as expected). Not yet verified: an actual live restart
+placing a real order against the OANDA practice account — that requires
+restarting the bot process, which I have not done. Recommend restarting
+deliberately and watching the first trade/log line (`_init_connectors()`
+logs "✓ Oanda connected (practice)...", and the account-refresh path now
+calls `_oanda_connector.get_account_summary()` for real broker balance
+instead of `PaperTrader`'s simulated one) to confirm before trusting it
+unattended.
+
+**Not touched, by design**: `.env`'s `OANDA_LIVE_ACCOUNT_ID` (still a
+placeholder duplicate of the practice ID) — irrelevant until actually
+going real-money live; the price-stream SL/TP tick (still paper-only,
+correct since broker-side orders carry their own attached SL/TP).
+
+## Explicitly NOT doing (flag for user)
+- Not touching `.env`'s duplicate `OANDA_LIVE_ACCOUNT_ID` — that's a
+  real-money live credential; only touch it once actually ready to go
+  live for real, with the user's own correct value.
+- Not changing the price-stream SL/TP tick logic (currently wired only
+  for `PaperTrader`, `main.py:1060`) — this is correct as-is: real broker
+  orders carry their own server-side attached stop-loss/take-profit
+  (`takeProfitOnFill` set at order placement in
+  `oanda_connector.py::place_market_order`), so OANDA enforces SL/TP
+  itself. No client-side tick-based check is needed for demo/live trades.
+
+---
+
+# Fix: 4 trade-blocking gates weren't writing structured BLOCKED audit rows (2026-07-29)
+
+## Why
+User asked why they get Telegram signal alerts with almost never a
+corresponding open trade. Real answer (confirmed against `data/
+signal_audit.csv`, 2026-06-08 to now): mostly WATCHING-tagged alerts
+(28 in that window) — these are explicit, by-design, never meant to trade.
+Telegram is never sent at all for a TRIGGERED signal that gets blocked by
+a gate, so those aren't the source of the user's confusion — but while
+tracing this, found `_process_pair()`'s gate chain in `main.py` was
+inconsistent about writing a structured `result="BLOCKED"` row via
+`_audit_blocked()` (`engine.signal_audit.log_signal`): some gates did,
+some only called the internal `_block()` helper (dashboard stamp +
+`record_skip()` for shadow-outcome resolution, no CSV audit trail).
+Confirmed via `signal_audit.csv`: 95 TRIGGERED rows but only 19 explicitly
+tagged BLOCKED, even though ~63 of those 95 never became real trades
+(32 total trades ever opened) — most of that gap was invisible in the
+structured log, only visible in raw text logs.
+
+**Correction to my own initial read**: first guessed the trending-structure
+filter was one of the gap gates — wrong, checked the actual code and it
+already calls `_audit_blocked()`. The real 4 gates missing it: the ML
+tiered gate, the H4/ATR `gate_blocked` passthrough, and both news-blackout
+checks (ForexFactory + Finnhub). Session filter, structure filter,
+duplicate guard, pre-trade/max-open, and cooldown all already had it.
+
+## What changed
+`main.py`: added the same `_audit_blocked(pair=..., result="BLOCKED",
+reject_reason=...)` call (matching the existing pattern from every other
+gate) to all 4 gaps, immediately before their existing `_block()` call.
+No behavior change to trading decisions — purely fills in the audit trail
+so `signal_audit.csv`'s BLOCKED count and reject_reason breakdown actually
+reflect every gate, not just 5 of 9.
+
+## Verification
+Full test suite: 237/237 pass. `main.py` syntax-checked.
+
+---
+
+# Change: commit the live roster to breakout-retest (trend-only), drop EMA-bounce routing, screen full major/minor universe for replacements (2026-07-29) — LIVE-AFFECTING, IN PROGRESS
+
+## Why
+User decision, made deliberately after reviewing the strategy tradeoffs and
+the bot's full 11-gate filter stack: EMA-bounce is architecturally
+incompatible with trending markets (hard-gated off above ADX 28 AND during
+uptrend/downtrend structure, 0/9 + 0/3 historical WR in trends per
+main.py's own comment). Breakout-retest is the trend-following mechanic.
+Decision: standardize the live roster on breakout-retest, stop trading
+consolidation/sideways conditions entirely, and replace any pair that
+doesn't hold up under breakout-retest with a minor pair that does — rather
+than leaving unconverted pairs defaulted onto EMA-bounce (confirmed for the
+user: `strategy_dispatch.resolve_strategy()` defaults any pair NOT in
+`config.STRATEGY_OVERRIDE` to `"ema_bounce"`, so leaving the code in place
+without re-routing every pair would silently keep trading chop on whichever
+pairs never got switched).
+
+## Plan
+- [ ] Add a consolidation/regime filter to `engine/strategy_breakout_retest.py`:
+      compute the same 34/100/200 EMA ribbon the chart already shows,
+      require its ATR-normalized spread to clear a minimum before honoring
+      any break-of-structure — without this, "no longer trade sideways
+      markets" isn't actually true for this strategy (nothing today stops
+      it firing on a fakeout BOS inside chop). New config flag
+      `BREAKOUT_CONSOLIDATION_FILTER_ENABLED` (default False until proven)
+      + `BREAKOUT_MIN_MA_SPREAD_ATR` threshold (tuned via backtest, not
+      guessed).
+- [ ] Re-run full test suite — confirm zero regressions.
+- [ ] Backtest breakout-retest (filter ON) against every pair in the
+      current roster: active (USD_CAD, NZD_USD, EUR_AUD, GBP_CAD, GBP_USD)
+      + watch (EUR_CHF, AUD_JPY, EUR_CAD, CHF_JPY, EUR_GBP, CAD_CHF,
+      NZD_CHF). Compare against each pair's current EMA-bounce baseline
+      (re-run fresh, not from memory — numbers drift day to day).
+- [ ] Screen the full major/minor 8-currency universe (USD/EUR/GBP/JPY/
+      CHF/AUD/CAD/NZD, 28 possible crosses) under breakout-retest —
+      not just the ones already vetted under EMA-bounce, since a genuinely
+      different entry mechanic can favor different pairs (already proven:
+      GBP_USD/GBP_CAD split the same day under this exact dynamic). Found
+      one pair with **zero** backtest history under any strategy so far:
+      **EUR_JPY** — every other of the 28 crosses appears somewhere in the
+      active/watch/rejected/removed tables in `project_pair_config` memory.
+      True exotics beyond these 8 currencies (SGD/ZAR/TRY/MXN/etc.) are
+      NOT in scope yet — flagged for the user before going further than
+      the established major/minor universe, given spread/liquidity
+      questions those introduce that this bot has never evaluated.
+- [ ] Decide per pair: convert to breakout-retest if it backtests better
+      than current EMA-bounce baseline; if not, look for a same-currency
+      or nearby minor replacement that does; if genuinely nothing works,
+      flag explicitly rather than silently leaving it on EMA-bounce.
+- [ ] Update `config.STRATEGY_OVERRIDE`/`FOREX_PAIRS`/`FOREX_WATCH` to
+      reflect the final roster. Every active pair should end up explicitly
+      routed to breakout-retest (or flagged as a known exception with the
+      user's sign-off) — no pair should be trading live by falling through
+      to the EMA-bounce default silently.
+- [ ] `config.py`'s `TIMEFRAMES["primary"]` confirmed already "M30" —
+      matches the user's ask for a fast 15/30-minute primary TF, no change
+      needed there.
+
+## Result: roster-wide breakout-retest conversion REJECTED (2026-07-29)
+Backtested breakout-retest (with the new consolidation filter ON) against
+all 5 active + 7 watch pairs + EUR_JPY (first-ever backtest for that pair
+under any strategy), 3500 bars each:
+
+| Pair | EMA-bounce PF / PnL | Breakout-retest PF / PnL | Winner |
+|---|---|---|---|
+| USD_CAD | 2.43 / $67.66 | 0.89 / -$3.96 | EMA-bounce |
+| NZD_USD | 1.88 / $46.81 | 0.39 / -$18.20 | EMA-bounce |
+| EUR_AUD | 2.02 / $58.40 | 0.45 / -$23.77 | EMA-bounce |
+| GBP_CAD | 3.95 / $132.79 | 0.99 / -$0.25 | EMA-bounce |
+| GBP_USD | 1.64 / $49.90 | 2.32 / $47.57 | Breakout-retest (already live) |
+| EUR_CHF | 1.56 / $17.01 | 0.70 / -$6.02 | EMA-bounce |
+| AUD_JPY | 1.21 / $17.29 | 1.14 / $4.68 | EMA-bounce |
+| EUR_CAD | 1.00 / $0.24 | 1.07 / $2.28 | Tie (both ~breakeven) |
+| CHF_JPY | 1.67 / $51.37 | 1.10 / $3.41 | EMA-bounce |
+| EUR_GBP | 2.49 / $22.79 | 1.32 / $4.82 | EMA-bounce |
+| CAD_CHF | 1.15 / $2.96 | 2.03 / $5.13 | Sample too small (4 trades) to trust |
+| NZD_CHF | 1.74 / $11.04 | 0.82 / -$4.45 | EMA-bounce |
+| EUR_JPY | 1.67 / $41.85 | 0.61 / -$14.81 | EMA-bounce |
+
+GBP_USD remains the **only** pair where breakout-retest wins — matches
+everything already known about it. Every other pair, including all 4 other
+currently-active ones, does clearly worse under breakout-retest, several by
+a wide margin (GBP_CAD's PF drops from 3.95 to 0.99). Consistent with
+GBP_CAD's prior standalone breakout-retest rejection (PF 0.44 at 4999 bars,
+[[project_pair_config]]) — the new consolidation filter modestly improved
+that specific number (0.44→0.99) but nowhere near enough to compete with
+its EMA-bounce baseline.
+
+**Decision: do NOT convert the roster.** Keep the existing per-pair split
+(GBP_USD on breakout-retest, everything else on EMA-bounce) — this is
+exactly what was already live before this investigation started, so no
+`STRATEGY_OVERRIDE` change was made. The consolidation filter code stays in
+`strategy_breakout_retest.py` (dormant — `BREAKOUT_CONSOLIDATION_FILTER_ENABLED
+= False`) in case a future breakout-retest candidate pair needs it; isolated
+test on GBP_USD showed it neither helps nor hurts there (identical 16
+trades, PF 2.30 vs 2.32 filter off/on) since its real entries never
+happened to fire during compressed-ribbon conditions in this window.
+
+User initially misread the table (thought GBP_USD's $47 breakout-retest PnL
+was the bot's overall ceiling, not one pair's one-strategy result) —
+corrected: combined PnL across the 5 originally-active pairs using each
+pair's actual live strategy is ~$353 over the same window, with GBP_CAD's
+PF 3.95 being a genuinely strong result. Reframed the ask from "which
+strategy should the whole bot run" to "trade frequency," which the roster
+promotion below addresses directly.
+
+## Change: CHF_JPY + EUR_JPY promoted from watch to active (2026-07-29) — LIVE-AFFECTING
+User's real goal, once clarified: more trade frequency (specifically so win
+rate becomes statistically trustworthy — can't judge a win rate off too few
+trades). Lowest-risk lever available: `FOREX_WATCH` pairs generate signals
+but `main.py:151` explicitly never opens trades on them ("scan signals for
+dashboard display but never open trades") — so pairs with real backtested
+edge were sitting idle contributing zero frequency. Promoted the two
+watch-list pairs with both a large-enough sample to trust (established
+~30-trade rule) and solid PF from today's fresh numbers: CHF_JPY (32
+trades, PF 1.67, $51.37) and EUR_JPY (25 trades, PF 1.67, $41.85, first
+time ever backtested). Left AUD_JPY (27 trades, PF 1.21 — thinner edge),
+EUR_CAD (re-run came back ~breakeven, PF 1.00 — worse than its original
+2026-07-02 number), EUR_GBP/CAD_CHF/NZD_CHF (all still under ~15 trades) on
+watch — none cleared the same bar.
+
+**What changed**: `config.py` — `FOREX_PAIRS` gained `"CHF_JPY"` and
+`"EUR_JPY"`; `FOREX_WATCH` lost `"CHF_JPY"` (EUR_JPY was never on watch —
+first-ever addition to the pair universe). No code changes needed —
+`dashboard/state.py`, `main.py`'s scan loop, and the WFO optimizer's pair
+list all derive from `config.FOREX_PAIRS`/`FOREX_WATCH` dynamically; JPY
+pip-size/decimal handling is already generic (`"JPY" in pair`) throughout,
+already exercised by AUD_JPY on watch. Both new pairs default to EMA-bounce
+(not in `STRATEGY_OVERRIDE`) and will get picked up by next Sunday's WFO
+refit automatically (`main.py:1037` filters to `FOREX_PAIRS` pairs still on
+EMA-bounce).
+
+**Verification**: full test suite, 237/237 pass, no changes needed to any
+test (nothing hardcodes the pair list length/contents).
+
+## Not yet decided / will flag before finalizing
+- Whether WFO-style parameter tuning needs to be built for breakout-retest
+  before trusting it across a wider pair count (today it runs fixed
+  constants: `retest_band_mult`, plus the new spread threshold) — WFO
+  currently only tunes EMA-bounce and explicitly skips
+  `STRATEGY_OVERRIDE` pairs.
+- Whether EMA-bounce should be fully decommissioned (deleted) once every
+  pair converts, or kept dormant as a fallback — not deleting anything yet,
+  only changing routing, until the full roster's numbers are in.
+
+---
+
+# Fix: double-click places a drawing instead of toggling indicator panes when a draw tool is left active (2026-07-26)
+
+## Plan
+- [x] `dashboard/assets/chart.js`: add `if (drawMode) return;` guard to the
+  `chart.subscribeDblClick(...)` handler (~line 3576), matching the guard
+  pattern used by every other drawing/drag handler in this file, so a
+  double-click while a draw tool (e.g. H-Line) is active doesn't fall
+  through into `_toggleIndicatorPanes()` behavior conflicting with drawing.
+- [x] `node --check` on the file — passes.
+- [x] Note in review section: this doesn't change drawing-tool behavior
+  itself (placing a line while the tool is active is correct) — it only
+  stops the indicator-toggle handler from being in the mix while a tool is
+  selected. Workaround for right now: click the H-Line button (or ✕/cancel)
+  to deactivate the tool, then double-click to toggle panes.
+
+## Root cause (revised — my first pass below was incomplete)
+User pushed back: "it's not active on the toolbar" — meaning the H-Line
+button wasn't visibly highlighted when this happened, which my first fix
+(the `subscribeDblClick` guard alone) didn't explain. Traced further:
+
+The real bug is in the ✕ ("cancel") toolbar button, which is documented as
+"try to delete selected drawing first; if nothing selected, cancel mode."
+Placing a new drawing auto-selects it (`selectDrawing()` runs right after
+creation). So the very next ✕ press — the natural way to try to exit a
+draw tool right after using it — hits the "something is selected" branch:
+it deletes the just-placed line and, by the existing `if (!deleted)` guard,
+never calls `_apexSetDrawMode(null)`. `drawMode` stays `'h-line'` client-side.
+
+Meanwhile `dashboard/app.py::toggle_draw_mode()`'s cancel branch
+unconditionally painted every toolbar button inactive AND returned
+`no_update` for `draw-mode-store`'s data — so the toolbar visually goes
+dark regardless of which of the two things actually happened server-side,
+while the client-side `drawMode` variable (the actual thing that gates
+click handling) stays armed. Next double-click gets consumed by the
+still-active placement handler instead of the indicator-pane toggle.
+
+(The `subscribeDblClick` guard from my first pass is still valid and stays
+in — it's a real gap relative to every other handler in the file — but it
+wasn't the actual cause of what you were seeing; this ✕-button desync was.)
+
+## What changed
+- `dashboard/assets/chart.js`: `if (drawMode) return;` guard added to
+  `chart.subscribeDblClick(...)` (kept from the first pass — harmless and
+  consistent with the rest of the file, just not sufficient on its own).
+- `dashboard/app.py`'s clientside `isCancel` branch: now always calls
+  `_apexDeleteSelected()` **and** `_apexSetDrawMode(null)`, instead of only
+  deactivating the tool when nothing was selected. ✕ now reliably means
+  "delete anything selected, and always exit the current draw tool" —
+  matching what the toolbar has always unconditionally displayed.
+- `dashboard/app.py::toggle_draw_mode()`'s cancel branch: returns `None`
+  (not `no_update`) for `draw-mode-store`'s data, so the server-side store
+  can't go stale relative to the client-side `drawMode` it's supposed to
+  mirror — a stale store value would otherwise mislead the *next* tool
+  button's own `mode = None if current == btn_idx else btn_idx` toggle
+  logic.
+
+## Review
+Both files changed minimally — no new abstractions, same existing patterns
+(`_apexSetDrawMode`/`_apexDeleteSelected` already existed; just changed how
+`isCancel` combines them). Behavior change: pressing ✕ while a drawing is
+selected now also exits the active draw tool (previously it only deleted
+the selection and silently kept the tool armed) — this is the fix, not a
+side effect; there's no remaining workflow where you'd want ✕ to delete a
+selection while keeping a placement tool armed, since each drawing already
+has its own inline delete button for that. `python -c "import ast; ...
+"` and `node --check` both pass. No test suite coverage exists for either
+the dashboard callback wiring or chart.js (frontend/browser-driven, same
+gap as every other UI-only change in this file) — a live click-through
+(select H-Line, place one, press ✕, confirm toolbar + double-click-to-hide
+both work immediately after) is recommended before closing this out.
+
+---
+
+# Fix: indicator quick-hide reappearing on TF switch (2026-07-24) — real fix this time
+
+## Why
+User: the double-click-to-hide-CCI/MACD bug from 2026-07-22 is back —
+"why are the indicators reappearing after I double click to remove the
+indicators and after a few they reappear back on the chart, I thought we
+fixed this issue already." Also: "I don't like when I'm working and the
+whole chart shifts back to what I suppose is a default chart" (same
+phenomenon — the price pane visibly resizes when the sub-panes reappear).
+Asked for verification across all timeframes this time.
+
+## Root cause: the 2026-07-22 fix only covered part of the problem
+That fix stopped the same-pair/TF periodic 60s refresh from undoing the
+hide, by skipping a redundant `_loadIndSettings()` reload when
+`_indSettings` was already populated. But the hide itself was still only
+an **in-memory mutation** — never written to `localStorage`. Every
+timeframe switch goes through `init()`, which unconditionally reloads
+`_indSettings` fresh from `localStorage` — where the hide never existed.
+So switching timeframes (exactly what "verify on all timeframes" would
+immediately surface) silently undid it every time, which is exactly what
+the user was hitting while actually using the chart.
+
+## What changed (`dashboard/assets/chart.js`)
+Replaced the in-memory-only toggle with a `localStorage`-backed flag
+(`apex_ind_panes_hidden_<pair>`, checked live rather than trusted from a
+possibly-stale local variable):
+- `_toggleIndicatorPanes()`: hide sets the flag directly (doesn't touch
+  the real per-pair settings key, so the Indicator Settings modal's
+  "Visible" checkbox still correctly reflects the real saved preference,
+  not the quick-hide — same separation the original design intended);
+  restore clears the flag and reloads the real settings fresh.
+- New `_enforceIndPanesHidden()`: re-applies the hide on top of whatever
+  `_indSettings` currently holds. Called from **both** `init()`'s settings
+  load (covers pair/TF switches) **and** `_apexApplyIndSettings()` (covers
+  every chart-data refresh, including the periodic 60s tick) — one
+  invariant enforced at every point settings get (re)loaded, rather than
+  trying to coordinate one-time state transitions across two async code
+  paths.
+- `_cciChanged()`/`_macdChanged()` (the Indicator Settings modal's own
+  change handlers) now clear the flag at the top — so an explicit,
+  deliberate settings-panel edit always wins over a stale quick-hide,
+  instead of a later refresh silently re-hiding an indicator the user just
+  turned back on.
+- Removed the old `_indPanesHidden`/`_indPanesSavedVisible` in-memory
+  variables entirely (including the `init()` reset that caused this bug in
+  the first place) — replaced by the flag existing or not, checked live,
+  which can't drift out of sync with reality the way a cached boolean can.
+
+## Verification (explicitly across all timeframes, per the ask)
+Standalone test instance (port 8051, live instance on 8050 untouched),
+via Playwright, using rendered `<canvas>` count as a proxy for
+pane-visibility (cross-checked visually against screenshots at both ends
+of the sequence — 30m right after hiding and W at the end of the cycle,
+both confirmed showing the price pane at full height with no sub-panes):
+
+1. **All 7 timeframes** (5m/15m/30m/1H/4H/D/W): hid once, then clicked
+   through every other timeframe in sequence with no re-clicking — stayed
+   hidden on all 7. This is the scenario that was actually broken before.
+2. **Real periodic refresh**: hid, waited a genuine 65s for the live
+   `interval-60s` tick to fire — stayed hidden.
+3. **Settings-panel override**: confirmed the "Visible" checkbox correctly
+   still shows checked while the chart is quick-hidden (state properly
+   separated); explicitly unchecked then rechecked CCI via the panel —
+   chart correctly followed the panel action each time; switched
+   timeframe afterward — stayed visible (flag correctly cleared, no
+   lingering re-hide).
+
+Zero console/page errors across all of the above. `node --check` passes.
+No Python files touched this round; full suite (237/237) still passes as
+a sanity check.
+
+---
+
+# Remove: "Seed from Backtest" feature entirely (2026-07-24)
+
+## Why
+User: since seed data can never feed suggestions or training anymore
+(previous entry), what does the button actually do — "if it's not doing
+anything to improve the bot then we don't need it taking up space."
+Traced the full effect: it runs backtests (real compute cost), writes rows
+that are now permanently unused, then calls `force_train()` internally —
+which, since training now filters to `source=="live"`, trains on exactly
+the same data `force_train()` would use if called directly via "Retrain
+Now". The button had become 100% redundant with an existing simpler one,
+plus wasted work.
+
+## What changed
+- `dashboard/app.py`: removed the "Seed from Backtest + Retrain" button
+  from the Learning panel layout, its `Input` in `ml_action()`'s callback
+  signature, and the `_run_seed()` branch/thread-start (the trailing
+  `if triggered == "ml-wfo-btn":` branch now just falls through to a
+  final `return no_update`).
+- `learning/pattern_learner.py`: removed `seed_from_backtest()` entirely.
+  No test coverage referenced it; only the now-removed dashboard button
+  called it.
+- `backtest/runner.py::run_backtest()`: removed the `seed_rows` list
+  construction and its `"seed_rows"` key from the return dict — this was
+  built on *every* backtest call (WFO, walk-forward, dashboard, CLI — the
+  whole session's worth of backtesting today) purely to feed the
+  now-deleted method. All the same data is still available via the
+  existing `"trades"` key if ever needed again.
+- Updated the now-stale comments in `data_collector.py`, `feedback_loop.py`,
+  `pattern_learner.py` that referenced the removed method by name.
+
+## Verification
+- Full test suite: 237/237 pass.
+- Full repo grep for `seed_from_backtest`/`seed_rows`/`ml-seed-btn`: zero
+  matches.
+- Playwright: opened the Learning panel on a live standalone instance —
+  "Seed from Backtest" is gone, "Retrain Now" and "Run WFO Now" both still
+  present and functional, zero console errors.
+
+## Found a second staleness bug while verifying (fixed in the same pass)
+The Learning panel's "Training samples: X / 50" display reads
+`ml_stats.get("n_samples")` — but `toggle_learning_panel()` already computes
+a correct, freshly-read `sample_count` from disk and passes it as a
+*separate* parameter that the rendering code never actually uses for that
+display (only as a fallback in one "remaining trades" calculation).
+Caught this because the verification screenshot showed "Training samples:
+0 / 50" on a fresh test instance, when the real number is 93 — same root
+problem as yesterday's accuracy-display bug (trusting possibly-stale
+`state["ml_stats"]` instead of a value already computed fresh nearby).
+Fixed by merging `"n_samples": sample_count` into `ml_stats_val` in the
+callback, same pattern as the `"accuracy"` override. Re-verified via
+Playwright: now correctly shows "Training samples: 93 / 50 min".
+
+---
+
+# Fix: seed data permanently excluded from suggestions + ML training (2026-07-24)
+
+## Why
+Follow-up to both the ML-suggestions investigation and the accuracy-display
+fix below. User: "fix them all, and in the future how can we make sure that
+we are not using old seed data be it the ML or the signal triggering
+trades."
+
+## Correction to my own earlier analysis (important)
+I initially told the user "127 of 131 ML training samples are old
+backtest-seeded/shadow-resolved rows." **That was wrong** — I conflated
+two different things. `would_win`/`would_lose` outcomes can *only* ever
+come from `learning/shadow_outcomes.py` resolving a real
+`record_skip()`-logged row against real subsequent candles;
+`seed_from_backtest()` never writes those outcomes (only `win`/`loss`).
+Rechecked properly: of the 131-sample pool, **93 were genuinely live**
+(4 real executed trades + 89 real shadow-resolved near-misses) and only
+**38 were actually seeded** backtest replay. Corrected this with the user
+before implementing anything, since the wrong number would have led to
+solving the wrong problem.
+
+## The real, permanent fix: an explicit `source` column
+Root design gap: nothing in `signal_log.csv`'s schema distinguished "this
+row came from the live bot evaluating a real market condition" from "this
+row came from replaying old historical bars through a backtest." Every
+consumer (`feedback_loop.py`, `pattern_learner.py`) had to *infer* this
+from a proxy (`position_size > 0`), which is fragile and easy to get
+wrong (I got it wrong myself, above).
+
+- `learning/data_collector.py`: added `"source"` to `SIGNAL_FIELDS`, plus
+  `SOURCE_LIVE = "live"` / `SOURCE_SEED = "seed"` constants.
+  `_build_row()` (used by both `record_close()` and `record_skip()`) now
+  always stamps `source="live"` — this is the single choke point for
+  every real signal the bot ever evaluates, so this can't be forgotten at
+  a future call site.
+- `learning/pattern_learner.py::seed_from_backtest()` now stamps
+  `source="seed"` on every row it writes.
+- `learning/feedback_loop.py::_load_closed()` and
+  `learning/pattern_learner.py::_load_closed()` both now filter to
+  `source == "live"` before doing anything else — seed data is excluded
+  from suggestions and training **unconditionally**, not just "until
+  cleaned up this once." A missing `source` column (old file format)
+  degrades safely to "exclude everything" rather than crashing or
+  silently including stale data.
+- `main.py::_update_ml_stats()`'s sample count now calls
+  `pattern_learner._load_closed()` directly instead of its own separate
+  (and now-inconsistent) inline filter, so the displayed count always
+  matches what's actually used for training.
+- **Found the same confirm-TF ratio bug in `seed_from_backtest()`** (4th
+  place today, after `run_walk_forward()`, `wfo_optimizer.py`, and the
+  backtest CLI): hardcoded `gran_h4 = TIMEFRAMES.get("confirm", "H4")` and
+  `bars // 2 + 20` (stale 2:1 ratio). Fixed to use
+  `config.confirm_tf_for(pair)` / `confirm_tf_ratio(pair)`, consistent
+  with every other fixed call site.
+- Backfilled the existing 135-row `signal_log.csv` with `source`, using
+  the same classification logic now enforced going forward (backup:
+  `signal_log.csv.bak_before_source_backfill`).
+
+## Side effect worth knowing about
+The dashboard's "Seed from Backtest + Retrain" button still runs backtests
+and writes rows (useful for reference/audit), but those rows can now
+**never** feed live suggestions or ML training again — seed data is
+permanently excluded, not just excluded until enough real data
+accumulates. This was a deliberate reading of "make sure we are not using
+old seed data... in the future" as unconditional. It does mean the
+original bootstrap use case (cold-starting a brand-new pair with zero live
+history) no longer works via this button — if that's needed later, it
+would need a deliberate, separate design (e.g. a time-boxed exception),
+not implemented here since it wasn't asked for.
+
+## Verification
+- Full test suite: 237/237 pass. Fixed `tests/test_learning.py`'s
+  `_synthetic_log()` helper to stamp `source="live"` (10 tests were
+  failing because the synthetic rows it builds now got excluded by the
+  new filter along with everything else lacking a `source` field).
+- `generate_suggestions()` on the real (backfilled) log now returns
+  **0 suggestions** — correct and honest: only 4 real executed trades
+  exist, each a different pair, all below the 5-trade minimum. The
+  USD_CHF/asian/london noise is gone.
+- `pattern_learner._load_closed()` now returns exactly **93** rows (was
+  131). Retrained: **AUC 0.552 ± 0.155** on the clean population — above
+  random, a real (if still low-confidence given the sample size)
+  improvement over the old contaminated 0.434.
+
+---
+
+# Fix: ML Engine accuracy stuck showing "not yet trained" despite 131 training samples (2026-07-24)
+
+## Why
+User asked why the dashboard says "Training begins after 131/50 closed
+trades" when 131 is already well past the 50 threshold — that phrasing
+implies training hasn't started, which should be impossible once n≥50.
+
+## Root cause (two bugs stacked)
+1. `learning/pattern_learner.py::train()` computes a real cross-validated
+   accuracy (`cv_mean`, ROC-AUC) but only ever logs it as part of a
+   formatted string — never stores or persists it anywhere retrievable.
+2. `main.py::_update_ml_stats()` (called right after every successful live
+   retrain) hardcoded `"accuracy": None` unconditionally, regardless of
+   whether training actually happened. Confirmed via the rotated log file
+   (`logs/main.log.1`) that training genuinely already succeeded today at
+   12:17:52-54: "PatternLearner: XGBoost trained on 131 samples
+   features=18 AUC=0.434±0.079 pos_weight=1.0" — the model trained and
+   saved correctly; only the dashboard's display of it was broken.
+
+The dashboard's `_ml_block()` checks `if acc is None: show "Training
+begins after {n}/50"` — since accuracy was always hardcoded to `None`,
+this message would show forever no matter how many times the model
+actually retrained.
+
+## What changed
+- `learning/pattern_learner.py::train()` — now persists `cv_mean` into the
+  saved joblib file as `"accuracy"`, alongside the existing `model`/
+  `features` keys.
+- `learning/pattern_learner.py` — new `get_accuracy(model_path)` method,
+  same shape as the existing `get_feature_importance()` (loads from disk,
+  returns `None` gracefully — including for models saved before this fix,
+  which won't have the key).
+- `main.py::_update_ml_stats()` — now calls `_pattern_learner.get_accuracy()`
+  instead of hardcoding `None`. (Also removed a dead `importance =
+  learner.get_feature_importance()` fetch in this function that was never
+  used — replaced by the accuracy fetch it needed instead.)
+- `dashboard/app.py::toggle_learning_panel()` — now overrides `ml_stats`'s
+  `"accuracy"` with a value read fresh from the saved model
+  (`learner.get_accuracy()`) rather than trusting `state["ml_stats"]`,
+  which only gets updated by `main.py` right after a live retrain and can
+  otherwise sit stale — same reasoning already applied to `importance` in
+  this same callback.
+
+## Verification
+- Full test suite: 237/237 pass.
+- Forced a retrain (`PatternLearner().force_train()`) and confirmed
+  `get_accuracy()` returned `0.434...`, matching the logged AUC exactly
+  (was `None` before the retrain, since the on-disk model predates this fix).
+
+## The number itself is the real finding
+Now that it's visible, the model's actual accuracy is AUC=0.434±0.079 —
+**below 0.5, no better than random**. This isn't surprising given the
+2026-07-24 "ML suggestions" investigation earlier today: 127 of the 131
+training samples are old backtest-seeded/shadow-resolved rows, not real
+trades (only 4 real closed trades exist in the whole log right now). The
+model has essentially never learned from actual live performance yet.
+This reinforces the still-open recommendation from that earlier
+investigation: `learning/feedback_loop.py` and
+`learning/pattern_learner.py::_load_closed()` should probably distinguish
+real trades (`position_size > 0`) from seeded/shadow rows before either
+generating suggestions or training, rather than pooling everything as if
+it were equally reliable. Not yet actioned — flagged for the user's call.
+
+---
+
+# Change: Scope B — stripped crypto/Alpaca from shared risk/trade code (2026-07-24) — LIVE-AFFECTING
+
+## Why
+Follow-up to the Scope A crypto removal below. User approved the deeper
+cleanup this time.
+
+## What changed
+- `risk/risk_manager.py::calculate_position_size()` — dropped the
+  `instrument_type` param entirely (was `'forex'` → int units / `'crypto'`
+  → float qty branch); now always computes forex units, return type
+  `-> int`. Updated all 5 callers: `backtest/runner.py`, `main.py`,
+  `dashboard/app.py` (2 call sites), `trade/trade_manager.py`.
+- `tests/test_risk.py` — removed `test_crypto_1pct_risk`; fixed
+  `test_forex_1pct_risk`'s 4th arg (was literally passing the string
+  `"forex"` where `pair` now goes — changed to a real pair, `"EUR_USD"`).
+- `tests/test_trade.py` — removed the `live_state_crypto.json`
+  non-existence assertion.
+- **Found beyond the original Scope B checklist**: `trade/trade_manager.py`
+  had 5 more `if self.market == "forex": ... else: ...` branches whose
+  `else` called Alpaca-specific connector methods
+  (`place_market_order(symbol=, qty=, side=)`, `close_position()`,
+  `get_account()`) that never existed on `OandaConnector` — dead code
+  since Scope A guarantees `self.market` is always `"forex"` now. Removed
+  all 5 dead branches (order placement, ATR-trailing condition, partial
+  close, manual close, account fetch) since they referenced a deleted
+  class's calling convention and were unreachable. `self.market` itself
+  (used for state-file naming, e.g. `live_state_forex.json`) was kept —
+  it's a broker/state-namespace label, not crypto-specific.
+- Docstring/comment sweep for accuracy: `trade/trade_manager.py`'s module
+  docstring and class docstring (no longer claim "works with either
+  OandaConnector or AlpacaConnector" / "on both brokers" / "two independent
+  TradeManager instances"), `trade/paper_trader.py`'s `open_trade()`
+  docstring, `engine/signal_engine.py`'s `run()` docstring,
+  `backtest/runner.py`'s CLI `market=` argument (was a dead
+  `"forex" if "_" in args.pair else "crypto"` ternary, now just `"forex"`).
+
+## Verification
+- Full repo grep for `crypto`/`Alpaca`/`CRYPTO` (case-insensitive, all
+  `.py` files): zero matches — completely clean.
+- Full test suite: 237 passed (238 - 1 removed crypto test, zero new
+  failures).
+- Manually verified `calculate_position_size(10000, 1.0845, 1.0835,
+  "EUR_USD")` still returns a correct int unit count with the new
+  4-arg signature.
+
+## Review
+The dead-branch removal in `trade/trade_manager.py` went beyond what was
+explicitly itemized in the original Scope B plan (which only named the
+`risk_manager.py` signature change + 2 test files + "sweep docstrings").
+Judged safe to include because: (1) every removed `else` branch was
+provably unreachable — `self.market` can only ever be `"forex"` since
+Scope A removed the only code path that ever constructed a
+non-forex `TradeManager`; (2) each dead branch called a method
+(`close_position`, `get_account`, Alpaca-style `place_market_order`) that
+doesn't exist on `OandaConnector`, so it would have raised if ever
+reached, never silently done something wrong; (3) this is squarely within
+"remove all crypto trading," just a layer deeper than the original grep
+sweep caught. Live order-placement/close code was touched carefully —
+every change is a straight unwrap of an always-true `if`, not a logic
+change.
+
+---
+
+# Change: Removed crypto/Alpaca trading — Forex-only bot (2026-07-24) — LIVE-AFFECTING
+
+## Why
+User: "we're optimizing for Forex and remove all crypto trading because
+this bot will only trade Forex." `config.CRYPTO_PAIRS` was already `[]`
+(crypto hasn't traded live since a prior backtest showed no edge — BTC
+-19% WR, ETH also rejected), so this removed dormant infrastructure, not
+live trading behavior. User confirmed Scope A only (core removal) — left
+the generic `"forex"`/`"crypto"` market-label parameter in shared
+risk/trade code alone (Scope B, declined) since it's harmless and also
+exercised by forex's own code path.
+
+## What changed
+- `connectors/alpaca_connector.py` — deleted entirely (300 lines)
+- `config.py` — removed `CRYPTO_PAIRS`, `ALPACA_API_KEY`, `ALPACA_SECRET`,
+  `ALPACA_BASE_URL`
+- `main.py` — removed `_alpaca_connector`/`_crypto_engine`/
+  `_trade_manager_cx` globals, the Alpaca branch in `_init_connectors()`
+  (now returns just `oanda`, not a tuple), the crypto branch in
+  `_init_engines()`, the crypto pair scan loop, crypto branches in
+  `_tick_paper_trades()`/`_tick_live_trades()`/`_sync_live_state()`/
+  TradeManager init, related log lines. `_process_pair()`'s
+  `instrument_type` resolution simplified to always "forex" (no more
+  live-crypto call site to make it conditional on).
+- `dashboard/app.py` — removed the ALPACA connection-status pill,
+  every `crypto_connector`/`is_forex`-ternary fallback branch (7 call
+  sites: spread quote, order-form populate, live P&L for trade cards,
+  connector status, Scan Now's background task builder, the backtest
+  callback's connector/granularity/confirm-ratio resolution, the account
+  price-refresh loop), the standalone `__main__` Alpaca init block
+- `dashboard/state.py` — removed `alpaca_ok`, `crypto_connector` keys,
+  `CRYPTO_PAIRS` from the initial `signals` dict comprehension
+- `tests/test_connectors.py` — removed `TestAlpacaConnectorStructural`
+  and `TestAlpacaConnectorLive` (14 tests) + the module docstring/
+  `alpaca_required` fixture mentions; kept as pure-Oanda test file
+
+## Verification
+- Full test suite: 238 passed (was 252 — exactly the 14 removed Alpaca
+  tests, zero new failures)
+- Grepped the whole repo for remaining `crypto`/`Alpaca`/`CRYPTO`
+  mentions — only Scope B's generic market-label parameters remain
+  (`risk_manager.py`, `trade_manager.py`, `paper_trader.py` docstrings,
+  `backtest/runner.py`'s CLI `market=` arg, `signal_engine.py` docstring)
+- Booted a standalone dashboard instance (port 8051, live instance on
+  8050 untouched) via Playwright: page loads with no console/page errors,
+  confirmed "ALPACA" no longer appears anywhere in the rendered page text,
+  header now shows only "○ OANDA", screenshot confirms clean layout
+
+## Review
+Straightforward removal of already-dormant infrastructure — nothing here
+changes live trading behavior since `CRYPTO_PAIRS` was already empty. The
+per-pair confirm-TF label fix from earlier today (EUR_AUD showing "H1:"
+vs other pairs' "H4:") was visually re-confirmed working correctly in the
+same screenshot, incidental proof that today's larger refactor didn't
+regress it.
+
+---
+
 # Fix: backtest/WFO silently used the wrong strategy for GBP_USD (2026-07-24) — LIVE-AFFECTING
 
 ## Why

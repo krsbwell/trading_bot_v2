@@ -1,8 +1,12 @@
 """
 Trading Bot — entry point.
 
-Paper mode (default):   python main.py
-Live mode:              set MODE = "live" in config.py, then python main.py
+Paper mode:             set MODE = "paper" in config.py — pure internal
+                        simulation, no OANDA orders placed
+Demo mode (default):    set MODE = "demo" in config.py — real orders on
+                        the OANDA practice account
+Live mode:              set MODE = "live" in config.py — real orders on
+                        the real-money OANDA account
 
 Dashboard opens at:     http://localhost:8050
 """
@@ -19,7 +23,6 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 import config
 from connectors.oanda_connector import OandaConnector
-from connectors.alpaca_connector import AlpacaConnector
 from connectors.news_connector import is_news_blackout
 from connectors.forexfactory_connector import is_news_blackout as ff_is_news_blackout
 from engine.signal_engine import SignalEngine
@@ -72,13 +75,10 @@ logger = logging.getLogger(__name__)
 
 # ── Globals initialised in main() ─────────────────────────────────────────────
 _oanda_connector   = None
-_alpaca_connector  = None
 _paper_trader      = None
 _forex_engine      = None
-_crypto_engine     = None
 _pattern_learner   = PatternLearner()
 _trade_manager_fx  = None
-_trade_manager_cx  = None
 _last_candle_hour  = None   # UTC hour of last on_candle_close() run (prevents restart duplicates)
 
 
@@ -140,14 +140,20 @@ def on_candle_close() -> None:
     # ── Update open trades ─────────────────────────────────────────────────────
     if config.MODE == "paper" and _paper_trader:
         _tick_paper_trades()
-    elif config.MODE == "live":
+    elif config.MODE in ("demo", "live"):
         _tick_live_trades()
+
+    # ── Weekend close — after the normal SL/TP tick above, before any new
+    # signal can open, so a trade that legitimately hit SL/TP this candle
+    # keeps its real close reason, and nothing new opens after this point
+    # (SESSION_END_UTC already blocks new entries regardless). ─────────────
+    _weekend_close_check()
 
     # ── Signal scan — active pairs (trade + alert) ───────────────────────────
     watch_pairs = getattr(config, "FOREX_WATCH", [])
     logger.info(
-        "  Scanning %d trade pairs + %d watch pairs + %d crypto …",
-        len(config.FOREX_PAIRS), len(watch_pairs), len(config.CRYPTO_PAIRS),
+        "  Scanning %d trade pairs + %d watch pairs …",
+        len(config.FOREX_PAIRS), len(watch_pairs),
     )
 
     _scan_forex_pairs(config.FOREX_PAIRS, _forex_engine)
@@ -171,9 +177,6 @@ def on_candle_close() -> None:
                                 pair, sig["direction"], sig["score"])
             except Exception as exc:
                 logger.warning("Watch scan failed for %s: %s", pair, exc)
-
-    for pair in config.CRYPTO_PAIRS:
-        _process_pair(pair, "crypto", _crypto_engine)
 
     # Summary of scores after scan
     sigs = state.get_key("signals", {})
@@ -337,16 +340,35 @@ def _process_pair(pair: str, market: str, engine) -> None:
         if ml_prob < 0.50:
             _ml_reason = f"ML gate: P(win)={ml_prob:.2f} below 0.50 for score {score}"
             logger.info("ML GATE BLOCKED: %s %s — %s", pair, signal["direction"], _ml_reason)
+            _audit_blocked(
+                pair=pair, timeframe=signal.get("timeframe", "H1"),
+                direction=signal["direction"],
+                ema_score=signal.get("ema_score", 0),
+                structure_score=signal.get("structure_score", 0),
+                pa_score=signal.get("pa_score", 0),
+                confluence_score=score,
+                result="BLOCKED", reject_reason=_ml_reason,
+            )
             _block(_ml_reason)
             return
 
     # ── Gate-blocked signals (H4 counter-trend / ATR out of range) ──────────
     if signal.get("gate_blocked"):
+        _gate_reason = f"Gate: {signal['gate_blocked']}"
         logger.info(
             "GATE BLOCKED: %s %s score=%d — %s (signal visible, no trade)",
             pair, signal["direction"], score, signal["gate_blocked"],
         )
-        _block(f"Gate: {signal['gate_blocked']}")
+        _audit_blocked(
+            pair=pair, timeframe=signal.get("timeframe", "H1"),
+            direction=signal["direction"],
+            ema_score=signal.get("ema_score", 0),
+            structure_score=signal.get("structure_score", 0),
+            pa_score=signal.get("pa_score", 0),
+            confluence_score=score,
+            result="BLOCKED", reject_reason=_gate_reason,
+        )
+        _block(_gate_reason)
         return
 
     # ── Trending structure filter — EMA-bounce only ───────────────────────────
@@ -391,15 +413,35 @@ def _process_pair(pair: str, market: str, engine) -> None:
     # ForexFactory: free XML feed, no API key required — always active
     _ff_blocked, _ff_event = ff_is_news_blackout(pair)
     if _ff_blocked:
+        _ff_reason = f"News: {_ff_event}"
         logger.info("NEWS BLOCKED (FF): %s — '%s'", pair, _ff_event)
-        _block(f"News: {_ff_event}")
+        _audit_blocked(
+            pair=pair, timeframe=signal.get("timeframe", "H1"),
+            direction=signal["direction"],
+            ema_score=signal.get("ema_score", 0),
+            structure_score=signal.get("structure_score", 0),
+            pa_score=signal.get("pa_score", 0),
+            confluence_score=score,
+            result="BLOCKED", reject_reason=_ff_reason,
+        )
+        _block(_ff_reason)
         return
     # Finnhub: supplement if API key is configured
     if config.FINNHUB_API_KEY:
         _news_blocked, _event_name = is_news_blackout(pair)
         if _news_blocked:
+            _fh_reason = f"News: {_event_name}"
             logger.info("NEWS BLOCKED (Finnhub): %s — '%s'", pair, _event_name)
-            _block(f"News: {_event_name}")
+            _audit_blocked(
+                pair=pair, timeframe=signal.get("timeframe", "H1"),
+                direction=signal["direction"],
+                ema_score=signal.get("ema_score", 0),
+                structure_score=signal.get("structure_score", 0),
+                pa_score=signal.get("pa_score", 0),
+                confluence_score=score,
+                result="BLOCKED", reject_reason=_fh_reason,
+            )
+            _block(_fh_reason)
             return
 
     # ── Duplicate / pre-trade guard ──────────────────────────────────────────
@@ -484,8 +526,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
 
     account = state.get_key("account", {})
     balance = account.get("balance") or account.get("cash", 500.0)
-    inst    = "forex" if market == "forex" else "crypto"
-    size    = calculate_position_size(balance, signal["entry"], signal["stop_loss"], inst, pair)
+    size    = calculate_position_size(balance, signal["entry"], signal["stop_loss"], pair)
 
     trade_id  = f"{pair}-{int(datetime.now(timezone.utc).timestamp())}"
     record_signal(trade_id, signal, size, balance * 0.01)
@@ -518,7 +559,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
         except Exception:
             pass
     else:
-        manager   = _trade_manager_fx if market == "forex" else _trade_manager_cx
+        manager   = _trade_manager_fx
         if manager:
             actual_id = manager.open_trade(signal)
             _sync_live_state()
@@ -539,20 +580,100 @@ def _process_pair(pair: str, market: str, engine) -> None:
         logger.warning("PAPER TRADER rejected trade for %s (secondary duplicate guard)", pair)
 
 
+def _weekend_close_check() -> None:
+    """
+    Two-phase Friday close so nothing carries weekend gap risk (OANDA FX
+    closes after Friday's session and reopens Sunday evening — a large
+    weekend news gap can blow straight through a normal SL):
+
+    1. Profit-seeking window (config.WEEKEND_CLOSE_PROFIT_WINDOW_HOURS
+       before SESSION_END_UTC): close a trade as soon as price has moved
+       favorably past its entry — "try to end trades in profit as best as
+       possible" (user request 2026-07-29) — but leave it open otherwise,
+       there's still time for it to turn.
+    2. Hard deadline (SESSION_END_UTC itself): force-close whatever's left,
+       unconditionally, regardless of P&L. This guarantee is absolute; the
+       profit-seeking above is best-effort on top of it, never a reason to
+       skip it.
+
+    Naturally idempotent, no extra state needed: once a pair's trade is
+    closed, get_open_trade()/open_pairs() return nothing on the next tick,
+    and the existing session-entry gate (SESSION_START_UTC <= hour <
+    SESSION_END_UTC) already blocks anything new from opening again until
+    Monday — so this doesn't need to track "already ran this week" itself.
+    """
+    if not getattr(config, "WEEKEND_CLOSE_ENABLED", True):
+        return
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.weekday() != config.WEEKEND_CLOSE_WEEKDAY_UTC:
+        return
+    profit_window_start = config.SESSION_END_UTC - getattr(config, "WEEKEND_CLOSE_PROFIT_WINDOW_HOURS", 0)
+    if now_utc.hour < profit_window_start:
+        return
+    hard_deadline = now_utc.hour >= config.SESSION_END_UTC
+
+    connector = _oanda_connector
+    if connector is None:
+        return
+
+    def _in_profit(direction: str, entry: float, price: float) -> bool:
+        return price > entry if direction == "long" else price < entry
+
+    if config.MODE == "paper" and _paper_trader:
+        for pair in config.FOREX_PAIRS:
+            t = _paper_trader.get_open_trade(pair)
+            if not t:
+                continue
+            try:
+                df = connector.get_candles(pair, config.TIMEFRAMES["primary"], 1)
+                if df is None or len(df) < 1:
+                    continue
+                price = float(df.iloc[-1]["close"])
+                profitable = _in_profit(t["direction"], t["entry"], price)
+                if not hard_deadline and not profitable:
+                    continue   # still time before the deadline, not in profit yet — hold
+                reason = "weekend_close" if hard_deadline and not profitable else "weekend_close_profit"
+                if _paper_trader.manual_close(t["id"], price, reason=reason):
+                    logger.info("WEEKEND CLOSE (%s): %s trade %s closed at %.5f",
+                                "in-profit" if profitable else "deadline", pair, t["id"], price)
+                    _sync_paper_state()
+            except Exception as exc:
+                logger.error("Weekend close failed for %s: %s", pair, exc)
+    elif config.MODE in ("demo", "live") and _trade_manager_fx:
+        for pair in list(_trade_manager_fx.open_pairs()):
+            t = _trade_manager_fx.get_open_trade(pair)
+            if not t:
+                continue
+            try:
+                price = None
+                try:
+                    df = connector.get_candles(pair, config.TIMEFRAMES["primary"], 1)
+                    if df is not None and len(df) >= 1:
+                        price = float(df.iloc[-1]["close"])
+                except Exception:
+                    pass
+                profitable = price is not None and _in_profit(t["direction"], t["entry"], price)
+                if not hard_deadline and not profitable:
+                    continue
+                reason = "weekend_close" if hard_deadline and not profitable else "weekend_close_profit"
+                _trade_manager_fx.close_trade(t["id"], reason=reason)
+                logger.info("WEEKEND CLOSE (%s): %s trade %s closed ahead of the weekend",
+                            "in-profit" if profitable else "deadline", pair, t["id"])
+                _sync_live_state()
+            except Exception as exc:
+                logger.error("Weekend close failed for %s: %s", pair, exc)
+
+
 def _tick_paper_trades() -> None:
     """Feed the latest candle to PaperTrader so SL/TP is evaluated."""
-    for pair in config.FOREX_PAIRS + config.CRYPTO_PAIRS:
+    for pair in config.FOREX_PAIRS:
         if not _paper_trader.get_open_trade(pair):
             continue
-        connector = (_oanda_connector if "_" in pair else _alpaca_connector)
+        connector = _oanda_connector
         if connector is None:
             continue
         try:
             gran = config.TIMEFRAMES["primary"]
-            # Alpaca uses different TF strings ("1Hour" not "H1")
-            if "_" not in pair:
-                _tf_map = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}
-                gran = _tf_map.get(gran, "1Hour")
             # Only fetch the extra candle history ATR needs when the feature is
             # actually on — keeps today's API-call volume unchanged otherwise.
             count   = config.ATR_TRAILING_PERIOD + 10 if config.ATR_TRAILING_ENABLED else 2
@@ -601,18 +722,15 @@ def _tick_live_trades() -> None:
     was never called anywhere, so live trades only ever had their initial
     SL (attached at order placement) — nothing else would have fired.
     """
-    for manager in (_trade_manager_fx, _trade_manager_cx):
+    for manager in (_trade_manager_fx,):
         if manager is None:
             continue
         for pair in manager.open_pairs():
-            connector = (_oanda_connector if "_" in pair else _alpaca_connector)
+            connector = _oanda_connector
             if connector is None:
                 continue
             try:
                 gran = config.TIMEFRAMES["primary"]
-                if "_" not in pair:
-                    _tf_map = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}
-                    gran = _tf_map.get(gran, "1Hour")
                 count = config.ATR_TRAILING_PERIOD + 10 if config.ATR_TRAILING_ENABLED else 2
                 df    = connector.get_candles(pair, gran, count)
                 if df is None or len(df) < 1:
@@ -658,7 +776,7 @@ def _sync_live_state() -> None:
     _sync_paper_state(). Without this, live trades wouldn't appear on the
     dashboard even though they're real broker positions."""
     open_trades, closed_trades = [], []
-    for manager in (_trade_manager_fx, _trade_manager_cx):
+    for manager in (_trade_manager_fx,):
         if manager is None:
             continue
         open_trades.extend(manager.open_trades.values())
@@ -733,7 +851,7 @@ def _reconcile_live_positions() -> None:
     Logs any discrepancies so the user can decide whether to close/ignore them.
     Does NOT auto-create trades — avoids duplicate position risk.
     """
-    if config.MODE != "live" or not _oanda_connector:
+    if config.MODE not in ("demo", "live") or not _oanda_connector:
         return
     try:
         broker_trades = _oanda_connector.get_open_trades()
@@ -759,15 +877,15 @@ def _reconcile_live_positions() -> None:
 
 
 def _update_ml_stats() -> None:
-    importance = _pattern_learner.get_feature_importance()
-    top        = _pattern_learner.top_features(3)
+    accuracy = _pattern_learner.get_accuracy()
+    top      = _pattern_learner.top_features(3)
     try:
-        import pandas as pd
-        df = pd.read_csv("data/signal_log.csv")
-        n  = len(df[df["outcome"].isin(["win", "loss", "would_win", "would_lose"])])
+        from learning.pattern_learner import _load_closed, LOG_PATH
+        df = _load_closed(LOG_PATH)
+        n  = len(df) if df is not None else 0
     except Exception:
         n = 0
-    state.update(ml_stats={"accuracy": None, "top_features": top, "n_samples": n})
+    state.update(ml_stats={"accuracy": accuracy, "top_features": top, "n_samples": n})
 
 
 def _diagnostic_scan() -> None:
@@ -845,8 +963,8 @@ def _live_diagnostic_scan() -> None:
 # Initialisation
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _init_connectors() -> tuple:
-    oanda, alpaca = None, None
+def _init_connectors():
+    oanda = None
 
     if config.OANDA_API_KEY and config.OANDA_ACCOUNT_ID:
         try:
@@ -864,35 +982,12 @@ def _init_connectors() -> tuple:
         state.update(oanda_ok=False)
         logger.warning("✗ Oanda  credentials missing in .env — forex disabled")
 
-    if config.CRYPTO_PAIRS and config.ALPACA_API_KEY and config.ALPACA_SECRET:
-        try:
-            alpaca = AlpacaConnector()
-            test_df = alpaca.get_candles(config.CRYPTO_PAIRS[0], "1Hour", 1)
-            state.update(alpaca_ok=True)
-            logger.info("✓ Alpaca connected (paper=%s)  last %s close=%.2f",
-                        config.MODE == "paper", config.CRYPTO_PAIRS[0],
-                        test_df["close"].iloc[-1] if not test_df.empty else 0)
-        except Exception as exc:
-            state.update(alpaca_ok=False)
-            logger.error("✗ Alpaca connection FAILED: %s", exc)
-    else:
-        state.update(alpaca_ok=False)
-        if not config.CRYPTO_PAIRS:
-            logger.info("Alpaca skipped — CRYPTO_PAIRS is empty")
-        else:
-            logger.warning("✗ Alpaca credentials missing in .env — crypto disabled")
-
-    return oanda, alpaca
+    return oanda
 
 
-def _init_engines(oanda, alpaca):
+def _init_engines(oanda):
     forex_eng = SignalEngine(oanda.get_candles) if oanda else None
-    # Alpaca uses different timeframe strings — adapt via lambda
-    def _alpaca_get(pair, gran, count):
-        tf_map = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}
-        return alpaca.get_candles(pair, tf_map.get(gran, "1Hour"), count)
-    crypto_eng = SignalEngine(_alpaca_get) if alpaca else None
-    return forex_eng, crypto_eng
+    return forex_eng
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -900,22 +995,18 @@ def _init_engines(oanda, alpaca):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
-    global _oanda_connector, _alpaca_connector, _paper_trader
-    global _forex_engine, _crypto_engine
-    global _trade_manager_fx, _trade_manager_cx
+    global _oanda_connector, _paper_trader
+    global _forex_engine
+    global _trade_manager_fx
 
     logger.info("══════════════════════════════════════════════════════")
     logger.info("  Trading Bot  |  Mode: %s", config.MODE.upper())
     logger.info("  Forex pairs : %s", ", ".join(config.FOREX_PAIRS))
-    logger.info("  Crypto pairs: %s", ", ".join(config.CRYPTO_PAIRS))
     logger.info("══════════════════════════════════════════════════════")
 
     # ── Connectors ────────────────────────────────────────────────────────────
-    _oanda_connector, _alpaca_connector = _init_connectors()
-    state.update(
-        forex_connector  = _oanda_connector,
-        crypto_connector = _alpaca_connector,
-    )
+    _oanda_connector = _init_connectors()
+    state.update(forex_connector=_oanda_connector)
 
     # ── Trader ────────────────────────────────────────────────────────────────
     if config.MODE == "paper":
@@ -930,11 +1021,9 @@ def main() -> None:
     else:
         if _oanda_connector:
             _trade_manager_fx = TradeManager(_oanda_connector, "forex")
-        if _alpaca_connector:
-            _trade_manager_cx = TradeManager(_alpaca_connector, "crypto")
 
     # ── Signal engines ────────────────────────────────────────────────────────
-    _forex_engine, _crypto_engine = _init_engines(_oanda_connector, _alpaca_connector)
+    _forex_engine = _init_engines(_oanda_connector)
 
     # ── Live-mode reconciliation — compare local state vs broker open trades ──
     _reconcile_live_positions()

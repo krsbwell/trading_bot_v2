@@ -215,14 +215,12 @@ app = Dash(
 # ── Layout helpers ────────────────────────────────────────────────────────────
 
 def _fmt_pair(p: str) -> str:
-    """Display EUR_USD as EUR/USD; crypto BTC/USD already correct."""
+    """Display EUR_USD as EUR/USD."""
     return p.replace("_", "/")
 
 
 def _pair_options():
-    all_pairs = (config.FOREX_PAIRS
-                 + getattr(config, "FOREX_WATCH", [])
-                 + config.CRYPTO_PAIRS)
+    all_pairs = config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", [])
     return [{"label": _fmt_pair(p), "value": p} for p in all_pairs]
 
 def _sep():
@@ -937,11 +935,6 @@ app.layout = html.Div(
                                        "border": "1px solid #00ff88", "borderRadius": "4px",
                                        "padding": "0.3rem 0.8rem", "cursor": "pointer",
                                        "fontSize": "0.8rem", "fontWeight": 600}),
-                    html.Button("Seed from Backtest + Retrain", id="ml-seed-btn", n_clicks=0,
-                                style={"background": "#1a1000", "color": "#d4a017",
-                                       "border": "1px solid #d4a017", "borderRadius": "4px",
-                                       "padding": "0.3rem 0.8rem", "cursor": "pointer",
-                                       "fontSize": "0.8rem", "fontWeight": 600}),
                     html.Button("Run WFO Now", id="ml-wfo-btn", n_clicks=0,
                                 style={"background": "#001a2e", "color": "#38b6ff",
                                        "border": "1px solid #38b6ff", "borderRadius": "4px",
@@ -1234,16 +1227,8 @@ def update_chart(n_intervals, pair, tf, ema_settings, ind_comp, chart_type):
         ctx.triggered[0]["prop_id"].split(".")[0] == "interval-60s"
     )
 
-    is_forex  = "_" in pair
-    connector = (state.get_key("forex_connector") if is_forex
-                 else state.get_key("crypto_connector"))
-
-    # Granularity: OANDA uses "M5"/"M15"/"M30"/"H1"/"H4"/"D"/"W"; Alpaca differs
-    if is_forex:
-        gran = tf                                     # OANDA accepts TF keys directly
-    else:
-        gran = {"M5": "5Min", "M15": "15Min", "M30": "30Min",
-                "H1": "1Hour", "H4": "4Hour", "D": "1Day", "W": "1Week"}.get(tf, "1Hour")
+    connector = state.get_key("forex_connector")
+    gran      = tf   # OANDA accepts TF keys directly
 
     df = state.get_candles(pair, tf)
 
@@ -1629,8 +1614,14 @@ def toggle_draw_mode(_, current):
         ctx.triggered[0]["prop_id"].split(".")[0]
     ).get("index")
     if btn_idx == "cancel":
+        # Always clear the store too (not just the button styles) — the
+        # clientside callback's isCancel branch always deactivates drawMode
+        # client-side now (see draw-dummy callback below), so this must
+        # match or the store goes stale: a later State("draw-mode-store")
+        # read (e.g. the next tool-button click) would still see the old
+        # mode and misinterpret which tool is "currently active".
         all_modes = _DRAW_TOOL_MODES + ["cancel"]
-        return no_update, [_draw_btn_style(m, False) for m in all_modes]
+        return None, [_draw_btn_style(m, False) for m in all_modes]
     mode = None if current == btn_idx else btn_idx
     all_modes = _DRAW_TOOL_MODES + ["cancel"]
     return mode, [_draw_btn_style(m, mode == m and m != "cancel") for m in all_modes]
@@ -1664,11 +1655,17 @@ app.clientside_callback(
         }
 
         if (isCancel) {
-            var deleted = window._apexDeleteSelected ? window._apexDeleteSelected() : false;
-            if (!deleted) {
-                // Nothing was selected — cancel current draw mode
-                if (window._apexSetDrawMode) window._apexSetDrawMode(null);
-            }
+            // Delete whatever's selected (if anything) AND always deactivate
+            // the current draw tool — a freshly-placed drawing is
+            // auto-selected, so "only cancel mode if nothing was selected"
+            // meant pressing X right after placing a line just deleted the
+            // line and silently left the tool armed, while the toolbar
+            // (painted unconditionally inactive on cancel, see
+            // toggle_draw_mode() in app.py) showed nothing active — next
+            // double-click would then place another drawing instead of
+            // reaching the indicator-pane toggle. Bug found 2026-07-26.
+            if (window._apexDeleteSelected) window._apexDeleteSelected();
+            if (window._apexSetDrawMode) window._apexSetDrawMode(null);
             return '';
         }
 
@@ -1850,8 +1847,7 @@ def update_spread(_, pair):
     blank = "—", "—", "—", "▲ BUY", "▼ SELL"
     if not pair:
         return blank
-    is_forex  = "_" in pair
-    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
+    connector = state.get_key("forex_connector")
     if connector is None:
         return blank
     try:
@@ -1875,7 +1871,7 @@ def update_spread(_, pair):
                     pass
 
         dec        = 3 if "JPY" in pair else 5
-        spread_txt = f"{sp:.1f}p" if is_forex else f"${sp:.4f}"
+        spread_txt = f"{sp:.1f}p"
         return spread_txt, f"{bid:.{dec}f}", f"{ask:.{dec}f}", "▲ BUY", "▼ SELL"
     except Exception:
         return blank
@@ -1932,8 +1928,7 @@ def populate_order_form(form_data, default_lot):
 
     direction = form_data["direction"]
     pair      = form_data["pair"]
-    is_forex  = "_" in pair
-    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
+    connector = state.get_key("forex_connector")
 
     entry_val = sl_val = tp1_val = tp2_val = tp3_val = None
     lot_val = default_lot or 0.01
@@ -1948,8 +1943,7 @@ def populate_order_form(form_data, default_lot):
             ) or None
 
             # Fetch recent candles for ATR-based SL
-            gran = "H1" if is_forex else "1Hour"
-            df   = connector.get_candles(pair, gran, 50)
+            df = connector.get_candles(pair, "H1", 50)
             if df is not None and not df.empty:
                 if not entry_val:
                     entry_val = round(float(df["close"].iloc[-1]), 5)
@@ -1958,7 +1952,7 @@ def populate_order_form(form_data, default_lot):
                     atr_val = float(_atr(df["high"], df["low"], df["close"], 14).iloc[-1])
                     sl_dist = atr_val * 1.5
                 except Exception:
-                    sl_dist = 0.005 if is_forex else (entry_val or 1) * 0.015
+                    sl_dist = 0.005
                 sl_val = round(
                     entry_val - sl_dist if direction == "long" else entry_val + sl_dist,
                     3 if "JPY" in pair else 5,
@@ -1971,8 +1965,7 @@ def populate_order_form(form_data, default_lot):
                 if not default_lot:
                     account = state.get_key("account", {})
                     balance = account.get("balance") or account.get("cash", 500.0)
-                    inst    = "forex" if is_forex else "crypto"
-                    lot_val = calculate_position_size(balance, entry_val, sl_val, inst, pair)
+                    lot_val = calculate_position_size(balance, entry_val, sl_val, pair)
         except Exception as exc:
             logger.warning("Order form populate failed for %s: %s", pair, exc)
 
@@ -2153,10 +2146,9 @@ def toggle_close_modal(close_clicks, cancel1, cancel2, confirm, backdrop_n, pair
 
     # Live price for current P&L display — prefer the price-stream cache
     # (sub-second) over a REST call, same reasoning as update_trades_and_account
-    is_forex  = "_" in pair_v
-    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
+    connector = state.get_key("forex_connector")
     cur_price = t.get("last_price", entry)
-    live = state.get_live_price(pair_v) if is_forex else None
+    live = state.get_live_price(pair_v)
     if live:
         cur_price = live["mid"]
     elif connector:
@@ -2233,11 +2225,10 @@ def confirm_close_trade(n, store, pair):
     if not t:
         return no_update, no_update
 
-    pair_v    = t.get("pair", "")
-    is_forex  = "_" in pair_v
-    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
+    pair_v     = t.get("pair", "")
+    connector  = state.get_key("forex_connector")
     exit_price = t.get("last_price", t.get("entry", 0))
-    live = state.get_live_price(pair_v) if is_forex else None
+    live = state.get_live_price(pair_v)
     if live:
         exit_price = live["mid"]
     elif connector:
@@ -2627,8 +2618,7 @@ def _conn_pill(label: str, ok):
 )
 def update_connector_status(_):
     return [
-        _conn_pill("OANDA",  state.get_key("oanda_ok")),
-        _conn_pill("ALPACA", state.get_key("alpaca_ok")),
+        _conn_pill("OANDA", state.get_key("oanda_ok")),
     ]
 
 
@@ -2687,7 +2677,6 @@ def trigger_scan(n):
         """Run the full signal scan in a background thread."""
         try:
             forex_conn  = state.get_key("forex_connector")
-            crypto_conn = state.get_key("crypto_connector")
             from engine.signal_engine import SignalEngine
             from engine.strategy_ema_cci_macd import clear_cache
 
@@ -2696,13 +2685,7 @@ def trigger_scan(n):
             tasks = []
             if forex_conn:
                 eng = SignalEngine(forex_conn.get_candles)
-                tasks += [(p, "forex",  eng) for p in config.FOREX_PAIRS]
-            if crypto_conn:
-                def _alpaca_get(pair, gran, count):
-                    tf_map = {"H1": "1Hour", "H4": "4Hour", "D": "1Day"}
-                    return crypto_conn.get_candles(pair, tf_map.get(gran, "1Hour"), count)
-                eng_c = SignalEngine(_alpaca_get)
-                tasks += [(p, "crypto", eng_c) for p in config.CRYPTO_PAIRS]
+                tasks += [(p, "forex", eng) for p in config.FOREX_PAIRS]
 
             effective_min = max(
                 state.get_key("min_score", config.MIN_CONFLUENCE_SCORE),
@@ -2746,9 +2729,8 @@ def trigger_scan(n):
                                 from risk.risk_manager import calculate_position_size
                                 acct    = state.get_key("account", {})
                                 balance = acct.get("balance") or 500.0
-                                inst    = "forex" if "_" in pair else "crypto"
                                 size    = calculate_position_size(
-                                    balance, sig["entry"], sig["stop_loss"], inst, pair)
+                                    balance, sig["entry"], sig["stop_loss"], pair)
                                 sig["size"]         = size
                                 sig["risk_dollar"]  = round(balance * 0.01, 2)
                                 state.set_pending_alert(sig)
@@ -2877,12 +2859,17 @@ def toggle_learning_panel(open_n, close_n, backdrop_n, current_style):
     learner      = PatternLearner()
     adaptive_sum = adaptive_params.summary()
     wfo_sum      = wfo_optimizer.summary()
-    ml_stats_val = state.get_key("ml_stats")
     importance   = learner.get_feature_importance()
     calib_rows   = learner.calibration_data(n=20)
     from learning.pattern_learner import _load_closed as _lc, LOG_PATH as _LP
     _df          = _lc(_LP)
     sample_count = len(_df) if _df is not None else 0
+    # Read accuracy + n_samples fresh (disk / recomputed) rather than trusting
+    # state["ml_stats"], which is only updated by main.py right after a live
+    # retrain and can otherwise sit stale or zero (e.g. a freshly-started
+    # process that hasn't retrained yet) — same reasoning as `importance` above.
+    ml_stats_val = {**(state.get_key("ml_stats") or {}),
+                    "accuracy": learner.get_accuracy(), "n_samples": sample_count}
     return _show, learning_panel(adaptive_sum, wfo_sum, ml_stats_val, importance,
                                  calibration_rows=calib_rows, sample_count=sample_count), \
            {**_BACK_SHOW, "zIndex": 1999}
@@ -2893,11 +2880,10 @@ def toggle_learning_panel(open_n, close_n, backdrop_n, current_style):
 @app.callback(
     Output("ml-action-status", "children"),
     Input("ml-retrain-btn",    "n_clicks"),
-    Input("ml-seed-btn",       "n_clicks"),
     Input("ml-wfo-btn",        "n_clicks"),
     prevent_initial_call=True,
 )
-def ml_action(retrain_n, seed_n, wfo_n):
+def ml_action(retrain_n, wfo_n):
     ctx = callback_context
     if not ctx.triggered:
         return no_update
@@ -2938,22 +2924,7 @@ def ml_action(retrain_n, seed_n, wfo_n):
         threading.Thread(target=_run_wfo, daemon=True).start()
         return f"WFO started for {len(pairs)} pair(s) — running in background. Telegram notification will follow when done."
 
-    # Seed from Backtest + Retrain — run in background (same pattern as WFO)
-    def _run_seed():
-        summary = learner.seed_from_backtest(pairs, _candles_fn, bars=3500, market="forex")
-        errs    = summary.get("errors", [])
-        msg = (f"Seed complete: {summary['total_seeded']} trades written from "
-               f"{summary['pairs_done']}/{len(pairs)} pairs. "
-               f"{summary['train_result']}")
-        if errs:
-            msg += f"  Errors: {'; '.join(errs[:3])}"
-        logger.info("ML seed: %s", msg)
-
-    threading.Thread(target=_run_seed, daemon=True).start()
-    pair_list = ", ".join(pairs)
-    return (f"⏳ Seeding started for {len(pairs)} pairs ({pair_list}). "
-            f"Fetching 3500 M30 bars each — takes ~1–2 min. "
-            f"Model retrains automatically when done. Check logs for result.")
+    return no_update
 
 
 # ── Backtest panel show / hide ────────────────────────────────────────────────
@@ -3014,16 +2985,15 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
     if not n or not pair:
         return no_update, no_update
 
-    is_forex  = "_" in pair
-    connector = state.get_key("forex_connector" if is_forex else "crypto_connector")
+    connector = state.get_key("forex_connector")
     if connector is None:
         return "Error: connector not available.", no_update
 
-    market   = "forex" if is_forex else "crypto"
-    gran_h1  = config.TIMEFRAMES["primary"] if is_forex else "1Hour"
-    gran_h4  = config.confirm_tf_for(pair)  if is_forex else "4Hour"
+    market   = "forex"
+    gran_h1  = config.TIMEFRAMES["primary"]
+    gran_h4  = config.confirm_tf_for(pair)
     from backtest.runner import confirm_tf_ratio
-    confirm_ratio = confirm_tf_ratio(pair) if is_forex else 4  # crypto keeps its own fixed 4:1
+    confirm_ratio = confirm_tf_ratio(pair)
     balance  = state.get_key("account", {}).get("balance", 500.0)
 
     # ── Walk-Forward mode ─────────────────────────────────────────────────────
@@ -3067,8 +3037,7 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
     # (not a trading gate), so a failed fetch just leaves it at "neutral".
     df_d = None
     try:
-        gran_d = "D" if is_forex else "1Day"
-        df_d = connector.get_candles(pair, gran_d, 200)
+        df_d = connector.get_candles(pair, "D", 200)
     except Exception:
         pass
 
@@ -3270,24 +3239,20 @@ def update_trades_and_account(_):
     # ticked that pair recently (e.g. not streamed, or reconnecting).
     current_prices = {}
     if trades:
-        forex_conn  = s.get("forex_connector")
-        crypto_conn = s.get("crypto_connector")
+        forex_conn = s.get("forex_connector")
         for t in trades:
             pair = t.get("pair", "")
             if pair in current_prices:
                 continue
-            is_forex = "_" in pair
-            if is_forex:
-                live = state.get_live_price(pair)
-                if live:
-                    t["last_price"]      = live["mid"]
-                    current_prices[pair] = live["mid"]
-                    continue
-            conn = forex_conn if is_forex else crypto_conn
-            if conn is None:
+            live = state.get_live_price(pair)
+            if live:
+                t["last_price"]      = live["mid"]
+                current_prices[pair] = live["mid"]
+                continue
+            if forex_conn is None:
                 continue
             try:
-                q = conn.get_current_quote(pair)
+                q = forex_conn.get_current_quote(pair)
                 mid = q.get("mid") or 0
                 if mid:
                     t["last_price"]  = mid          # update in-memory for P&L calc
@@ -3852,13 +3817,5 @@ if __name__ == "__main__":
             logger.warning("Standalone: Oanda connector failed — %s", exc)
     else:
         logger.warning("Standalone: OANDA credentials not set — chart will show no data")
-
-    if config.ALPACA_API_KEY and config.ALPACA_SECRET:
-        try:
-            from connectors.alpaca_connector import AlpacaConnector
-            state.update(crypto_connector=AlpacaConnector())
-            logger.info("Standalone: Alpaca connector ready")
-        except Exception as exc:
-            logger.warning("Standalone: Alpaca connector failed — %s", exc)
 
     app.run(debug=True, port=8050)

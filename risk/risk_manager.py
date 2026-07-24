@@ -4,27 +4,18 @@ _session_open_balance = 0.0
 
 
 def calculate_position_size(account_balance: float, entry: float,
-                             stop_loss: float, instrument_type: str,
-                             pair: str = "") -> float:
+                             stop_loss: float, pair: str = "") -> int:
     """
-    Returns position size enforcing 1% risk hard rule.
-    instrument_type: 'forex' (returns int units) or 'crypto' (returns float qty).
+    Returns position size (units) enforcing 1% risk hard rule.
     pair: used to select correct pip size (JPY pairs use 0.01, others 0.0001).
     """
     risk_amount = account_balance * 0.01
     sl_distance = abs(entry - stop_loss)
 
-    if instrument_type == "forex":
-        pip = 0.01 if "JPY" in pair.upper() else 0.0001
-        sl_pips = sl_distance / pip
-        units = risk_amount / (sl_pips * pip)
-        return int(units)
-
-    elif instrument_type == "crypto":
-        qty = risk_amount / sl_distance
-        return round(qty, 6)
-
-    raise ValueError(f"Unknown instrument_type: {instrument_type}")
+    pip = 0.01 if "JPY" in pair.upper() else 0.0001
+    sl_pips = sl_distance / pip
+    units = risk_amount / (sl_pips * pip)
+    return int(units)
 
 
 def get_tp_levels(entry: float, stop_loss: float, direction: str, pair: str = "") -> dict:

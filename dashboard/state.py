@@ -19,7 +19,6 @@ _state: dict = {
 
     # ── Connector health ──────────────────────────────────────────────────────
     "oanda_ok":  None,   # True=connected, False=error, None=not tested
-    "alpaca_ok": None,
 
     # ── Account ───────────────────────────────────────────────────────────────
     "account": {
@@ -38,8 +37,7 @@ _state: dict = {
     # pair → {"score": int, "direction": str, "status": "SIGNAL"|"WATCHING"|"NEUTRAL"}
     "signals": {p: {"score": 0, "direction": "—", "status": "NEUTRAL"}
                 for p in (config.FOREX_PAIRS
-                          + getattr(config, "FOREX_WATCH", [])
-                          + config.CRYPTO_PAIRS)},
+                          + getattr(config, "FOREX_WATCH", []))},
 
     # ── Pre-trade alert ───────────────────────────────────────────────────────
     "pending_alert":    None,   # signal dict when alert is showing
@@ -56,8 +54,7 @@ _state: dict = {
     "candles": {},
 
     # ── Connectors (set by main.py so callbacks can fetch fresh data) ─────────
-    "forex_connector":  None,
-    "crypto_connector": None,
+    "forex_connector": None,
 
     # ── Adjustable signal threshold (slider in dashboard) ────────────────────
     "min_score": config.MIN_CONFLUENCE_SCORE,   # user can override at runtime

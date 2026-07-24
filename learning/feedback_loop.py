@@ -148,9 +148,17 @@ def _card(card_type: str, text: str) -> dict:
 
 
 def _load_closed(log_path: str) -> pd.DataFrame | None:
+    """
+    Real, executed trades only. Excludes any backtest-seeded rows (source
+    == "seed" — old rows from the seed-from-backtest feature removed
+    2026-07-24, which could go stale relative to the live config and
+    shouldn't be presented as live-performance suggestions). See
+    learning/data_collector.py's SOURCE_LIVE/SOURCE_SEED.
+    """
     try:
         df = pd.read_csv(log_path)
     except (FileNotFoundError, pd.errors.EmptyDataError):
         return None
-    closed = df[df["outcome"].isin(["win", "loss"])].copy()
+    is_live = df["source"] == "live" if "source" in df.columns else False
+    closed = df[df["outcome"].isin(["win", "loss"]) & is_live].copy()
     return closed if len(closed) > 0 else None

@@ -148,7 +148,7 @@ class PatternLearner:
         model.fit(X, y)
 
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        joblib.dump({"model": model, "features": avail}, model_path)
+        joblib.dump({"model": model, "features": avail, "accuracy": cv_mean}, model_path)
 
         self._last_trained_count = len(df)
         summary = (
@@ -184,6 +184,22 @@ class PatternLearner:
             return float(model.predict_proba(X)[0][1])
         except Exception as exc:
             logger.error("predict_win_prob failed: %s", exc)
+            return None
+
+    # ── Accuracy (for dashboard) ─────────────────────────────────────────────
+
+    def get_accuracy(self, model_path: str = MODEL_PATH) -> float | None:
+        """
+        Return the cross-validated ROC-AUC computed at training time, or None
+        if no model exists yet (or it was saved before this field existed).
+        """
+        if not os.path.exists(model_path):
+            return None
+        try:
+            saved = joblib.load(model_path)
+            return saved.get("accuracy")
+        except Exception as exc:
+            logger.error("get_accuracy failed: %s", exc)
             return None
 
     # ── Feature importance (for dashboard) ───────────────────────────────────
@@ -233,99 +249,6 @@ class PatternLearner:
             self.MIN_SAMPLES = orig
         return result or f"Training failed ({n} samples)"
 
-    # ── Seed from backtest ────────────────────────────────────────────────────
-
-    def seed_from_backtest(
-        self,
-        pairs:       list[str],
-        candles_fn,                 # callable(pair, granularity, count) -> pd.DataFrame
-        bars:        int  = 2000,
-        market:      str  = "forex",
-        log_path:    str  = LOG_PATH,
-        model_path:  str  = MODEL_PATH,
-    ) -> dict:
-        """
-        Run backtests across `pairs`, write the enriched signal rows to signal_log.csv,
-        then force-retrain XGBoost. Returns a summary dict.
-
-        candles_fn must accept (pair, granularity_str, count) and return a DataFrame.
-        """
-        import config as _cfg
-        from backtest.runner import run_backtest
-        from learning.data_collector import SIGNAL_FIELDS, _write_row
-
-        total_written = 0
-        errors: list[str] = []
-
-        for pair in pairs:
-            try:
-                gran_h1 = _cfg.TIMEFRAMES.get("primary", "H1")
-                gran_h4 = _cfg.TIMEFRAMES.get("confirm",  "H4")
-                df_h1 = candles_fn(pair, gran_h1, bars + 60)
-                df_h4 = candles_fn(pair, gran_h4, bars // 2 + 20)  # M30→H1 is 2:1
-                if df_h1 is None or len(df_h1) < 120:
-                    errors.append(f"{pair}: insufficient candles")
-                    continue
-                result = run_backtest(pair, df_h1, df_h4, market=market)
-                if "error" in result:
-                    errors.append(f"{pair}: {result['error']}")
-                    continue
-                for row in result.get("seed_rows", []):
-                    _write_row(log_path, SIGNAL_FIELDS, {
-                        "timestamp":            row.get("bar_time", ""),
-                        "pair":                 row.get("pair", pair),
-                        "market":               market,
-                        "direction":            row.get("direction", ""),
-                        "timeframe_primary":    gran_h1,
-                        "timeframe_confirm":    gran_h4,
-                        "entry_price":          row.get("entry_price", ""),
-                        "stop_loss":            row.get("stop_loss", ""),
-                        "tp1":                  row.get("tp1", ""),
-                        "tp2":                  row.get("tp2", ""),
-                        "tp3":                  row.get("tp3", ""),
-                        "tp_level_hit":         row.get("tp_level_hit", ""),
-                        "position_size":        0,
-                        "risk_dollar":          0,
-                        "risk_pct":             0,
-                        "confluence_score":     row.get("confluence_score", ""),
-                        "ema_score":            row.get("ema_score", ""),
-                        "structure_score":      row.get("structure_score", ""),
-                        "pa_score":             row.get("pa_score", ""),
-                        "pattern_name":         row.get("pattern_name", ""),
-                        "candle_body_ratio":    row.get("candle_body_ratio", 0),
-                        "upper_wick_ratio":     row.get("upper_wick_ratio", 0),
-                        "lower_wick_ratio":     row.get("lower_wick_ratio", 0),
-                        "cci_at_signal":        row.get("cci_at_signal", ""),
-                        "macd_hist_at_signal":  row.get("macd_hist_at_signal", ""),
-                        "ema_short_period":     "",
-                        "ema_mid_period":       "",
-                        "atr_pips":             row.get("atr_pips", ""),
-                        "h4_trend":             row.get("h4_trend", ""),
-                        "d_trend":              row.get("d_trend", "neutral"),
-                        "market_structure":     row.get("market_structure", ""),
-                        "was_at_sr_zone":       row.get("was_at_sr_zone", 0),
-                        "bos_confirmed":        row.get("bos_confirmed", 0),
-                        "ml_win_prob_at_entry": "",
-                        "outcome":              row.get("outcome", ""),
-                        "pnl_pips":             row.get("pnl_pips", 0),
-                        "pnl_dollar":           row.get("realised_pnl", 0),
-                        "hold_hours":           0,
-                        "session":              row.get("session", ""),
-                    })
-                total_written += len(result.get("seed_rows", []))
-                logger.info("Seeded %d trades from backtest of %s", len(result.get("seed_rows", [])), pair)
-            except Exception as exc:
-                logger.error("seed_from_backtest %s failed: %s", pair, exc, exc_info=True)
-                errors.append(f"{pair}: {exc}")
-
-        train_result = self.force_train(log_path, model_path)
-        return {
-            "total_seeded": total_written,
-            "pairs_done":   len(pairs) - len(errors),
-            "errors":       errors,
-            "train_result": train_result,
-        }
-
     # ── Calibration data (predicted prob vs actual outcome) ───────────────────
 
     def calibration_data(
@@ -361,12 +284,20 @@ def _load_closed(log_path: str) -> pd.DataFrame | None:
     """
     Load signal_log.csv and return win/loss rows — real trade outcomes plus
     would_win/would_lose (shadow-resolved outcomes for signals that were
-    scored but never traded, see learning/shadow_outcomes.py). Returns None
-    on any error.
+    scored but never traded, see learning/shadow_outcomes.py). Excludes any
+    backtest-seeded rows (source == "seed" — old rows from the
+    seed-from-backtest feature removed 2026-07-24, which could go stale
+    relative to the live strategy config and shouldn't be silently blended
+    into what the model learns from). Note: would_win/would_lose could only
+    ever originate from real live scanning even when seeding existed (it
+    never wrote those outcomes), so this filter only ever removes seeded
+    win/loss rows in practice — kept explicit rather than relying on that
+    invariant. Returns None on any error.
     """
     try:
         df = pd.read_csv(log_path)
     except (FileNotFoundError, pd.errors.EmptyDataError):
         return None
-    closed = df[df["outcome"].isin(["win", "loss", "would_win", "would_lose"])].copy()
+    is_live = df["source"] == "live" if "source" in df.columns else False
+    closed = df[df["outcome"].isin(["win", "loss", "would_win", "would_lose"]) & is_live].copy()
     return closed if len(closed) > 0 else None

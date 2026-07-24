@@ -231,7 +231,7 @@ class PaperTrader:
     ) -> str | None:
         """
         Fill immediately at entry_price (market order).
-        size: units (forex) or qty (crypto) — used as a raw multiplier for P&L.
+        size: units — used as a raw multiplier for P&L.
         extra: optional dict of additional fields to store on the trade (e.g. latency_ms).
         trade_id: caller-supplied id (e.g. to match learning.data_collector's
             record_signal() id so record_close() can find the cached signal
@@ -675,13 +675,13 @@ class PaperTrader:
                 return True
         return False
 
-    # ── Manual close (dashboard CLOSE button) ─────────────────────────────────
+    # ── Manual close (dashboard CLOSE button, weekend auto-close) ─────────────
 
-    def manual_close(self, trade_id: str, exit_price: float) -> bool:
+    def manual_close(self, trade_id: str, exit_price: float, reason: str = "manual") -> bool:
         with self._lock:
             for i, t in enumerate(self.open_trades):
                 if t["id"] == trade_id:
-                    self._close_remaining(t, exit_price, "manual")
+                    self._close_remaining(t, exit_price, reason)
                     self.open_trades.pop(i)
                     self._save_state()
                     return True

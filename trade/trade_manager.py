@@ -6,7 +6,7 @@ Strategy:
   - SL is attached to the initial order (broker-side protection if bot goes offline).
   - TPs are NOT attached to the broker order — the trade manager monitors them
     internally via candle high/low and issues manual partial-close requests.
-    This is the only reliable way to execute the 40/35/25 split on both brokers.
+    This is the only reliable way to execute the 40/35/25 split.
 
 Partial close sequence (mirrors PaperTrader):
   TP1 → close 40% of original size, move SL to breakeven via connector
@@ -17,8 +17,7 @@ Persistence:
   State (open/closed trades) is written to disk after every mutation, same
   convention as trade/paper_trader.py — a restart while config.MODE == "live"
   no longer silently loses track of open positions. Default path:
-  data/live_state_<market>.json (forex/crypto get separate files, matching
-  the two independent TradeManager instances main.py creates).
+  data/live_state_<market>.json.
 """
 import json
 import logging
@@ -44,13 +43,13 @@ _DEFAULT_SAVE_DIR = Path(__file__).parent.parent / "data"
 
 class TradeManager:
     """
-    Works with either OandaConnector or AlpacaConnector.
-    Pass market="forex" for Oanda, market="crypto" for Alpaca.
+    Works with OandaConnector. `market` is a label used for the state-file
+    name (data/live_state_<market>.json) — pass "forex".
     """
 
     def __init__(self, connector, market: str, save_path: str | Path | bool = None):
         self.connector  = connector
-        self.market     = market        # "forex" or "crypto"
+        self.market     = market
 
         # save_path=False disables all disk I/O (mirrors PaperTrader — useful for tests)
         if save_path is False:
@@ -166,7 +165,7 @@ class TradeManager:
         # Account balance for position sizing
         account   = self._get_account()
         balance   = account.get("balance") or account.get("cash", 0)
-        size      = calculate_position_size(balance, entry, stop_loss, self.market, pair)
+        size      = calculate_position_size(balance, entry, stop_loss, pair)
 
         if size <= 0:
             logger.error("Calculated size <= 0 for %s — skipping", pair)
@@ -174,21 +173,12 @@ class TradeManager:
 
         # Place order — SL attached, no TP (managed internally)
         try:
-            if self.market == "forex":
-                trade_id = self.connector.place_market_order(
-                    instrument=pair,
-                    units=size if direction == "long" else -size,
-                    sl_price=stop_loss,
-                    tp_prices=[],          # managed by trade manager
-                )
-            else:
-                trade_id = self.connector.place_market_order(
-                    symbol=pair,
-                    qty=size,
-                    side=direction,
-                    sl_price=stop_loss,
-                    tp_prices=[],
-                )
+            trade_id = self.connector.place_market_order(
+                instrument=pair,
+                units=size if direction == "long" else -size,
+                sl_price=stop_loss,
+                tp_prices=[],          # managed by trade manager
+            )
         except Exception as exc:
             logger.error("Order placement failed for %s: %s", pair, exc)
             return None
@@ -260,12 +250,12 @@ class TradeManager:
         """Check SL and TPs in correct order. Returns True when fully closed."""
         d = t["direction"]
 
-        # ── ATR-adaptive trailing stop: advance SL after TP2, forex only ────────
+        # ── ATR-adaptive trailing stop: advance SL after TP2 ────────────────────
         # Mirrors PaperTrader's trailing logic; off by default
         # (config.ATR_TRAILING_ENABLED) so this doesn't change live behavior
         # until deliberately enabled. Pushed to the broker via the existing,
         # timeout-protected set_sl_tp() — no separate broker client.
-        if config.ATR_TRAILING_ENABLED and atr_value and t.get("tp2_hit") and self.market == "forex":
+        if config.ATR_TRAILING_ENABLED and atr_value and t.get("tp2_hit"):
             trail_gap = atr_value * config.ATR_TRAILING_MULTIPLIER
             ref_price = close
             new_sl = ref_price - trail_gap if d == "long" else ref_price + trail_gap
@@ -314,10 +304,7 @@ class TradeManager:
                     _mult = 1 if d == "long" else -1
                     new_sl = round(t["entry"] + _mult * _buf, 5)
                     try:
-                        if self.market == "forex":
-                            self.connector.set_sl_tp(trade_id, sl_price=new_sl, tp_price=None)
-                        # Alpaca SL is managed via the broker's existing stop order — leave as is
-                        # (Alpaca doesn't support updating stop price on a bracket child easily)
+                        self.connector.set_sl_tp(trade_id, sl_price=new_sl, tp_price=None)
                     except Exception as exc:
                         logger.warning("Could not update SL to BE for %s: %s", trade_id, exc)
                     t["sl"] = new_sl
@@ -396,11 +383,8 @@ class TradeManager:
         close_size    = original_size * fraction
 
         try:
-            if self.market == "forex":
-                units = int(round(close_size))
-                self.connector.close_trade(t["id"], units=units)
-            else:
-                self.connector.close_position(t["pair"], qty=round(close_size, 6))
+            units = int(round(close_size))
+            self.connector.close_trade(t["id"], units=units)
         except Exception as exc:
             logger.error("Partial close (%s) failed for %s: %s", label, t["id"], exc)
             raise
@@ -421,10 +405,7 @@ class TradeManager:
             logger.warning("close_trade: trade_id %s not found", trade_id)
             return
         try:
-            if self.market == "forex":
-                self.connector.close_trade(trade_id)
-            else:
-                self.connector.close_position(t["pair"])
+            self.connector.close_trade(trade_id)
         except Exception as exc:
             logger.error("Manual close failed for %s: %s", trade_id, exc)
             raise
@@ -436,10 +417,7 @@ class TradeManager:
 
     def _get_account(self) -> dict:
         try:
-            if self.market == "forex":
-                return self.connector.get_account_summary()
-            else:
-                return self.connector.get_account()
+            return self.connector.get_account_summary()
         except Exception as exc:
             logger.error("Could not fetch account: %s", exc)
             return {"balance": 0, "cash": 0}

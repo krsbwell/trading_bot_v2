@@ -4,14 +4,9 @@ from risk.risk_manager import calculate_position_size, get_tp_levels, validate_p
 class TestPositionSizing:
     def test_forex_1pct_risk(self):
         # $10,000 account, 10-pip SL → expect ~25,000 units
-        units = calculate_position_size(10_000, 1.08450, 1.08350, "forex")
+        units = calculate_position_size(10_000, 1.08450, 1.08350, "EUR_USD")
         assert isinstance(units, int)
         assert units > 0
-
-    def test_crypto_1pct_risk(self):
-        qty = calculate_position_size(10_000, 50_000, 49_000, "crypto")
-        assert isinstance(qty, float)
-        assert qty > 0
 
     def test_tp_levels_long(self):
         tps = get_tp_levels(1.0840, 1.0820, "long")
