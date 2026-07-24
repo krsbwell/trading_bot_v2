@@ -56,13 +56,15 @@ def resolve_pending(connector, log_path: str = SIGNAL_LOG) -> int:
 
     for idx in pending:
         try:
-            outcome = _resolve_one(df.loc[idx], connector, _candle_cache)
+            outcome, pnl_pips = _resolve_one(df.loc[idx], connector, _candle_cache)
         except Exception as exc:
             logger.debug("shadow_outcomes: failed to resolve row %s: %s", idx, exc)
             continue
         if outcome is None:
             continue   # not enough time/candles elapsed yet — retry on a future run
         df.loc[idx, "outcome"] = outcome
+        if pnl_pips is not None:
+            df.loc[idx, "pnl_pips"] = pnl_pips
         resolved += 1
 
     if resolved:
@@ -71,7 +73,15 @@ def resolve_pending(connector, log_path: str = SIGNAL_LOG) -> int:
     return resolved
 
 
-def _resolve_one(row: pd.Series, connector, candle_cache: dict) -> str | None:
+def _resolve_one(row: pd.Series, connector, candle_cache: dict) -> tuple[str | None, float | None]:
+    """
+    Returns (outcome, pnl_pips). pnl_pips is the distance from entry to
+    whichever level actually got hit (TP1 for would_win, SL for
+    would_lose) — the same "first touch" simplification as the outcome
+    itself (see module docstring): a real magnitude, just not the exact
+    P&L a live TP1/TP2/TP3 partial-close sequence would have produced.
+    None for "expired"/unresolvable rows, since there's no level to measure.
+    """
     pair      = row.get("pair", "")
     direction = row.get("direction", "")
     entry     = row.get("entry_price")
@@ -81,7 +91,7 @@ def _resolve_one(row: pd.Series, connector, candle_cache: dict) -> str | None:
 
     if not pair or direction not in ("long", "short") or pd.isna(entry) or \
        pd.isna(sl) or pd.isna(tp1) or not ts_raw:
-        return "expired"   # incomplete row — can never be resolved, stop retrying it
+        return "expired", None   # incomplete row — can never be resolved, stop retrying it
 
     signal_time = pd.to_datetime(ts_raw)
     if signal_time.tzinfo is not None:
@@ -93,11 +103,13 @@ def _resolve_one(row: pd.Series, connector, candle_cache: dict) -> str | None:
         candle_cache[cache_key] = connector.get_candles(pair, gran, CANDLE_FETCH_COUNT)
     candles = candle_cache[cache_key]
     if candles is None or candles.empty:
-        return None
+        return None, None
 
     after = candles[candles.index > signal_time]
     if after.empty:
-        return None   # too recent — no candles closed after this signal yet
+        return None, None   # too recent — no candles closed after this signal yet
+
+    pip = 0.01 if "JPY" in pair else 0.0001
 
     window = after.iloc[:MAX_LOOKFORWARD_CANDLES]
     for _, c in window.iterrows():
@@ -109,10 +121,12 @@ def _resolve_one(row: pd.Series, connector, candle_cache: dict) -> str | None:
             sl_hit = high >= sl
             tp_hit = low  <= tp1
         if sl_hit:              # SL-first convention — see module docstring
-            return "would_lose"
+            diff = (sl - entry) if direction == "long" else (entry - sl)
+            return "would_lose", round(diff / pip, 1)
         if tp_hit:
-            return "would_win"
+            diff = (tp1 - entry) if direction == "long" else (entry - tp1)
+            return "would_win", round(diff / pip, 1)
 
     if len(window) >= MAX_LOOKFORWARD_CANDLES:
-        return "expired"
-    return None   # still within the lookforward window — not resolvable yet
+        return "expired", None
+    return None, None   # still within the lookforward window — not resolvable yet

@@ -819,7 +819,7 @@ def _live_diagnostic_scan() -> None:
                 continue
             # Confirm TF still uses completed bars — no repainting risk there
             df_confirm = _oanda_connector.get_candles(
-                pair, config.TIMEFRAMES["confirm"], 250
+                pair, config.confirm_tf_for(pair), 250
             )
             if df_confirm is None or len(df_confirm) < 50:
                 continue

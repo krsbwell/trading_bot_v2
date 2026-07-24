@@ -97,7 +97,7 @@ class SignalEngine:
         else:
             try:
                 df_h1 = self._get_candles(pair, config.TIMEFRAMES["primary"], 250)
-                df_h4 = self._get_candles(pair, config.TIMEFRAMES["confirm"],  250)
+                df_h4 = self._get_candles(pair, config.confirm_tf_for(pair),   250)
             except Exception as exc:
                 logger.error("Candle fetch failed for %s: %s", pair, exc)
                 return None
@@ -269,7 +269,7 @@ class SignalEngine:
         if _watch_sl_pips < config.MIN_SL_PIPS:
             _sl_dir  = -1 if direction == "long" else 1
             _watch_sl = round(entry + _sl_dir * config.MIN_SL_PIPS * _pip_size, 5)
-        _watch_tp = get_tp_levels(entry, _watch_sl, direction)
+        _watch_tp = get_tp_levels(entry, _watch_sl, direction, pair)
 
         # Use WFO per-pair min_score when available, else fall back to global config
         _min_score = _wfo.get("min_score", config.MIN_CONFLUENCE_SCORE)

@@ -18,7 +18,7 @@ from itertools import product
 from pathlib import Path
 
 import config
-from backtest.runner import run_backtest
+from backtest.runner import run_backtest, confirm_tf_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ class WFOOptimizer:
         """
         train_bars = getattr(config, "WFO_TRAIN_BARS", 1440)
         train_h1   = df_h1.tail(train_bars).copy()
-        train_h4   = df_h4.tail(max(train_bars // 2, 50)).copy()  # M30→H1 is 2:1, not 4:1
+        train_h4   = df_h4.tail(max(train_bars // confirm_tf_ratio(pair), 50)).copy()
 
         if len(train_h1) < 120:
             logger.warning("WFO %s: insufficient data (%d bars)", pair, len(train_h1))
@@ -209,7 +209,8 @@ class WFOOptimizer:
                 continue
             try:
                 df_h1 = get_candles_fn(pair, config.TIMEFRAMES["primary"], train_bars + 60)
-                df_h4 = get_candles_fn(pair, config.TIMEFRAMES["confirm"],  train_bars // 2 + 20)  # M30→H1 is 2:1
+                df_h4 = get_candles_fn(pair, config.confirm_tf_for(pair),
+                                        train_bars // confirm_tf_ratio(pair) + 20)
                 if df_h1 is None or len(df_h1) < 120:
                     logger.warning("WFO %s: candle fetch returned insufficient data", pair)
                     continue

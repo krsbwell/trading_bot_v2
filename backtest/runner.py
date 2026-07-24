@@ -38,6 +38,26 @@ from trade.paper_trader import PaperTrader
 
 _STRUCT_MAP = {"bullish": "uptrend", "bearish": "downtrend", "ranging": "ranging"}
 
+_TF_MINUTES = {"M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D": 1440, "W": 10080}
+
+
+def confirm_tf_ratio(pair: str | None = None) -> int:
+    """
+    How many primary-TF bars fit in one confirm-TF bar, e.g. M30 primary /
+    H4 confirm = 8. Derived from config.TIMEFRAMES (or config.confirm_tf_for(pair)
+    when a per-pair override exists in config.CONFIRM_TF_PER_PAIR) so
+    window-alignment math (run_walk_forward below, and the dashboard's WFO
+    bar-count fetch) stays correct if the confirm timeframe ever changes —
+    this was hardcoded to a stale "2" (M30→H1) in two places until the
+    2026-07-23 switch to a real H4 confirm, which would have silently
+    misaligned WFO's train/test windows had it not been caught.
+    """
+    confirm_tf = config.confirm_tf_for(pair) if pair else config.TIMEFRAMES["confirm"]
+    primary_min = _TF_MINUTES.get(config.TIMEFRAMES["primary"], 30)
+    confirm_min = _TF_MINUTES.get(confirm_tf, 240)
+    return max(1, confirm_min // primary_min)
+
+
 _ml_model_singleton = None
 
 
@@ -325,7 +345,7 @@ def run_backtest(
 
         # Place simulated trade
         stop_loss = stop_loss_fn(pair, slice_h1, direction)
-        tp_levels = get_tp_levels(entry, stop_loss, direction)
+        tp_levels = get_tp_levels(entry, stop_loss, direction, pair)
         size      = calculate_position_size(pt.balance, entry, stop_loss, market, pair)
         if size <= 0:
             continue
@@ -369,16 +389,31 @@ def run_backtest(
         dd        = (peak_eq - pt_eq["nav"]) / peak_eq if peak_eq > 0 else 0
         max_dd    = max(max_dd, dd)
 
-    # Build seed rows: closed trade signal features + outcome for PatternLearner seeding
+    # Build seed rows: closed trade signal features + outcome for PatternLearner seeding.
+    # Includes real price levels + pnl_pips (same formula as
+    # paper_trader.py's _log_outcome() for live closes) — previously omitted
+    # here, leaving every seeded row's entry/sl/tp blank and pnl_pips at a
+    # hardcoded 0 in learning/pattern_learner.py::seed_from_backtest, even
+    # though every closed trade already carries this data.
     seed_rows = []
     for t in closed:
         sig = t.get("_sig")
         if not sig:
             continue
+        _pip  = 0.01 if "JPY" in pair else 0.0001
+        _entry, _exit = t.get("entry", 0), t.get("exit_price", 0)
+        _diff = (_exit - _entry) if t.get("direction") == "long" else (_entry - _exit)
         seed_rows.append({
             **sig,
             "outcome":      "win" if t.get("realised_pnl", 0) > 0 else "loss",
             "realised_pnl": round(t.get("realised_pnl", 0), 4),
+            "entry_price":  _entry,
+            "stop_loss":    t.get("sl", ""),
+            "tp1":          t.get("tp1", ""),
+            "tp2":          t.get("tp2", ""),
+            "tp3":          t.get("tp3", ""),
+            "tp_level_hit": t.get("close_reason", ""),
+            "pnl_pips":     round(_diff / _pip, 1),
         })
 
     return {
@@ -459,15 +494,17 @@ def run_walk_forward(
     windows_out = []
     i = 0
     window_num = 0
+    _ratio = confirm_tf_ratio(pair)   # primary-TF bars per confirm-TF bar (e.g. 8 for M30/H4)
 
     while i + total_needed <= len(df_h1) and window_num < max_windows:
         window_num += 1
         train_df = df_h1.iloc[i : i + train_bars]
         test_df  = df_h1.iloc[i + train_bars : i + train_bars + test_bars]
 
-        # Align confirm-TF data for each window (M30→H1 is 2:1; was 4:1 for H1→H4)
-        train_h4 = df_h4.iloc[i // 2 : (i + train_bars) // 2] if len(df_h4) > (i + train_bars) // 2 else df_h4
-        test_h4  = df_h4.iloc[(i + train_bars) // 2 : (i + total_needed) // 2] if len(df_h4) > (i + total_needed) // 2 else df_h4
+        # Align confirm-TF data for each window — confirm has 1/_ratio as many
+        # bars as primary over the same real time span.
+        train_h4 = df_h4.iloc[i // _ratio : (i + train_bars) // _ratio] if len(df_h4) > (i + train_bars) // _ratio else df_h4
+        test_h4  = df_h4.iloc[(i + train_bars) // _ratio : (i + total_needed) // _ratio] if len(df_h4) > (i + total_needed) // _ratio else df_h4
 
         # ── In-sample grid search ─────────────────────────────────────────────
         best_is_pf    = -1.0
@@ -520,7 +557,11 @@ def run_walk_forward(
         i += step_bars
 
     if not windows_out:
-        return {"pair": pair, "windows": [], "error": "No valid windows produced"}
+        min_test_bars = 50 * _ratio
+        hint = (f" (test_bars={test_bars} yields only ~{test_bars // _ratio} confirm-TF "
+                f"bars per window — need >= 50; try test_bars >= {min_test_bars})"
+                if test_bars // _ratio < 50 else "")
+        return {"pair": pair, "windows": [], "error": "No valid windows produced" + hint}
 
     avg_pf_oos  = round(sum(w["pf_oos"]    for w in windows_out) / len(windows_out), 2)
     avg_stab    = round(sum(w["stability"]  for w in windows_out) / len(windows_out), 3)
@@ -579,12 +620,13 @@ if __name__ == "__main__":
     from connectors.oanda_connector import OandaConnector
     conn = OandaConnector()
 
-    primary = config.TIMEFRAMES["primary"]
-    confirm = config.TIMEFRAMES["confirm"]
+    primary   = config.TIMEFRAMES["primary"]
+    confirm   = config.confirm_tf_for(args.pair)
+    _cf_bars  = args.bars // confirm_tf_ratio(args.pair)
     logger.info("Fetching %d %s + %d %s bars for %s (strategy=%s) …",
-                args.bars, primary, args.bars // 2, confirm, args.pair, args.strategy)
+                args.bars, primary, _cf_bars, confirm, args.pair, args.strategy)
     df_h1 = conn.get_candles(args.pair, primary, args.bars)
-    df_h4 = conn.get_candles(args.pair, confirm, args.bars // 2)
+    df_h4 = conn.get_candles(args.pair, confirm, _cf_bars)
 
     # Daily candles for d_trend — 200 bars comfortably covers even the
     # largest bar counts this CLI is normally run with; best-effort, a

@@ -91,6 +91,8 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
         status    = info.get("status", "NEUTRAL")
         det       = details.get(pair, {}) or {}
 
+        confirm_lbl = _cfg.confirm_tf_for(pair)   # usually "H4", per-pair overridable
+
         if direction not in ("long", "short"):
             # ── Compact neutral row ──────────────────────────────────────────
             reject    = det.get("reject_reason", "")
@@ -113,7 +115,7 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
                 html.Td([
                     html.Span("D:", style={"color": "#3d444d", "fontSize": "0.62rem"}),
                     _trend_dot(d_t),
-                    html.Span(" H4:", style={"color": "#3d444d", "fontSize": "0.62rem"}),
+                    html.Span(f" {confirm_lbl}:", style={"color": "#3d444d", "fontSize": "0.62rem"}),
                     _trend_dot(h4_t),
                 ], style={"padding": "0.25rem 0.5rem", "textAlign": "center"}),
                 html.Td(
@@ -143,8 +145,8 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
         d_trend   = det.get("d_trend",   "neutral")
         gate_col  = (_BULL if h4_passed is True  else
                      _BEAR if h4_passed is False else _MUTED)
-        gate_lbl  = ("H4✓" if h4_passed is True  else
-                     "H4✗" if h4_passed is False else "H4?")
+        gate_lbl  = (f"{confirm_lbl}✓" if h4_passed is True  else
+                     f"{confirm_lbl}✗" if h4_passed is False else f"{confirm_lbl}?")
 
         ml_col  = (_BULL if (ml_prob or 0) >= 0.55 else
                    _GOLD if (ml_prob or 0) >= 0.45 else _BEAR)

@@ -1,3 +1,394 @@
+# Change: NZD_USD given its own H4-gate override — loosened (2026-07-24) — LIVE-AFFECTING
+
+## Why
+A finding from the 2026-07-22 research pass flagged the H4/confirm-TF
+alignment gate as too strict specifically for NZD_USD (old PF 1.21->1.51
+under then-current H1-confirm settings), not yet implemented. Since both
+the confirm TF (H1->H4) and TP R:R changed on 2026-07-23, re-verified the
+finding fresh under today's actual settings rather than trust the stale
+number.
+
+Backtested `H4_GATE_BLOCKING` True vs False across all 5 active pairs,
+3500 M30 bars each, current confirm-TF/TP-R:R settings:
+
+| Pair | Blocking=True (current) | Blocking=False (loosened) |
+|---|---|---|
+| USD_CAD | PF 2.54, PnL $74.47 | PF 1.54, PnL $44.07 — worse |
+| GBP_CAD | PF 3.47, PnL $128.51 | PF 2.36, PnL $110.35 — worse |
+| NZD_USD | PF 1.31, PnL $15.85 | PF 1.84, PnL $45.07 — better |
+| EUR_AUD | PF 2.42, PnL $75.32 | PF 1.29, PnL $26.28 — worse, MaxDD also 6.2%->9.9% |
+| GBP_USD | inconclusive — see below | inconclusive |
+
+NZD_USD clearly benefits from loosening; every other EMA-bounce pair gets
+meaningfully worse. Confirms this needs to be a per-pair override, not a
+global flip (a global flip would help NZD_USD but hurt 3 of the other 4
+active pairs).
+
+**GBP_USD row is uninformative, methodology issue caught mid-test**: my
+sweep script called `run_backtest()` without passing GBP_USD's real
+`strategy_breakout_retest` functions, so it silently ran the default
+EMA-bounce strategy instead. Confirmed via `grep` that
+`H4_GATE_BLOCKING`/`h4_gate_blocking_for` isn't referenced anywhere in
+`strategy_breakout_retest.py` at all, so the real live GBP_USD strategy is
+unaffected by this flag regardless — not worth re-running the test.
+
+**Separate bug found while investigating this** (not fixed, flagged only):
+the dashboard's "Backtest" button (`dashboard/app.py`'s standard backtest
+callback) always uses `run_backtest()`'s default EMA-bounce strategy
+functions — it never resolves `config.STRATEGY_OVERRIDE`, so backtesting
+GBP_USD from the dashboard silently tests the wrong strategy. Doesn't
+affect any change shipped today (nothing here relies on that button for
+GBP_USD), but worth fixing separately.
+
+## What changed
+- `config.py`: new `H4_GATE_BLOCKING_PER_PAIR = {"NZD_USD": False}` dict +
+  `h4_gate_blocking_for(pair)` resolver — same pattern as
+  `CONFIRM_TF_PER_PAIR`/`TP_RR_PER_PAIR`.
+- `engine/strategy_ema_cci_macd.py`: both `check_buy_signal`/
+  `check_sell_signal`'s H4-gate check switched from
+  `config.H4_GATE_BLOCKING` to `config.h4_gate_blocking_for(pair)`.
+  `engine/strategy_trend_follow.py`'s two references left untouched — that
+  strategy is shelved/backtest-only, never wired live.
+- Verified end-to-end via the real CLI: `python -m backtest.runner --pair
+  NZD_USD --bars 3500` -> WR=45%, PF=1.85, PnL=$45.42, trades=20 — matches
+  the sweep's loosened-gate result exactly (tiny rounding only).
+  `h4_gate_blocking_for("NZD_USD")` returns `False`,
+  `h4_gate_blocking_for("USD_CAD")` returns `True`.
+- All 252 tests pass.
+
+## Review
+Third live-trading-affecting change from this session's 3-item backlog,
+same shape as the previous two: backtest first, only ship if it actually
+improves the specific pair, use a per-pair override rather than a global
+change when other pairs would be hurt by it.
+
+---
+
+# Fix: EUR_USD stale-signal duplication + pnl_pips never populated (2026-07-24)
+
+## Fix 1: EUR_USD stale-signal duplication (root cause found)
+
+**Root cause**: `tests/test_learning.py::test_record_skip_does_not_affect_pending`
+called `record_skip(_signal())` with no `log_path` override — every test
+suite run appended one EUR_USD row (the test fixture's hardcoded
+entry=1.08/sl=1.078/tp1=1.082/score=80) directly into the real production
+`data/signal_log.csv`. The module docstring even states "All CSV I/O uses
+tmp_path so the real data/ directory is never touched" — this was the one
+line that violated it. Every other `record_skip`/`record_close` call in
+the file correctly passes `log_path=log` (a tmp_path). Confirmed: all 13
+EUR_USD rows in the file matched the test fixture's exact fingerprint
+(cci_at_signal=-120.5, pattern_name='bullish_pin_bar') — zero real EUR_USD
+signals, which makes sense since EUR_USD isn't in `FOREX_PAIRS` or
+`FOREX_WATCH` and was never reachable from the live scan loop.
+
+**Fixed**: added the missing `tmp_path`/`log_path` to that one test.
+Verified by running the full suite and confirming zero new EUR_USD rows
+land in `data/signal_log.csv` afterward (previously exactly one per run).
+Backed up (`data/signal_log.csv.bak_before_eurusd_cleanup`) and removed
+the 13 pollution rows from the production file.
+
+## Fix 2: pnl_pips never populated
+
+Three separate write paths into `signal_log.csv`, two were broken:
+
+1. **Live paper-trade closes** (`trade/paper_trader.py::_log_outcome`) —
+   already correct, computes real pip distance from entry/exit. Not the
+   source of the bug.
+2. **Backtest-seeded rows** (`learning/pattern_learner.py::seed_from_backtest`,
+   fed by `backtest/runner.py`'s `seed_rows`) — `pnl_pips` was hardcoded to
+   `0`, and `entry_price`/`stop_loss`/`tp1`/`tp2`/`tp3` were hardcoded to
+   `""`, even though every closed backtest trade already carries all of
+   this. Fixed: `run_backtest()`'s `seed_rows` now includes real
+   `entry_price`/`stop_loss`/`tp1-3`/`tp_level_hit`/`pnl_pips` (same
+   formula as `paper_trader.py`'s live calc); `seed_from_backtest()` now
+   reads them instead of hardcoding blanks.
+3. **Shadow-resolved rows** (`learning/shadow_outcomes.py`, would_win/
+   would_lose) — deliberately only ever determined outcome, never
+   magnitude (module docstring: "answers 'would this setup have worked at
+   all', not 'what would the exact P&L have been'"). Enhanced
+   `_resolve_one()` to also return the pip distance to whichever level
+   (TP1 or SL) was actually touched — same "first touch" simplification as
+   the outcome itself, still not the full TP1/TP2/TP3 sequence, but a real
+   number instead of a placeholder 0. `resolve_pending()` now writes it
+   into the `pnl_pips` column alongside the outcome.
+
+**New tests**: `tests/test_shadow_outcomes.py` (10 tests) — this module had
+zero test coverage before this change; covers would_win/would_lose/expired
+resolution, the SL-first same-candle tie convention, and end-to-end
+`resolve_pending()` CSV writes, since I was changing its return contract
+(`str | None` → `tuple[str | None, float | None]`).
+
+**Data cleanup** (all backed up first):
+- Backfilled `pnl_pips` for the 87 already-resolved would_win/would_lose
+  rows directly from their stored entry/sl/tp1 (no need to re-fetch
+  candles — the outcome was already determined, this just derives the
+  matching magnitude).
+- Found and fixed a related, previously-unknown bug while doing this:
+  ~83 of the 87 pre-existing seeded win/loss rows (USD_CAD/USD_CHF) were
+  near-exact triplicates — same `(pair, timestamp, direction)` 3× each
+  with tiny floating-point differences in `pnl_dollar`, almost certainly
+  from `seed_from_backtest` being run 3 times before the 2026-07-22
+  determinism fix (see that fix's entry below — backtests weren't
+  reproducible before it). Deduplicated to one row per unique
+  `(pair, timestamp, direction)`, keeping the first occurrence — same
+  underlying problem as the EUR_USD bug (inflated/non-independent ML
+  training examples), different mechanism.
+- Removed the 15 stale pre-fix USD_CAD seed rows (permanently missing
+  price levels, un-backfillable) and regenerated them via
+  `PatternLearner.seed_from_backtest(["USD_CAD"], ...)` using the fixed
+  code — all 24 fresh rows have real price levels and non-zero
+  `pnl_pips`. Left USD_CHF's old rows alone (not an active/watched pair,
+  not worth the live OANDA fetch to re-seed).
+- `data/signal_log.csv`: 192 -> 130 rows net (removed pollution +
+  duplicates, added freshly-reseeded USD_CAD). Backups:
+  `signal_log.csv.bak_before_eurusd_cleanup`,
+  `signal_log.csv.bak_before_reseed`.
+
+All 252 tests pass (was 242 — +10 new).
+
+---
+
+# Change: EUR_AUD given its own confirm-TF override, back to H1 (2026-07-23) — LIVE-AFFECTING
+
+## Why
+EUR_AUD was the one pair that declined under the global H4-confirm switch
+below (PF 2.42->1.63, PnL $75.32->$33.87). User asked for a per-pair
+override, on the explicit condition that it only ships if it actually
+improves EUR_AUD's results.
+
+## What changed
+- `config.py`: new `CONFIRM_TF_PER_PAIR = {"EUR_AUD": "H1"}` dict (same
+  pattern as `STRATEGY_OVERRIDE`/`BREAKEVEN_PER_PAIR`/`TP_RR_PER_PAIR`) and
+  a `confirm_tf_for(pair)` resolver — `CONFIRM_TF_PER_PAIR` wins if set,
+  else falls back to the global `TIMEFRAMES["confirm"]`.
+- `backtest/runner.py`: `confirm_tf_ratio()` now takes an optional `pair`
+  argument and resolves through `confirm_tf_for()` when given one; used in
+  `run_walk_forward()` (already had `pair` in scope) and the CLI (which
+  also had its own separate hardcoded `args.bars // 2` confirm-bar-count
+  assumption — fixed to `args.bars // confirm_tf_ratio(args.pair)`).
+- Every other confirm-TF call site switched from `config.TIMEFRAMES
+  ["confirm"]` to `config.confirm_tf_for(pair)`: `engine/signal_engine.py`
+  (live scan), `main.py` (live mid-bar diagnostic scan),
+  `engine/wfo_optimizer.py` (both the weekly refit's fetch-count line and
+  its `.tail()` slice — both now pass `pair` into `confirm_tf_ratio()` too),
+  `dashboard/app.py` (both Walk-Forward and standard backtest modes share
+  the same fixed `gran_h4`/`confirm_ratio` variables, now pair-aware).
+- `engine/strategy_ema_cci_macd.py` and `engine/strategy_trend_follow.py`:
+  the `get_best_emas(pair, config.TIMEFRAMES["confirm"], df_h4)` cache-key
+  label (4 call sites) now uses `config.confirm_tf_for(pair)` too, so the
+  EMA auto-fit log line correctly says "EUR_AUD H1" instead of a stale
+  "EUR_AUD H4" — confirmed in the verification run below.
+- `dashboard/panels.py`: the Signal Monitor's "H4:" column label and the
+  "H4✓/H4✗/H4?" gate badge are now pair-aware (`config.confirm_tf_for(pair)`)
+  so they don't silently go back to lying for whichever pair has an
+  override — same mislabeling class this whole investigation started from.
+- All 242 relevant tests pass (3 unrelated `TestAlpacaConnectorLive`
+  failures are a live external API returning `internal server error` —
+  confirmed transient by re-running, unrelated to any file touched here).
+
+## Verification
+Ran `python -m backtest.runner --pair EUR_AUD --bars 3500` through the real
+CLI (not a manual test script) to prove the full per-pair resolver chain
+works end-to-end: log line confirmed `EMA fit EUR_AUD H1` (not H4), and the
+result — `WR=41% PF=2.42 PnL=$75.32 MaxDD=6.2%` — reproduces the original
+pre-switch H1-confirm baseline exactly. This is a clear, backtest-confirmed
+improvement over EUR_AUD being forced onto H4 (PF 1.63, PnL $33.87), so the
+override ships per the user's stated condition. `confirm_tf_for("EUR_AUD")`
+returns `"H1"`, `confirm_tf_for("USD_CAD")` returns `"H4"` — every other
+active pair is unaffected.
+
+## Review
+EUR_AUD is now effectively back to its pre-2026-07-23 behavior while every
+other active pair keeps the new H4 confirm. The resolver is intentionally
+the same shape as the existing per-pair override dicts, so a future pair
+needing its own confirm TF is a one-line config addition, not new plumbing.
+
+---
+
+# Change: confirm TF switched from H1 to real H4 (2026-07-23) — LIVE-AFFECTING
+
+## Why
+User asked (after noticing the Signal Monitor's "H4" column) whether a real
+H4 confirm timeframe would work better than whatever it's currently using,
+with instructions to test first and only switch if it actually improved
+results. Investigation found `config.TIMEFRAMES["confirm"]` was set to
+`"H1"`, not H4 — a leftover from an earlier retune (comment: "was H4 —
+maintains 2:1 confirm:primary ratio"). Every "H4"-named variable/label in
+the codebase (`h4_trend`, "C2 H4 aligned", the dashboard's "H4:" column)
+had silently been reading H1 data since that change — a 2:1 primary:confirm
+ratio, much tighter than the classic ~8:1 (M30→H4) multi-timeframe spacing.
+
+Backtested real H4 vs the current H1 confirm across all 5 active pairs,
+3500 M30 bars each (same primary data both ways, only the confirm-TF
+dataset's granularity changed):
+
+| Pair | H1 confirm (current) | H4 confirm (proposed) |
+|---|---|---|
+| USD_CAD | WR 39.3% PF 1.57 PnL $45.30 DD 5.2% (28 trades) | WR 45.8% PF 2.31 PnL $69.83 DD 3.2% (24 trades) |
+| GBP_CAD | WR 47.4% PF 2.24 PnL $108.47 DD 4.2% (38 trades) | WR 64.3% PF 3.91 PnL $152.33 DD 3.7% (28 trades) |
+| NZD_USD | WR 30.4% PF 1.17 PnL $10.96 DD 6.1% (23 trades) | WR 33.3% PF 1.25 PnL $15.31 DD 5.7% (21 trades) |
+| EUR_AUD | WR 40.7% PF 2.42 PnL $75.32 DD 6.2% (27 trades) | WR 33.3% PF 1.63 PnL $33.87 DD 5.1% (24 trades) — declined |
+| GBP_USD | WR 29.5% PF 1.01 PnL $1.45 DD 9.5% (44 trades) | WR 34.2% PF 1.32 PnL $32.64 DD 7.3% (38 trades) |
+
+4 of 5 pairs improved, several substantially (GBP_CAD PF +75%, USD_CAD PF
++47%, GBP_USD PF +31%). EUR_AUD declined (PF -33%) — the same pair that was
+the outlier for the 2026-07-22 TP R:R change too. Net clearly positive —
+adopted globally. GBP_USD improved despite running `strategy_breakout_retest`
+(whose own entry logic ignores confirm-TF content beyond a length check) —
+its change comes entirely from `run_backtest()`'s own structure-score bonus
+(BOS detection on the confirm-TF series), which every strategy shares
+regardless of which one is active for a pair.
+
+## What changed
+- `config.py`: `TIMEFRAMES["confirm"]` "H1" -> "H4", with the rationale and
+  backtest table in the inline comment.
+- **Bug found and fixed while implementing**: three places hardcoded the old
+  M30:confirm 2:1 bar-count ratio instead of deriving it from
+  `config.TIMEFRAMES`. With a real 8:1 M30:H4 ratio, these would have
+  either silently misaligned walk-forward windows or (for the dashboard's
+  WFO tab) made the lowest allowed "Test" window size produce zero valid
+  windows:
+  - `backtest/runner.py`: added `confirm_tf_ratio()` (derives the ratio
+    from `config.TIMEFRAMES` via a small `_TF_MINUTES` lookup) and used it
+    in `run_walk_forward()`'s train/test confirm-TF window slicing
+    (previously hardcoded `i // 2`).
+  - `engine/wfo_optimizer.py`: both `run_all_pairs()`'s confirm-TF fetch
+    count and `run()`'s `.tail()` slice were hardcoded to `train_bars // 2`
+    — now use `confirm_tf_ratio()`. (`run()`'s weekly background refit
+    wasn't actually going to crash — its `.tail()` call would've just
+    silently returned fewer rows than intended — but it was quietly wrong.)
+  - `dashboard/app.py`: the Walk-Forward tab's `confirm_ratio = 2 if
+    is_forex else 4` now calls `confirm_tf_ratio()` for the forex path
+    (crypto keeps its independent fixed 4:1 — untouched, unaffected by this
+    change).
+  - `dashboard/app.py`: `wf-test-input`'s `min` raised from 250 to 500 —
+    at the new 8:1 ratio, a 250-bar test window only yields ~31 confirm
+    bars, below the strategy's own 50-bar minimum, so every window would
+    silently fail. 500 bars -> ~62 confirm bars, safely clears it. Inline
+    comment explains why.
+  - `backtest/runner.py`: `run_walk_forward()`'s "No valid windows
+    produced" error now names the actual cause and a fix when it's an
+    undersized test window, instead of a bare unexplained message.
+- Verified end-to-end (not just unit tests): ran `run_walk_forward()`
+  directly against real OANDA H4 data both with an undersized test window
+  (confirmed the new error message fires correctly: *"test_bars=250 yields
+  only ~31 confirm-TF bars per window — need >= 50; try test_bars >= 400"*)
+  and with the real UI-default window size (750 bars — produced 2 valid
+  windows with real trade counts, no error).
+- All 242 existing tests pass unmodified.
+
+## Not done (flagged, not actioned)
+EUR_AUD's decline mirrors the exact pattern from the 2026-07-22 TP R:R
+change, where a per-pair override (`TP_RR_PER_PAIR`) was eventually built
+for it. The same shape of fix would apply here (a `CONFIRM_TF_PER_PAIR`
+override), but it's a larger change than the TP one — it would touch the
+live candle-fetch call in `engine/signal_engine.py`, `main.py`'s live
+diagnostic scan, and the backtest CLI, not just a single scoring function.
+Not built without being asked first.
+
+## Review
+Net-positive, backtest-confirmed change adopted per explicit instruction
+("only switch if there is an improvement, then go ahead and make the
+changes"). The three hardcoded-ratio fixes were not part of the original
+ask but were necessary — without them the WFO/walk-forward tooling would
+have been silently broken or produced misaligned windows the next time
+anyone used it. Caught by actually running `run_walk_forward()` against
+real data rather than trusting the unit tests alone (none of them exercise
+this window-alignment math with real bar counts).
+
+---
+
+# Fix: double-click indicator hide reverted itself on every chart refresh (2026-07-22)
+
+## Why
+User reported: double-clicking the chart background to hide CCI/MACD panes
+worked, but the panes silently reappeared "whenever the chart refreshes" and
+also seemingly when drawing an element or an H-line.
+
+## Root cause
+`_toggleIndicatorPanes()` (`chart.js:4868`, the double-click handler) flips
+`_indSettings.cci.visible`/`.macd.visible` in memory only — it never calls
+`_saveIndSettings()`. `dashboard/app.py:1208`'s `interval-60s` timer pushes
+fresh candle data to the chart every 60 seconds regardless of user action,
+which runs `chart.js`'s `load()`, which unconditionally called
+`_apexApplyIndSettings()` → `_loadIndSettings()` (`chart.js:5661-5662`) —
+re-reading indicator settings from `localStorage` and clobbering the
+in-memory hide every single time, even though the pair/TF never changed.
+The "drawing an element" trigger isn't real — the same 60s timer just
+happened to fire in the background while the user was mid-draw.
+
+## What changed
+- `dashboard/assets/chart.js:5661`: `_apexApplyIndSettings()` now only
+  calls `_loadIndSettings()` when `_indSettings` is still unpopulated
+  (first load). A genuine pair/TF switch already reloads settings fresh via
+  `init()`'s own `_loadIndSettings()` call (`chart.js:3629`, which also
+  resets `_indPanesHidden` — see comment at `chart.js:3573`), so this
+  doesn't affect that path; it only stops the redundant same-pair reload
+  that was wiping the double-click toggle.
+- No Python changes. `node --check` confirms no syntax errors; no automated
+  test coverage exists for dashboard JS (frontend-only, browser-driven
+  logic) — needs a manual visual pass: double-click to hide CCI/MACD, wait
+  60+ seconds for the live-data timer, confirm panes stay hidden.
+
+## Review
+One-line guard, no behavior change for pair/TF switches (still reloads
+fresh, as intended) or for the indicator-settings-panel flows (they save
+and re-apply directly, never depending on this reload). Same class of bug
+as [[bugs_indicator_settings_wiring]] — a visibility flag getting silently
+re-synced from a stale source of truth.
+
+---
+
+# Change: EUR_AUD gets its own TP R:R override — 1.0R/3.0R/4.5R (2026-07-22) — LIVE-AFFECTING
+
+## Why
+EUR_AUD was the one pair (of 5) that got worse under the global TP change
+below (PF 2.09→1.83). User asked to test EUR_AUD specifically to see if it
+needed its own profile. Ran a 7-way sweep on real OANDA data, 3500 bars:
+
+| Config | WR | PF | PnL | MaxDD | Trades |
+|---|---|---|---|---|---|
+| Current global (1.5/2.5/3.5) | 42.4% | 1.83 | $69.27 | 7.6% | 33 |
+| Old global (1.0/2.5/4.0) | 42.4% | 2.09 | $71.99 | 7.1% | 33 |
+| TP1→1.0, TP3 stays 3.5 | 42.4% | 2.09 | $71.99 | 7.1% | 33 |
+| TP1 1.5, TP3→4.0 | 42.4% | 1.83 | $69.27 | 7.6% | 33 |
+| **Wider all (1.0/3.0/4.5)** | 42.9% | **2.63** | **$88.49** | **6.2%** | 28 |
+| Tighter all (0.75/2.0/3.0) | 43.2% | 1.78 | $52.48 | 5.3% | 37 |
+| TP1 0.75, rest unchanged | 42.4% | 2.54 | $79.20 | 5.3% | 33 |
+
+TP1 at 1.5R was specifically what hurt this pair — any config with TP1=1.0
+recovers the exact pre-change baseline (byte-identical trades, confirming
+TP3's 4.0→3.5 change never mattered here). 1.0R/3.0R/4.5R beat every other
+option on every metric, including the old global default. Adopted as a
+per-pair override.
+
+## What changed
+- `risk/risk_manager.py::get_tp_levels()`: gained a `pair` parameter,
+  looks up `config.TP_RR_PER_PAIR.get(pair, (1.5, 2.5, 3.5))` for the
+  R-multiples instead of hardcoding them. Docstring updated.
+- `config.py`: new `TP_RR_PER_PAIR = {"EUR_AUD": (1.0, 3.0, 4.5)}` dict,
+  same pattern as `STRATEGY_OVERRIDE`/`BREAKEVEN_PER_PAIR`.
+- Call sites updated to pass `pair` (all three already had it in scope,
+  confirmed by reading each before changing): `backtest/runner.py:328`,
+  `engine/signal_engine.py:272` (also covers the live trade path via the
+  reused `_watch_tp` variable at line 372), `dashboard/app.py:1963`.
+- `trade/trade_manager.py` imports `get_tp_levels` but never calls it
+  directly — nothing to update there.
+- All 242 existing tests pass unmodified — they call `get_tp_levels()`
+  without a `pair` arg, which defaults to `""`, which isn't in
+  `TP_RR_PER_PAIR`, so they keep getting the global 1.5/2.5/3.5 default.
+- Manually verified end-to-end: `get_tp_levels(1.00, 0.99, "long",
+  "EUR_AUD")` → 1.01/1.03/1.045 (1.0/3.0/4.5R), `get_tp_levels(1.00, 0.99,
+  "long", "USD_CAD")` → 1.015/1.025/1.035 (global default), confirming the
+  override only fires for the listed pair.
+
+## Review
+Small, additive, backward-compatible change — one new config dict, one new
+optional function parameter, three call sites updated to pass an argument
+they already had in scope. No behavior change for any pair except EUR_AUD.
+
+---
+
 # Change: TP R:R updated to 1.5R / 2.5R / 3.5R (2026-07-22) — LIVE-AFFECTING
 
 ## Why

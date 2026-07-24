@@ -846,8 +846,12 @@ app.layout = html.Div(
                                      "fontSize": "0.8rem"}),
                     html.Span("Test:", style={"color": "#8b949e", "fontSize": "0.8rem",
                                               "alignSelf": "center", "marginLeft": "0.3rem"}),
+                    # min=500: with an H4 confirm TF (8 M30 bars per H4 bar), a
+                    # 250-bar test window only yields ~31 confirm bars — below
+                    # the strategy's own 50-bar minimum, so every window would
+                    # silently fail. 500 bars -> ~62 confirm bars, safely clears it.
                     dcc.Input(id="wf-test-input", type="number", value=750,
-                              min=250, max=2000, step=250, debounce=True,
+                              min=500, max=2000, step=250, debounce=True,
                               style={"width": "65px", "background": "#21262d",
                                      "color": "#e6edf3", "border": "1px solid #30363d",
                                      "borderRadius": "3px", "padding": "0.2rem 0.4rem",
@@ -1960,7 +1964,7 @@ def populate_order_form(form_data, default_lot):
                     3 if "JPY" in pair else 5,
                 )
                 from risk.risk_manager import get_tp_levels, calculate_position_size
-                tp      = get_tp_levels(entry_val, sl_val, direction)
+                tp      = get_tp_levels(entry_val, sl_val, direction, pair)
                 tp1_val = round(tp["tp1"], 3 if "JPY" in pair else 5)
                 tp2_val = round(tp["tp2"], 3 if "JPY" in pair else 5)
                 tp3_val = round(tp["tp3"], 3 if "JPY" in pair else 5)
@@ -3017,8 +3021,9 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
 
     market   = "forex" if is_forex else "crypto"
     gran_h1  = config.TIMEFRAMES["primary"] if is_forex else "1Hour"
-    gran_h4  = config.TIMEFRAMES["confirm"] if is_forex else "4Hour"
-    confirm_ratio = 2 if is_forex else 4  # M30→H1 is 2:1; crypto keeps 4:1
+    gran_h4  = config.confirm_tf_for(pair)  if is_forex else "4Hour"
+    from backtest.runner import confirm_tf_ratio
+    confirm_ratio = confirm_tf_ratio(pair) if is_forex else 4  # crypto keeps its own fixed 4:1
     balance  = state.get_key("account", {}).get("balance", 500.0)
 
     # ── Walk-Forward mode ─────────────────────────────────────────────────────

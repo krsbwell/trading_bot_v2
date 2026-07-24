@@ -5657,9 +5657,16 @@
     };
     window._apexHideIndPanel = _hideIndPanel;
 
-    /* Called after chart data loads — applies saved visual settings */
+    /* Called after chart data loads — applies saved visual settings.
+       Only reload from localStorage if _indSettings isn't populated yet
+       (first load — a genuine pair/TF switch already reloads fresh via
+       init()'s own _loadIndSettings() call). Reloading unconditionally here
+       clobbered the double-click quick-hide toggle (_toggleIndicatorPanes,
+       an in-memory-only mutation) every time the 60s live-data timer fired,
+       even for the same pair/TF — that's what made hidden panes reappear
+       on their own. Bug found 2026-07-22. */
     window._apexApplyIndSettings = function(indParams) {
-        _loadIndSettings();
+        if (!_indSettings) _loadIndSettings();
         /* If Python used different params (e.g. first load), reconcile */
         if (indParams) {
             if (indParams.cci_length) _indSettings.cci.length = indParams.cci_length;

@@ -152,8 +152,9 @@ class TestDataCollector:
         df = pd.read_csv(log)
         assert df.iloc[0]["outcome"] == "skipped"
 
-    def test_record_skip_does_not_affect_pending(self):
-        record_skip(_signal())
+    def test_record_skip_does_not_affect_pending(self, tmp_path):
+        log = str(tmp_path / "signal_log.csv")
+        record_skip(_signal(), log_path=log)
         assert pending_count() == 0
 
     def test_record_skip_deduplicates_still_open_setup(self, tmp_path):

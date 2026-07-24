@@ -62,9 +62,37 @@ CRYPTO_PAIRS = []   # EMA-bounce is a forex mean-reversion strategy — does not
 
 TIMEFRAMES = {
     "primary": "M30",   # Signal generation (was H1 — M30 gives 2× decision points per hour)
-    "confirm": "H1",    # Trend filter gate (was H4 — maintains 2:1 confirm:primary ratio)
+    "confirm": "H4",    # Trend filter gate. Changed 2026-07-23 from H1 back to a real
+                         # H4 — H1 was only ever a 2:1 ratio above M30 primary (too close
+                         # to give independent confirmation) and the "H4" label/variable
+                         # names across the codebase (h4_trend, "C2 H4 aligned", the
+                         # Signal Monitor's "H4:" column) had silently kept referring to
+                         # H1 data since that switch. Backtested real H4 vs the H1 confirm
+                         # across all 5 active pairs, 3500 M30 bars each: 4/5 improved,
+                         # several substantially (GBP_CAD PF 2.24->3.91, USD_CAD PF
+                         # 1.57->2.31, GBP_USD PF 1.01->1.32); EUR_AUD declined (PF
+                         # 2.42->1.63) — same pair that was the outlier for the TP R:R
+                         # change too. Net positive — adopted. See tasks/todo.md.
     "context": "D",     # Market structure context
 }
+
+# Per-pair override of TIMEFRAMES["confirm"] — a pair not listed here uses
+# the global confirm TF above. Same pattern as STRATEGY_OVERRIDE /
+# BREAKEVEN_PER_PAIR / TP_RR_PER_PAIR.
+#
+# EUR_AUD kept on H1 (2026-07-23): declined under the global H1->H4 switch
+# (PF 2.42->1.63, PnL $75.32->$33.87). Backtest-confirmed real H4 vs real H1
+# confirm for EUR_AUD specifically, both fetched through this same per-pair
+# resolver: H1 clearly better (higher WR/PF/PnL, trades held up), H4 only
+# had a slightly lower MaxDD. See tasks/todo.md 2026-07-23.
+CONFIRM_TF_PER_PAIR: dict = {
+    "EUR_AUD": "H1",
+}
+
+
+def confirm_tf_for(pair: str) -> str:
+    """Resolve the confirm timeframe for a pair — CONFIRM_TF_PER_PAIR wins if set."""
+    return CONFIRM_TF_PER_PAIR.get(pair, TIMEFRAMES["confirm"])
 
 RISK_PER_TRADE       = 0.01    # 1% of account balance — hard rule
 MAX_OPEN_TRADES      = 3
@@ -114,6 +142,24 @@ WATCHDOG_STALE_MINUTES = 60
 # ── H4 trend gate ────────────────────────────────────────────────────────────
 H4_GATE_BLOCKING = True   # Hard-block counter-trend signals (True) vs diagnostic-only (False)
 
+# Per-pair override of H4_GATE_BLOCKING — a pair not listed here uses the
+# global value above. Same pattern as CONFIRM_TF_PER_PAIR/TP_RR_PER_PAIR.
+#
+# NZD_USD loosened (2026-07-24): backtested blocking vs loosened across all
+# 5 active pairs, 3500 M30 bars each, under current confirm-TF/TP-R:R
+# settings. NZD_USD clearly benefits from loosening (PF 1.31->1.84, PnL
+# $15.85->$45.07, WR 35.3%->45.0%); USD_CAD, GBP_CAD, and EUR_AUD all got
+# meaningfully worse under the same change (e.g. EUR_AUD PF 2.42->1.29) —
+# confirms this needs to be per-pair, not a global flip. See tasks/todo.md.
+H4_GATE_BLOCKING_PER_PAIR: dict = {
+    "NZD_USD": False,
+}
+
+
+def h4_gate_blocking_for(pair: str) -> bool:
+    """Resolve H4_GATE_BLOCKING for a pair — H4_GATE_BLOCKING_PER_PAIR wins if set."""
+    return H4_GATE_BLOCKING_PER_PAIR.get(pair, H4_GATE_BLOCKING)
+
 # ── Minimum SL distance ───────────────────────────────────────────────────────
 MIN_SL_PIPS = 25    # Minimum SL distance in pips — 25 validated by backtest (20 caught H1 noise)
 
@@ -124,6 +170,16 @@ MIN_SL_PIPS = 25    # Minimum SL distance in pips — 25 validated by backtest (
 BREAKEVEN_BUFFER_PIPS = 3
 BREAKEVEN_ENABLED     = False  # BE off for all active pairs (validated by backtest)
 BREAKEVEN_PER_PAIR    = {}     # No active pair needs BE — add e.g. "GBP_JPY": True if re-added
+
+# ── Per-pair TP R:R override ─────────────────────────────────────────────────
+# get_tp_levels() uses (1.5, 2.5, 3.5) for any pair not listed here.
+TP_RR_PER_PAIR = {
+    # EUR_AUD got worse under the 2026-07-22 global TP change (PF 2.09->1.83).
+    # 7-way sweep found 1.0R/3.0R/4.5R beats both the old and new global
+    # defaults on every metric for this pair specifically (PF 2.63, PnL +28%,
+    # MaxDD down to 6.2% vs 7.6%) — TP1 at 1.5R was the specific problem.
+    "EUR_AUD": (1.0, 3.0, 4.5),
+}
 
 # ── News event filter (Finnhub free API) ─────────────────────────────────────
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")   # Leave blank to disable

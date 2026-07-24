@@ -67,7 +67,7 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         return 0.0   # ranging market — this is EMA-bounce's territory, not ours
 
     short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
-    short_h4, _, _   = get_best_emas(pair, config.TIMEFRAMES["confirm"],  df_h4)
+    short_h4, _, _   = get_best_emas(pair, config.confirm_tf_for(pair),   df_h4)
 
     short_ema_h1  = ema(df_h1["close"], short)
     short_ema_h4  = ema(df_h4["close"], short_h4)
@@ -155,7 +155,7 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         return 0.0
 
     short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
-    short_h4, _, _   = get_best_emas(pair, config.TIMEFRAMES["confirm"],  df_h4)
+    short_h4, _, _   = get_best_emas(pair, config.confirm_tf_for(pair),   df_h4)
 
     short_ema_h1  = ema(df_h1["close"], short)
     short_ema_h4  = ema(df_h4["close"], short_h4)

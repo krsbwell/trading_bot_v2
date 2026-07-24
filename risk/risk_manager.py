@@ -27,25 +27,35 @@ def calculate_position_size(account_balance: float, entry: float,
     raise ValueError(f"Unknown instrument_type: {instrument_type}")
 
 
-def get_tp_levels(entry: float, stop_loss: float, direction: str) -> dict:
+def get_tp_levels(entry: float, stop_loss: float, direction: str, pair: str = "") -> dict:
     """
-    Return TP1/TP2/TP3 at 1.5R / 2.5R / 3.5R.
+    Return TP1/TP2/TP3, default 1.5R / 2.5R / 3.5R, overridable per pair via
+    config.TP_RR_PER_PAIR.
 
-    Changed 2026-07-22 from 1.0R/2.5R/4.0R after backtesting both across the
-    5 active pairs (USD_CAD, GBP_CAD, NZD_USD, EUR_AUD, GBP_USD) on 3500 bars
-    each: 4 of 5 pairs improved on PnL (GBP_USD and GBP_CAD notably so, PF
-    2.26->2.56 and PnL +11% respectively), only EUR_AUD's profit factor
-    declined (2.09->1.83, PnL roughly flat). Max drawdown ticked up slightly
-    on every pair (a wider TP1 means more open-risk time before the first
-    partial close), but not by enough to offset the PnL gains. See
-    tasks/todo.md's 2026-07-22 entries for the full comparison table.
+    Global default changed 2026-07-22 from 1.0R/2.5R/4.0R after backtesting
+    both across the 5 active pairs (USD_CAD, GBP_CAD, NZD_USD, EUR_AUD,
+    GBP_USD) on 3500 bars each: 4 of 5 pairs improved on PnL (GBP_USD and
+    GBP_CAD notably so, PF 2.26->2.56 and PnL +11% respectively), only
+    EUR_AUD's profit factor declined (2.09->1.83, PnL roughly flat). Max
+    drawdown ticked up slightly on every pair (a wider TP1 means more
+    open-risk time before the first partial close), but not by enough to
+    offset the PnL gains. See tasks/todo.md's 2026-07-22 entries for the
+    full comparison table.
+
+    EUR_AUD given its own override the same day (1.0R/3.0R/4.5R) after a
+    7-way sweep found it beats both the old and new global defaults on every
+    metric for that pair specifically (PF 2.63 vs 1.83, PnL +28%, MaxDD down
+    to 6.2%) — TP1 at 1.5R was the specific problem for this pair.
     """
+    from config import TP_RR_PER_PAIR
+
+    r1, r2, r3 = TP_RR_PER_PAIR.get(pair, (1.5, 2.5, 3.5))
     dist = abs(entry - stop_loss)
     mult = 1 if direction == "long" else -1
     return {
-        "tp1": round(entry + mult * dist * 1.5, 5),   # 1.5:1 RR, close 40%
-        "tp2": round(entry + mult * dist * 2.5, 5),   # 2.5:1 RR, close 35%
-        "tp3": round(entry + mult * dist * 3.5, 5),   # 3.5:1 RR, close 25%
+        "tp1": round(entry + mult * dist * r1, 5),   # close 40%
+        "tp2": round(entry + mult * dist * r2, 5),   # close 35%
+        "tp3": round(entry + mult * dist * r3, 5),   # close 25%
     }
 
 
