@@ -495,13 +495,24 @@ class PaperTrader:
     # ── P&L helpers ───────────────────────────────────────────────────────────
 
     @staticmethod
-    def _pnl(entry: float, exit_price: float, direction: str, size: float) -> float:
+    def _pnl(entry: float, exit_price: float, direction: str, size: float,
+              pair: str = "") -> float:
+        """
+        diff is in `pair`'s quote currency, not necessarily USD (e.g. JPY
+        for EUR_JPY) — needs the same conversion calculate_position_size()
+        applies, or a correctly-sized JPY/CAD/AUD position (thousands of
+        units, post 2026-08-04 sizing fix) produces P&L wrong by the same
+        ~30-150x factor. No live connector here (paper/backtest), so this
+        always uses the approximate rate table.
+        """
+        from risk.risk_manager import get_quote_to_usd_rate
         diff = (exit_price - entry) if direction == "long" else (entry - exit_price)
-        return round(diff * size, 4)
+        q2u  = get_quote_to_usd_rate(pair) if pair else 1.0
+        return round(diff * size * q2u, 4)
 
     def _partial_close(self, t: dict, price: float, original_pct: float, label: str) -> None:
         units = t["size"] * original_pct
-        pnl   = self._pnl(t["entry"], price, t["direction"], units)
+        pnl   = self._pnl(t["entry"], price, t["direction"], units, t.get("pair", ""))
         t["realised_pnl"] += pnl
         t["remaining"]    -= original_pct
         self.balance      += pnl
@@ -703,7 +714,7 @@ class PaperTrader:
         total = 0.0
         for t in self.open_trades:
             units = t["size"] * t["remaining"]
-            total += self._pnl(t["entry"], t["last_price"], t["direction"], units)
+            total += self._pnl(t["entry"], t["last_price"], t["direction"], units, t.get("pair", ""))
         return round(total, 4)
 
     def get_open_trade(self, pair: str) -> dict | None:

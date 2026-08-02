@@ -2,19 +2,89 @@ TRADING_HALTED = False
 _daily_loss = 0.0
 _session_open_balance = 0.0
 
+# Approximate USD value of 1 unit of each quote currency — used as a
+# backtesting fallback (and a safety net if a live quote lookup fails)
+# where point-in-time FX-rate accuracy doesn't matter, only getting
+# position size roughly the right scale. Not refreshed automatically;
+# revisit if a currency moves a lot from these levels.
+_QUOTE_CCY_APPROX_USD = {
+    "JPY": 1 / 150.0,
+    "CAD": 1 / 1.37,
+    "CHF": 1 / 0.88,
+    "AUD": 0.66,
+    "NZD": 0.60,
+    "GBP": 1.27,
+    "EUR": 1.08,
+}
+
+# Quote currencies that OANDA quotes as "<CCY> per 1 USD" (need inverting
+# to get USD per 1 unit of the currency) vs "USD per 1 <CCY>" (already
+# the rate we want, no inversion).
+_INVERTED_USD_CROSSES = {"JPY", "CAD", "CHF"}
+
+
+def quote_currency(pair: str) -> str:
+    """Quote (right-hand) currency of a pair like 'EUR_JPY' -> 'JPY'."""
+    parts = pair.upper().split("_")
+    return parts[1] if len(parts) == 2 else "USD"
+
+
+def get_quote_to_usd_rate(pair: str, connector=None) -> float:
+    """
+    USD value of 1 unit of `pair`'s quote currency — the conversion
+    calculate_position_size() needs so a pair not quoted directly in USD
+    still risks the intended dollar amount, not that many units of
+    whatever currency it happens to be quoted in.
+
+    1.0 for pairs already quoted in USD (GBP_USD, NZD_USD, ...) — no
+    lookup, no behavior change. For everything else: a live OANDA quote
+    when `connector` is given (real trading), otherwise the approximate
+    fixed table above (backtesting doesn't need point-in-time accuracy,
+    just roughly-correct scale).
+
+    Found 2026-08-04: calculate_position_size() previously assumed quote
+    currency == USD unconditionally. Confirmed against OANDA's own
+    realized_pl on two live EUR_JPY/CHF_JPY trades that this undersized
+    JPY-quoted pairs by ~150x relative to the intended 1% risk — a $5
+    target risk was actually only ~$0.03-0.04 of real exposure.
+    """
+    ccy = quote_currency(pair)
+    if ccy == "USD":
+        return 1.0
+
+    if connector is not None:
+        try:
+            instrument = f"USD_{ccy}" if ccy in _INVERTED_USD_CROSSES else f"{ccy}_USD"
+            mid = connector.get_current_quote(instrument).get("mid", 0)
+            if mid:
+                return (1.0 / mid) if ccy in _INVERTED_USD_CROSSES else mid
+        except Exception:
+            pass   # fall through to the approximate constant below
+
+    return _QUOTE_CCY_APPROX_USD.get(ccy, 1.0)
+
 
 def calculate_position_size(account_balance: float, entry: float,
-                             stop_loss: float, pair: str = "") -> int:
+                             stop_loss: float, pair: str = "",
+                             quote_to_usd: float = None) -> int:
     """
     Returns position size (units) enforcing 1% risk hard rule.
-    pair: used to select correct pip size (JPY pairs use 0.01, others 0.0001).
+
+    quote_to_usd: USD value of 1 unit of `pair`'s quote currency (see
+    get_quote_to_usd_rate). Defaults to looking it up via the approximate
+    table when not passed explicitly — callers with a live connector
+    should pass get_quote_to_usd_rate(pair, connector) instead for a real
+    quote.
     """
+    if quote_to_usd is None:
+        quote_to_usd = get_quote_to_usd_rate(pair)
+
     risk_amount = account_balance * 0.01
     sl_distance = abs(entry - stop_loss)
+    if sl_distance <= 0 or quote_to_usd <= 0:
+        return 0
 
-    pip = 0.01 if "JPY" in pair.upper() else 0.0001
-    sl_pips = sl_distance / pip
-    units = risk_amount / (sl_pips * pip)
+    units = risk_amount / (sl_distance * quote_to_usd)
     return int(units)
 
 

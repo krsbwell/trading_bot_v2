@@ -28,7 +28,7 @@ from pathlib import Path
 
 import config
 from risk.risk_manager import (
-    calculate_position_size, get_tp_levels, validate_pre_trade, update_daily_loss,
+    calculate_position_size, get_quote_to_usd_rate, get_tp_levels, validate_pre_trade, update_daily_loss,
 )
 from trade.paper_trader import _ser, _deser
 
@@ -173,7 +173,8 @@ class TradeManager:
         # Account balance for position sizing
         account   = self._get_account()
         balance   = account.get("balance") or account.get("cash", 0)
-        size      = calculate_position_size(balance, entry, stop_loss, pair)
+        q2u       = get_quote_to_usd_rate(pair, self.connector)
+        size      = calculate_position_size(balance, entry, stop_loss, pair, q2u)
 
         if size <= 0:
             logger.error("Calculated size <= 0 for %s — skipping", pair)
@@ -281,13 +282,11 @@ class TradeManager:
         sl_hit = (d == "long" and low <= t["sl"]) or \
                  (d == "short" and high >= t["sl"])
         if sl_hit:
-            try:
-                self._exec_close(t, t["sl"], t["remaining"], "sl")
-            except Exception as exc:
-                logger.error("SL close failed for %s: %s", trade_id, exc)
-            pnl = self._pnl(t["entry"], t["sl"], d, t["size"] * t["remaining"])
+            pnl_before = t.get("realised_pnl", 0.0)
+            fill_price = self._exec_close(t, t["sl"], t["remaining"], "sl")
+            pnl = t.get("realised_pnl", 0.0) - pnl_before
             update_daily_loss(pnl, self._get_account().get("balance", t["size"] * t["entry"]))
-            self._finalize_close(t, t["sl"], "sl")
+            self._finalize_close(t, fill_price, "sl")
             return True
 
         # ── TP1 ───────────────────────────────────────────────────────────────
@@ -332,10 +331,10 @@ class TradeManager:
             tp3_hit = (d == "long" and high >= t["tp3"]) or \
                       (d == "short" and low  <= t["tp3"])
             if tp3_hit:
-                self._exec_close(t, t["tp3"], t["remaining"], "tp3")
+                fill_price = self._exec_close(t, t["tp3"], t["remaining"], "tp3")
                 t["tp3_hit"] = True
                 t["remaining"] = 0.0
-                self._finalize_close(t, t["tp3"], "tp3")
+                self._finalize_close(t, fill_price, "tp3")
                 return True
 
         return False
@@ -385,24 +384,65 @@ class TradeManager:
         except Exception as exc:
             logger.debug("record_close failed for trade %s: %s", t.get("id"), exc)
 
-    def _exec_close(self, t: dict, price: float, fraction: float, label: str) -> None:
-        """Issue a partial-close order to the broker."""
+    @staticmethod
+    def _real_fill(resp: dict) -> tuple[float | None, float | None]:
+        """
+        Extract the actual fill price/P&L from a close_trade() response's
+        orderFillTransaction, if present. Returns (price, pl) — either may
+        be None if the response doesn't include it (e.g. a stub/mock
+        connector in tests).
+        """
+        fill  = (resp or {}).get("orderFillTransaction", {}) or {}
+        price = float(fill["price"]) if fill.get("price") else None
+        pl    = float(fill["pl"]) if fill.get("pl") not in (None, "") else None
+        return price, pl
+
+    def _exec_close(self, t: dict, price: float, fraction: float, label: str) -> float:
+        """
+        Issue a partial-close order to the broker. Returns the price used
+        for P&L accounting: OANDA's real fill price when the close
+        succeeds and reports one, otherwise the assumed trigger `price`
+        (the SL/TP level) as a best-effort fallback.
+
+        Previously this always assumed the fill happened exactly at the
+        SL/TP trigger level and computed realised_pnl locally from that
+        assumption, discarding close_trade()'s actual response entirely.
+        A market close fills at whatever price is current when it
+        executes, which can differ materially from the trigger level given
+        the up-to-30-min lag between an M30 candle touching a level and
+        this code detecting it on the next candle-close — confirmed live
+        2026-07-31: GBP_CAD trade 31's local record showed a $3.26 loss at
+        the assumed SL price, while OANDA's real fill was a $2.64 GAIN at
+        a materially different price (price had already reversed past
+        breakeven by the time the market-close order actually executed).
+        Also no longer re-raises on a failed broker call — a failure still
+        needs a best-effort local pnl estimate recorded, not a silent
+        realised_pnl of 0.0 for a trade that's about to be finalized either way.
+        """
         original_size = t["size"]
         close_size    = original_size * fraction
+        units         = int(round(close_size))
 
+        fill_price, real_pnl = price, None
         try:
-            units = int(round(close_size))
-            self.connector.close_trade(t["id"], units=units)
+            resp = self.connector.close_trade(t["id"], units=units)
+            fill_price, real_pnl = self._real_fill(resp)
+            fill_price = fill_price if fill_price is not None else price
         except Exception as exc:
-            logger.error("Partial close (%s) failed for %s: %s", label, t["id"], exc)
-            raise
+            logger.error(
+                "Partial close (%s) failed for %s: %s — using estimated fill",
+                label, t["id"], exc,
+            )
 
-        pnl = self._pnl(t["entry"], price, t["direction"], close_size)
+        pnl = real_pnl if real_pnl is not None else self._pnl(
+            t["entry"], fill_price, t["direction"], close_size, t.get("pair", ""))
         t["realised_pnl"] = t.get("realised_pnl", 0.0) + pnl
         logger.info(
-            "LIVE %-4s  %s %s  price=%.5f  size=%.4f  pnl=%+.2f",
-            label.upper(), t["direction"].upper(), t["pair"], price, close_size, pnl,
+            "LIVE %-4s  %s %s  price=%.5f  size=%.4f  pnl=%+.2f%s",
+            label.upper(), t["direction"].upper(), t["pair"], fill_price, close_size, pnl,
+            "" if real_pnl is not None else "  (estimated, no broker fill data)",
         )
+        return fill_price
 
     # ── Manual close ──────────────────────────────────────────────────────────
 
@@ -423,15 +463,24 @@ class TradeManager:
             logger.warning("close_trade: trade_id %s not found", trade_id)
             return
         try:
-            self.connector.close_trade(trade_id)
+            resp = self.connector.close_trade(trade_id)
         except Exception as exc:
+            # Unlike the SL/TP path, a failed manual close means the
+            # position is very likely still open on the broker — raise
+            # rather than mark it locally closed, or the dashboard would
+            # stop tracking/managing a real open position.
             logger.error("Manual close failed for %s: %s", trade_id, exc)
             raise
-        pnl = self._pnl(t["entry"], price, t["direction"], t["size"] * t["remaining"])
+        fill_price, real_pnl = self._real_fill(resp)
+        fill_price = fill_price if fill_price is not None else price
+        pnl = real_pnl if real_pnl is not None else self._pnl(
+            t["entry"], fill_price, t["direction"], t["size"] * t["remaining"],
+            t.get("pair", ""),
+        )
         t["realised_pnl"] = t.get("realised_pnl", 0.0) + pnl
         t["remaining"] = 0.0
         del self.open_trades[trade_id]
-        self._finalize_close(t, price, reason)
+        self._finalize_close(t, fill_price, reason)
         self._save_state()
 
     # ── Manual edit ───────────────────────────────────────────────────────────
@@ -519,7 +568,8 @@ class TradeManager:
 
         account = self._get_account()
         balance = account.get("balance") or account.get("cash", 0)
-        size    = calculate_position_size(balance, limit_price, stop_loss, pair)
+        q2u     = get_quote_to_usd_rate(pair, self.connector)
+        size    = calculate_position_size(balance, limit_price, stop_loss, pair, q2u)
         if size <= 0:
             logger.error("Calculated size <= 0 for %s — skipping limit order", pair)
             return None
@@ -755,7 +805,7 @@ class TradeManager:
                 # best estimate rather than leave a permanent phantom.
                 exit_price = t.get("last_price", t["entry"])
                 pnl = self._pnl(t["entry"], exit_price, t["direction"],
-                                t["size"] * t["remaining"])
+                                t["size"] * t["remaining"], t.get("pair", ""))
                 t["realised_pnl"] = t.get("realised_pnl", 0.0) + pnl
                 t["remaining"] = 0.0
                 self._finalize_close(t, exit_price, "unknown_broker_close")
@@ -769,7 +819,7 @@ class TradeManager:
                 t["realised_pnl"] = realized
             else:
                 pnl = self._pnl(t["entry"], exit_price, t["direction"],
-                                t["size"] * t["remaining"])
+                                t["size"] * t["remaining"], t.get("pair", ""))
                 t["realised_pnl"] = t.get("realised_pnl", 0.0) + pnl
             t["remaining"] = 0.0
             reason = detail["close_reason"]
@@ -792,10 +842,21 @@ class TradeManager:
             logger.error("Could not fetch account: %s", exc)
             return {"balance": 0, "cash": 0}
 
-    @staticmethod
-    def _pnl(entry: float, exit_price: float, direction: str, size: float) -> float:
+    def _pnl(self, entry: float, exit_price: float, direction: str, size: float,
+             pair: str = "") -> float:
+        """
+        Local best-effort P&L estimate — only used as a fallback when a
+        real broker fill/realized_pl isn't available (see _exec_close/
+        close_trade/reconcile_open_trades). diff is in `pair`'s quote
+        currency, not necessarily USD, so it needs the same conversion
+        calculate_position_size() applies — otherwise, now that positions
+        are correctly sized for pairs like EUR_JPY (thousands of units,
+        not the ~19 the pre-fix undersizing produced), this estimate would
+        be wrong by the same ~100-150x factor in the opposite direction.
+        """
         diff = (exit_price - entry) if direction == "long" else (entry - exit_price)
-        return round(diff * size, 4)
+        q2u  = get_quote_to_usd_rate(pair, self.connector) if pair else 1.0
+        return round(diff * size * q2u, 4)
 
     def open_pairs(self) -> list[str]:
         return [t["pair"] for t in self.open_trades.values()]

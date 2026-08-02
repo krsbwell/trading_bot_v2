@@ -206,6 +206,19 @@ def bollinger_bands(
     return basis + mult * std, basis, basis - mult * std
 
 
+def zscore(series: pd.Series, period: int = 20) -> pd.Series:
+    """
+    Volatility-normalized deviation from a rolling mean: (price - mean) / std.
+    Unlike a fixed-threshold oscillator (CCI, RSI), this self-normalizes to
+    each instrument's own recent volatility, so one threshold (e.g. -2.0)
+    means "statistically oversold" consistently whether the pair is barely
+    moving or highly volatile — no per-pair threshold tuning needed.
+    """
+    mean = series.rolling(period).mean()
+    std  = series.rolling(period).std(ddof=0)
+    return (series - mean) / std.replace(0, np.nan)
+
+
 def stochastic(
     high: pd.Series, low: pd.Series, close: pd.Series,
     k_period: int = 14, d_period: int = 3, smooth_k: int = 3,

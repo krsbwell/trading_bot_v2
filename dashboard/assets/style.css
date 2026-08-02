@@ -89,6 +89,16 @@ body {
 .dash-dropdown .Select-arrow {
     border-color: #444 transparent transparent !important;
 }
+/* Backtest panel's pair dropdown: force the popup menu tall enough for all
+   13 pairs without its own nested scrollbar, regardless of the maxHeight
+   prop actually taking effect — belt-and-suspenders with #backtest-panel's
+   explicit height in app.py, which is the fix for the *outer* panel
+   clipping the popup in the first place. */
+#bt-pair-select .Select-menu-outer,
+#bt-pair-select [class*="-menu"],
+#bt-pair-select [class*="-MenuList"] {
+    max-height: 480px !important;
+}
 .dash-dropdown [class*="-indicatorSeparator"] {
     background-color: #aaaaaa !important;
 }

@@ -226,8 +226,8 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         cci_at_touch_val = float(cci_win.min())
         # CCI must be below -cci_threshold at touch (adaptive: tighter when win rate is low)
         c4 = cci_at_touch_val < -cci_threshold
-        # ── CCI-touch gate: hard-block when CCI_TOUCH_GATE_BLOCKING=True ─────
-        if not c4 and config.CCI_TOUCH_GATE_BLOCKING:
+        # ── CCI-touch gate: hard-block when cci_touch_gate_blocking_for(pair) ─
+        if not c4 and config.cci_touch_gate_blocking_for(pair):
             _buy_diag[pair] = dict(c1=c1, c2=c2, c3=c3, c4=False, c5=False,
                                    c6=False, c7=False, cci_at_touch_val=cci_at_touch_val,
                                    cci_current=float(cci_h1.iloc[-1]),
@@ -338,8 +338,8 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         cci_at_touch_val = float(cci_win.max())
         # CCI must be above +cci_threshold at touch (adaptive: tighter when win rate is low)
         c4 = cci_at_touch_val > cci_threshold
-        # ── CCI-touch gate: hard-block when CCI_TOUCH_GATE_BLOCKING=True ─────
-        if not c4 and config.CCI_TOUCH_GATE_BLOCKING:
+        # ── CCI-touch gate: hard-block when cci_touch_gate_blocking_for(pair) ─
+        if not c4 and config.cci_touch_gate_blocking_for(pair):
             _sell_diag[pair] = dict(c1=c1, c2=c2, c3=c3, c4=False, c5=False,
                                     c6=False, c7=False, cci_at_touch_val=cci_at_touch_val,
                                     cci_current=float(cci_h1.iloc[-1]),

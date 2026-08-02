@@ -1,3 +1,407 @@
+# Fix: WFO live parameter tuner had zero out-of-sample validation — overfit params were live on GBP_CAD (2026-08-11) — DONE
+
+## Why
+User asked why the bot lost 9 of its last 10 real closed trades (checked
+`data/live_state_forex.json`'s `closed_trades`, sorted by `close_time`:
+confirmed 9/10, all clean `sl` exits, no logging bug). Told to fix it, not
+just diagnose it — proceeding without further check-ins per explicit
+instruction.
+
+Traced the losses by pair: EUR_JPY 0/4, CHF_JPY 0/2, GBP_CAD 1/4 since
+2026-07-31 (only 15 trades total logged — thin sample). Ran the same
+fresh walk-forward methodology that got USD_CAD/EUR_AUD paused on
+2026-08-05 (train=1500/test=750/step=500, 4500 M30 bars, real OANDA data)
+against all three. Unlike USD_CAD/EUR_AUD's "OOS PF collapsed to 0 across
+multiple windows" signature, EUR_JPY/CHF_JPY/GBP_CAD's OOS PF is noisy
+(swings from 0 to 11+ across 1-7-trade windows) but doesn't consistently
+collapse — **not enough evidence to pull them from FOREX_PAIRS**, so they
+were left active (see Review below, no config.FOREX_PAIRS/FOREX_WATCH
+change made).
+
+While checking each pair's tuning, found something more concrete:
+`data/wfo_params.json`'s GBP_CAD entry (`fitted_at: 2026-07-30`) claimed
+an **83.3% win rate off just 6 in-sample trades**. Read
+`engine/wfo_optimizer.py::WFOOptimizer.run()` (the function the Sunday
+02:00 UTC live scheduler job calls, `main.py:1215`): it grid-searches 216
+parameter combinations, ranks them by `_composite_score` (profit-factor x
+(0.5+win_rate)) **on the same data the combos are scored from**, and saves
+whichever one scores highest, with only a 5-trade floor — no
+out-of-sample check anywhere. With 216 combos scored against the same
+window, some combo is virtually guaranteed to look great by chance alone.
+GBP_CAD's fit is exactly that: every real GBP_CAD trade placed under
+those params since 2026-07-30 has lost except one (1W/3L, -$10.42).
+
+`engine/wfo_optimizer.py` had **zero test coverage** before this fix
+(`tests/` has no `test_wfo_optimizer.py` prior to today).
+
+## What changed
+- `engine/wfo_optimizer.py::WFOOptimizer.run()`: rewritten to split the
+  training window into an earlier FIT slice and a later HOLDOUT slice
+  (`config.WFO_HOLDOUT_FRAC`, default 0.3 — 30% held out). Stage 1 ranks
+  all 216 combos on the FIT slice only, same as before. Stage 2 takes the
+  top `WFO_HOLDOUT_TOP_N` (default 8) fit-stage candidates and re-scores
+  each on the untouched HOLDOUT slice; only saves the one with the best
+  holdout composite score, and only if it clears `WFO_HOLDOUT_MIN_TRADES`
+  (default 3) holdout trades AND a positive holdout composite score
+  (PF > 0.5). If nothing clears that bar, **the previously-saved params
+  are left untouched** rather than overwritten with an unvalidated combo
+  — the live bot keeps running on whatever it had (or config defaults, if
+  it never had a fit) instead of a fresh guess.
+- Saved state's `win_rate`/`total_trades`/`total_pnl` now reflect the
+  **holdout** evaluation, not the in-sample one — this is what the
+  dashboard's Learning panel displays, so it now shows honestly
+  OOS-validated numbers instead of the prettier in-sample ones (no
+  dashboard code change needed — `panels.py` just renders whatever's in
+  the state dict, already keyed the same way).
+- `config.py`: added `WFO_HOLDOUT_FRAC` (0.3), `WFO_HOLDOUT_TOP_N` (8),
+  `WFO_HOLDOUT_MIN_TRADES` (3) — same per-feature-knob pattern as every
+  other tunable in this file, documented inline with the "why" above.
+- `tests/test_wfo_optimizer.py` (new, 4 tests): an in-sample winner that
+  craters out-of-sample must be rejected in favor of a combo that
+  genuinely holds up; saved stats must come from holdout, not fit-stage;
+  a pair where nothing validates must keep its existing saved params
+  (not get wiped to nothing); a training window too small to form a
+  meaningful holdout slice must decline to refit rather than validate
+  against noise.
+
+## Live data changes (data/, gitignored — not code)
+- **GBP_CAD's overfit `wfo_params.json` entry removed.** Forced a real
+  refit through the fixed code against real OANDA data (1500 M30 bars):
+  **no combination validated out-of-sample** — confirms the 83%/6-trade
+  fit was noise, not edge. GBP_CAD now falls back to `config.py`
+  defaults (min_score=55, CCI=20, MACD 12/26/9, etc.) until a future
+  weekly refit actually finds something that holds up. Backed up the
+  pre-fix file to `data/wfo_params.json.bak_before_holdout_fix_20260811`
+  before touching it.
+- **EUR_JPY, CHF_JPY**: forced refits found no validating combination
+  either. Both already had no WFO entry (never tuned since their
+  2026-07-29 promotion — global defaults only), so this is a
+  confirmation of the status quo, not a change: still running config
+  defaults. Every pair's `should_refit()` will keep retrying weekly
+  (Sunday 02:00 UTC, background thread, ~20 min/pair — confirmed this
+  doesn't block the signal loop) until something actually validates.
+
+## Explicitly NOT changed
+- `config.FOREX_PAIRS` / `FOREX_WATCH`: no pair removed. The fresh
+  walk-forward diagnostic didn't show the "OOS PF collapsed to 0" pattern
+  that justified pausing USD_CAD/EUR_AUD — EUR_JPY/CHF_JPY/GBP_CAD's
+  noisy-but-not-dead OOS numbers don't clear that bar. Revisit once more
+  live trades accumulate (still well under the ~30-trade trust threshold
+  used elsewhere in this project).
+- Did not touch `MIN_CONFLUENCE_SCORE`, any gate, `TP_RR_PER_PAIR`,
+  `BREAKEVEN_*`, or any strategy module — this fix is scoped to the
+  parameter-tuning pipeline that feeds those knobs, not the knobs or
+  gates themselves.
+
+## Verification
+Full suite: 261/261 pass (257 pre-existing + 4 new). Forced live refits
+run against real OANDA practice-account data (not synthetic), confirming
+the new validation logic behaves the same way on real data as in the
+unit tests (rejects, doesn't crash, doesn't silently accept). `ast.parse`
+clean on both changed files.
+
+## Review — what this does and doesn't answer about "why 9/10 losses"
+This is a real, confirmed structural bug (unvalidated live parameter
+tuning actively serving an overfit config to a currently-active pair) and
+it's fixed with test coverage, not just a one-off patch. It is **not**
+the sole explanation for the 9/10 losing stretch — GBP_CAD accounts for
+1 of those 9 losses; EUR_JPY (4 losses) and CHF_JPY (2 losses) were never
+WFO-tuned in the first place, so this bug didn't touch them. The honest
+remaining explanation for most of the losses is what was already
+flagged when this was first reported: several active pairs trade
+infrequently enough (3-7 trades per multi-week backtest window) that an
+11-day live losing stretch across multiple such pairs is within normal
+variance for strategies with a genuine ~35-45% expected win rate — not
+provably "the edge is gone," but not provably fine either. Flagging per
+[[feedback_dont_overclaim_fixes]]: the fix here removes one confirmed
+source of bad live performance (GBP_CAD's noise-fit params); it does not
+guarantee the next 10 trades go better, and there isn't yet a live
+sample large enough to say whether EUR_JPY/CHF_JPY belong on the active
+roster at all — that needs more real trades or a larger backtest sample,
+not more tuning of the same recent window.
+
+---
+
+# Change: Z-score mean reversion strategy — wire up + backtest (2026-08-06) — REJECTED, code deleted
+
+## Context
+Session froze mid-work. Recovered state: `engine/strategy_zscore_meanrev.py`
+already written (untracked, complete — check_buy_signal/check_sell_signal/
+get_stop_loss/get_last_diag/clear_cache, same shape as the other strategy
+modules) and `config.py` already has the 4 new knobs
+(ZSCORE_PERIOD/ZSCORE_THRESHOLD/ZSCORE_H4_ADX_THRESHOLD/ZSCORE_ATR_SL_MULT,
+modified but uncommitted). Neither change is wired into anything yet — the
+module isn't importable from strategy_dispatch.py or the backtest CLI, so it
+can't be tested or run live. Live bot (main.py) itself is running fine and
+was never frozen — confirmed via logs/main.log heartbeats continuing to the
+current minute.
+
+Strategy idea (from module docstring): volatility-normalized Z-score entry
+instead of EMA's cci_threshold, so ONE shared parameter set works across the
+whole pair roster with no per-pair WFO tuning. Docstring is explicit this is
+"a hypothesis to backtest honestly, not an answer to trust on citation
+alone" — so the plan below stops at backtesting, no live config changes
+(no `config.STRATEGY_OVERRIDE` entry for any pair) unless results hold up,
+matching how trend_follow ([[project_trend_follow_experiment]]) and ATR
+trailing/breakeven ([[project_atr_trailing_and_live_gap]]) were evaluated.
+
+## Todo
+- [x] Register `zscore_meanrev` in `engine/strategy_dispatch.py` STRATEGY_FNS
+- [x] Add `zscore_meanrev` as a `--strategy` choice in `backtest/runner.py`'s CLI
+- [x] Isolated all work on branch `zscore-meanrev-experiment` — main untouched,
+      nothing committed yet (safety net per user request 2026-08-06: benchmark
+      before committing anything)
+- [x] Ran baseline backtest (each pair's CURRENT live strategy per
+      `STRATEGY_OVERRIDE`) — 2000 bars, same window used for the challenger run
+- [x] Ran zscore_meanrev backtest, same 5 pairs, same bar count
+- [x] Reported comparison back to user — see Review below
+- [ ] **BLOCKED on user decision** (see Review) before any further code
+      changes, config.STRATEGY_OVERRIDE change, or commit
+
+## Review
+
+### Baseline (current live strategy per pair, 2000 bars each)
+| Pair | Strategy | Trades | WR | PF | PnL | MaxDD |
+|---|---|---|---|---|---|---|
+| NZD_USD | ema_bounce | 11 | 36% | 1.60 | +$15.87 | 5.5% |
+| GBP_CAD | ema_bounce | 14 | 36% | 1.24 | +$9.69 | 4.3% |
+| GBP_USD | breakout_retest | 13 | 46% | 1.89 | +$27.42 | 2.8% |
+| CHF_JPY | ema_bounce | 13 | 46% | 1.63 | +$22.80 | 2.8% |
+| EUR_JPY | ema_bounce | 15 | 27% | 0.82 | -$8.42 | 6.6% |
+
+### Challenger (zscore_meanrev, identical pairs/window)
+`python -m backtest.runner --strategy zscore_meanrev` returned **0 trades on
+all 5 pairs** — not because the Z-score condition never fires (it does, 62–121
+candidate bars per pair had |Z|≥2 with H4 not opposing), but because the raw
+score these 4 conditions produce tops out at 25 (`round(25 * passed/4)`, same
+formula shape as ema_bounce's `round(25 * passed/7)`), and even added to
+structure+price-action score, the combined `final_score` never reached
+`config.MIN_CONFLUENCE_SCORE = 55` for a single candidate in this window:
+
+| Pair | Candidate bars | Max final_score seen | Needed |
+|---|---|---|---|
+| NZD_USD | 62 | 49 | 55 |
+| GBP_CAD | 117 | **54** | 55 |
+| GBP_USD | 121 | **54** | 55 |
+| CHF_JPY | 95 | 49 | 55 |
+| EUR_JPY | 91 | 42 | 55 |
+
+Not a code bug — confirmed by direct instrumentation, not just the CLI's
+"signals=0" line. GBP_CAD and GBP_USD came within 1 point of the gate, so this
+reads as a scoring-ceiling/calibration problem rather than "no candidates
+exist." Given to the user 2026-08-06 for a decision on how (or whether) to
+proceed. User chose: re-test at a longer window (4500 bars) before touching
+the strategy's logic, rather than any of the 3 code-change options offered.
+
+### Re-run at 4500 bars (user's choice, same 5 pairs)
+
+Baseline:
+| Pair | Strategy | Trades | WR | PF | PnL | MaxDD |
+|---|---|---|---|---|---|---|
+| NZD_USD | ema_bounce | 29 | 34% | 1.25 | +$21.71 | 5.5% |
+| GBP_CAD | ema_bounce | 34 | 59% | 3.34 | +$162.42 | 3.5% |
+| GBP_USD | breakout_retest | 22 | 50% | 2.37 | +$67.08 | 3.1% |
+| CHF_JPY | ema_bounce | 27 | 41% | 1.57 | +$41.42 | 3.5% |
+| EUR_JPY | ema_bounce | 38 | 37% | 1.25 | +$28.12 | 6.6% |
+
+Challenger (zscore_meanrev):
+| Pair | Trades | WR | PF | PnL | Candidates | Max final_score |
+|---|---|---|---|---|---|---|
+| NZD_USD | 0 | — | — | $0.00 | 184 | 54 (need 55) |
+| GBP_CAD | 0 | — | — | $0.00 | 267 | 54 (need 55) |
+| GBP_USD | 1 | 0% | 0.00 | -$5.00 | 331 | 57 (cleared once) |
+| CHF_JPY | 0 | — | — | $0.00 | 243 | 54 (need 55) |
+| EUR_JPY | 0 | — | — | $0.00 | 224 | 54 (need 55) |
+
+Longer window did NOT change the conclusion — more candidate bars (184–331 vs
+62–121 at 2000 bars), but the scoring ceiling is the same 25-raw-point cap
+regardless of sample size, so the result was always going to look like this
+until the formula changes. GBP_USD's single trade that did clear the gate
+lost.
+
+### Final decision (2026-08-06): discarded, not just shelved
+User called it: worse than the live baseline on every pair, with no verified
+research behind the docstring's SSRN citation (that citation predates this
+session — could not be confirmed as real research vs. an unverified claim
+carried over from a prior, unrecoverable session). Rather than leave inert
+code around (the gold_trend/trend_follow treatment), user asked to remove it
+entirely: `engine/strategy_zscore_meanrev.py` deleted, the 4 `ZSCORE_*` knobs
+removed from `config.py`, `engine/strategy_dispatch.py` and
+`backtest/runner.py` reverted to their pre-2026-08-06 state. Branch
+`zscore-meanrev-experiment` deleted. Nothing from this experiment is in the
+codebase anymore — this section is kept only as a record of what was tried
+and why it didn't hold up.
+
+Pivot: user redirected investigation to the Walk-Forward dashboard results
+for NZD_USD and USD_CAD (both showing wildly unstable per-window OOS PF —
+some windows 0.00, one window 27–30 PF off 2-3 trades) as evidence the
+*existing* ema_bounce strategy's backtest/WFO numbers may not reflect real
+live performance either. See next section.
+
+---
+
+# Investigation: WFO headline metrics vs real live performance (2026-08-06)
+
+## Finding 1 — `avg_pf_oos`/`avg_stability` is an unweighted mean, dominated by
+## the smallest-trade-count windows (confirmed in code, not just the screenshots)
+
+`backtest/runner.py:563-564` (`run_walk_forward`):
+```python
+avg_pf_oos  = round(sum(w["pf_oos"]    for w in windows_out) / len(windows_out), 2)
+avg_stab    = round(sum(w["stability"]  for w in windows_out) / len(windows_out), 3)
+```
+Plain arithmetic mean across windows, no weighting by `trade_count_oos`. A
+window with 2-3 trades and one lucky winner produces PF 27-30 and gets equal
+weight to a window with a stable PF near 1. That's exactly what's in the two
+screenshots the user shared:
+- **NZD_USD** (Train 1500/Test 750/Step 500, 4500 bars): windows had 3, 3, 2,
+  5, 9 trades; OOS PF was 27.31, 4.52, 1.43, **0.00**, 0.28. Dashboard
+  headline: "Avg OOS PF 6.71" — driven almost entirely by the 3-trade 27.31
+  window.
+- **USD_CAD**: windows had 2, 1, 2, 3, 5 trades; OOS PF was 1.09, **0.00**,
+  0.69, 30.57, **0.00**. Headline: "Avg OOS PF 6.47" — 2 of 5 windows are
+  100% losers, headline hides it.
+
+This is a real bug — the headline metric is not a trustworthy summary
+statistic with trade counts this small, and nothing tells the user that.
+
+## Finding 2 — real live performance, not extrapolated: checked `data/signal_log.csv`
+
+Filtered to `source == "live"` and `outcome in ("win","loss")` (excludes the
+`would_win`/`would_lose` shadow-diagnostic rows — see
+[[bugs_shadow_outcome_duplication]] — and `expired`/`skipped`). This is every
+*actual* closed live trade in the log:
+
+| Date | Pair | Dir | Score | Outcome | pips | $ |
+|---|---|---|---|---|---|---|
+| 07-08 | EUR_AUD | long | 56 | loss | -25.0 | -5.34 |
+| 07-10 | USD_CAD | long | 66 | loss | -25.0 | -5.37 |
+| 07-15 | GBP_CAD | long | 56 | **win** | 52.6 | +9.00 |
+| 07-21 | NZD_USD | long | 56 | loss | -25.0 | -5.42 |
+| 07-27 | NZD_USD | long | 56 | loss | -25.0 | -5.70 |
+| 07-28 | EUR_AUD | short | 56 | loss | -25.0 | -1.14 |
+| 07-29 | GBP_USD | short | 60 | **win** | 31.6 | +7.75 |
+| 07-29 | NZD_USD | short | 56 | loss | -25.0 | -5.67 |
+| 07-30 | CHF_JPY | long | 66 | loss | -25.0 | -5.75 |
+
+**9 trades over 3 weeks (2026-07-08 → 2026-07-30). 2 wins, 7 losses = 22% WR,
+net -$17.64.** That's the user's "1 win per 4 losses" complaint, confirmed
+with real numbers, not a vibe. 7 of 7 losses hit *exactly* -25.0 pips — the
+stop, not a partial/managed exit — meaning price essentially never came back
+in favor after entry on any of these. And every single trade's score sits at
+56, 60, or 66 — right at or barely over `MIN_CONFLUENCE_SCORE = 55` — none
+of the 9 real trades had a strong (70+) score.
+
+This is a small sample (9 trades) so it isn't proof the strategy is broken,
+but it's a large enough gap from what the same-pair backtests show (this
+session's own baseline backtest found NZD_USD 34-36% WR, GBP_CAD 36-59% WR,
+GBP_USD 46-50% WR over thousands of bars) that it's worth treating as a real
+signal, not noise, especially paired with Finding 1 showing the WFO tooling
+itself has a metric that overstates confidence.
+
+## Open questions to run down next (not started — checking in before proceeding)
+- [x] Why does every real live trade score in the 56-66 band — answered, see Finding 3
+- [x] Why 7/7 losses hit the stop exactly, with none managed/partial — answered, see Finding 4
+- [ ] Fix `avg_pf_oos`/`avg_stability` to weight by trade count (or at least
+      surface per-window trade counts more prominently in the dashboard so
+      a 3-trade PF-27 window can't visually dominate a 15-trade PF-1 window)
+- [ ] Pull a longer live-trade sample if/when more accumulates — 9 trades
+      is thin for a hard verdict either way
+
+## Finding 4 — the "dynamic" EMA-bounce stop-loss is, in practice, a flat
+## 25-pip floor almost every time, because EMA-touch entries start close to
+## the EMA by construction
+
+`engine/strategy_ema_cci_macd.py:379-410` (`get_stop_loss`): primary rule is
+"SL = mid_ema ± 1 pip", with `config.MIN_SL_PIPS = 25` (`min_sl_pips_for`)
+as a floor via `sl = min(sl, entry - min_dist)` (long) — i.e. whichever is
+*wider* wins, floor or EMA-distance.
+
+Checked entry/SL against ATR for every real trade:
+
+| Pair | Dir | ATR(pips) | SL distance | Outcome |
+|---|---|---|---|---|
+| EUR_AUD | long | 14.91 | 25.0 (floor) | loss |
+| USD_CAD | long | 6.19 | 25.0 (floor) | loss |
+| GBP_CAD | long | 12.11 | **30.6 (EMA, wider than floor)** | **win** |
+| NZD_USD | long | 5.74 | 25.0 (floor) | loss |
+| NZD_USD | long | 5.86 | 25.0 (floor) | loss |
+| EUR_AUD | short | 8.85 | 25.0 (floor) | loss |
+| NZD_USD | short | 5.39 | 25.0 (floor) | loss |
+| CHF_JPY | long | 15.62 | 25.0 (floor) | loss |
+
+(GBP_USD's win excluded — that pair runs `breakout_retest`, a different
+`get_stop_loss`, not this one.)
+
+**6 of 7 `ema_bounce` trades hit the exact 25-pip floor regardless of ATR
+ranging 5.4–15.6 pips** — because an EMA-touch/bounce entry is, by the
+strategy's own definition, close to the EMA at entry time, so "SL just
+beyond the EMA" is almost always tighter than 25 pips and gets overridden
+by the floor. The floor isn't a bug — `MIN_SL_PIPS`'s comment says "25
+validated by backtest (20 caught H1 noise)" — but that claim predates this
+session and hasn't been re-verified here; flagging per
+[[feedback_dont_overclaim_fixes]] rather than re-asserting it as settled.
+The practical effect either way: for this strategy shape, "dynamic,
+ATR/EMA-scaled stop" is close to fiction — it's a flat 25-pip stop dressed
+up as adaptive, and every real loss is a full, unmanaged stop-out because
+price never travels toward TP1 (larger than 25 pips away) before reversing.
+
+Notably, the *one* `ema_bounce` trade whose EMA-based distance (30.6 pips)
+beat the floor was also the *only* `ema_bounce` win in the sample. n=7,
+too small to call this proven, but it's a concrete, testable hypothesis:
+floor-clamped trades may be structurally worse bets than trades where the
+EMA genuinely sits further from price. Worth a real backtest (e.g. compare
+current MIN_SL_PIPS=25 against a lower/removed floor, or filter for
+EMA-distance-clamped vs not) before touching anything live.
+
+## Finding 3 — answered: no hidden override; 56-66 IS close to the real ceiling,
+## and this reopens/refreshes [[bugs_shadow_outcome_duplication]]'s stale finding
+
+Checked `adaptive_params`/`wfo_optimizer` — no per-pair override lowers the
+gate below the global `MIN_CONFLUENCE_SCORE = 55`; all 9 real trades scoring
+55+ is the real, uniformly-applied threshold, not a bug.
+
+Checked the full score distribution across all 159 live rows (not just the 9
+real trades): mean 45.9, max observed **66** — against a theoretical ceiling
+of 75 (`ema_score` maxes at 25, `structure_score` at 20, `pa_score` at 30).
+Only ~18% of raw signals ever reach 55 at all. So 56-66 isn't suppressed —
+it's genuinely close to what the top of the distribution looks like in this
+market data. `MIN_CONFLUENCE_SCORE = 55` sits so close to the practical
+ceiling that almost nothing that clears it does so by a wide margin.
+
+That reopens [[bugs_shadow_outcome_duplication]]'s 2026-07-17 finding ("no
+visible positive relationship between confluence score and win rate"),
+which that memory explicitly flagged as due for a refresh once enough
+post-dedup-fix data existed — it now has (159 live rows now vs. the ~161
+mixed live+seed rows the original number came from, before the 2026-07-24
+seed-data-exclusion fix cleaned the pool further). Re-ran it:
+
+Real+shadow combined win rate by score band (fresh data):
+| Band | WR | n |
+|---|---|---|
+| <40 | 51.4% | 37 |
+| 40-54 | 40.0% | 80 |
+| 55-64 | 56.5% | 23 |
+| 65+ | 0.0% | 2 |
+
+**But the REAL trades only** (the ones that actually executed, in the only
+bands real trades ever land in):
+| Band | WR | n |
+|---|---|---|
+| 55-64 | 28.6% | 7 |
+| 65+ | 0.0% | 2 |
+
+The shadow-outcome estimate for the 55-64 band (56.5%) and what actually
+happened when those trades were really taken (28.6%) disagree by a lot.
+Shadow outcomes are resolved with simplified TP1-vs-SL logic, not full live
+trade management (partial exits, trailing, breakeven) — see
+[[project_atr_trailing_and_live_gap]] for what's actually wired live. That
+gap between "predicted by the shadow model" and "what really happened" is
+itself a lead, but n=7 real trades is too thin to call this settled — stated
+per [[feedback_dont_overclaim_fixes]].
+
+---
+
 # Change: XAU_USD (gold) support + trend-pullback strategy (2026-08-01) — SHELVED, see review below
 
 ## Why
@@ -2847,3 +3251,77 @@ process start.
   broker-side SL/TP already don't need this (broker enforces them
   instantly regardless of our poll rate) — a filled limit order becoming
   an open trade is the thing that would sit undetected between polls.
+
+# Fix: GBP_CAD P&L mismatch (fill-price bug) + JPY/CAD/AUD position-sizing bug (2026-08-04)
+
+## Why
+User asked me to check on 2 open trades + 1 recent loss. Investigating a
+tiny (-$0.03/-$0.04) EUR_JPY/CHF_JPY loss led to comparing local trade
+records against OANDA's own `get_trade_details()` ground truth, which
+surfaced two separate, real bugs — not the "nothing's actually wrong"
+conclusion the investigation started from.
+
+## Bug 1: local SL/TP close records didn't match OANDA's real fill
+`TradeManager._exec_close()`/`close_trade()` called the connector's
+`close_trade()` (a market order) but discarded its response entirely,
+assuming the fill happened exactly at the SL/TP trigger level. A market
+close fills at whatever price is current when it executes — confirmed via
+`get_trade_details()` on GBP_CAD trade 31: local record showed a $3.26
+loss at the assumed SL price (1.88193); OANDA's actual fill was a **$2.64
+gain** at 1.88597 — price had reversed past breakeven by the time the
+close order actually executed (M30 candle-close detection can lag up to
+30 min behind the price action that triggered it). Trade 37 showed the
+same pattern, smaller magnitude (+$3.84 recorded vs +$2.34 real).
+
+**Fix**: `_exec_close()` and `close_trade()` now read the real
+`orderFillTransaction.price`/`.pl` from the broker response (added
+`_real_fill()` helper) and use those for `realised_pnl`/`exit_price`
+whenever present, falling back to the old assumed-price estimate only
+when the response doesn't include fill data. `_exec_close()` no longer
+re-raises on a failed broker call (SL/TP path always finalizes locally
+either way — a raise there just meant `t["realised_pnl"]` silently never
+got updated while the trade got finalized with $0.00 anyway); the manual
+`close_trade()` still raises on failure since an unclosed-but-marked-closed
+position would be worse (dashboard stops tracking a real open position).
+
+## Bug 2: JPY/CAD/AUD pairs undersized ~30-150x relative to intended 1% risk
+`calculate_position_size()` computed `units = risk_amount / sl_distance`
+with no currency conversion — correct only when the quote currency is USD
+(GBP_USD, NZD_USD — confirmed exact match against OANDA). For EUR_JPY/
+CHF_JPY (quote=JPY), `sl_distance` is in JPY, not USD, so the formula
+undersized positions ~150x (confirmed against OANDA ground truth: 19-unit
+positions produced genuinely correct-but-tiny $0.03-0.04 real losses
+against an intended $5 risk). USD_CAD/GBP_CAD (quote=CAD) and EUR_AUD
+(quote=AUD) have the same bug, smaller magnitude (~30-40%, not caught
+earlier because GBP_CAD's Bug-1 mismatch masked it).
+
+**Fix**: added `get_quote_to_usd_rate(pair, connector=None)` to
+`risk/risk_manager.py` — 1.0 for USD-quoted pairs (no lookup, no behavior
+change), a live OANDA quote when a connector is passed (real trading), an
+approximate fixed table otherwise (backtesting — doesn't need
+point-in-time accuracy, just correct scale). `calculate_position_size()`
+takes an optional `quote_to_usd` param, defaulting to the approximate
+table when omitted. Live call sites (`main.py`, `trade_manager.py`
+open_trade + limit orders, `dashboard/app.py`'s order-form previews) now
+pass a live-quote rate; `backtest/runner.py` and the paper-mode "Scan Now"
+path needed no changes — they call the function without the 5th arg, so
+they pick up the approximate-table fallback automatically. Also fixed the
+same missing conversion in `TradeManager._pnl()` (the local P&L estimate
+used only when broker fill data is unavailable) — now that positions are
+correctly sized, a mismatched fallback would be wrong by the same factor
+in the opposite direction.
+
+## Verification
+- Confirmed both bugs against OANDA's real `get_trade_details()` /
+  `realized_pl` before writing any fix (not just local-record theorizing).
+- After the sizing fix, computed live quote-to-USD rates for every active
+  pair and confirmed each now targets ~$5.02 real risk (1% of a $502
+  balance) instead of the pre-fix $0.03-5 range depending on quote
+  currency.
+- Full test suite: 257/257 passing, zero regressions.
+- `main.py`, `dashboard.app`, `trade.trade_manager`, `risk.risk_manager`,
+  `backtest.runner` all import cleanly.
+
+**Requires a live process restart** to take effect — same as every other
+fix, `TradeManager`/`main.py`/dashboard callbacks are loaded at process
+start.

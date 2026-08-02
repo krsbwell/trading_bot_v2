@@ -33,7 +33,7 @@ from engine.wfo_optimizer import wfo_optimizer
 from trade.paper_trader import PaperTrader
 from trade.trade_manager import TradeManager
 from risk.risk_manager import (
-    validate_pre_trade, calculate_position_size,
+    validate_pre_trade, calculate_position_size, get_quote_to_usd_rate,
     update_daily_loss, reset_daily_state, TRADING_HALTED,
 )
 from learning.data_collector import record_signal, record_close, record_skip, clear_pending
@@ -99,6 +99,14 @@ _log_console_handler.setFormatter(_log_formatter)
 
 logging.basicConfig(level=logging.INFO, handlers=[_log_console_handler, _log_file_handler])
 logger = logging.getLogger(__name__)
+
+# Route any uncaught exception (main thread or a background thread) through
+# this logger before the process/thread dies — see crash_logging.py's
+# docstring for why this exists (a prior silent death's cause was
+# unrecoverable precisely because this wasn't in place; a second one
+# recurred 2026-08-11 for the same reason).
+import crash_logging
+crash_logging.install(logger)
 
 # Dash's dev server logs every single HTTP request at INFO via the "werkzeug"
 # logger — with 4 dcc.Interval polls/callbacks running (down to 1s), that's
@@ -541,7 +549,8 @@ def _process_pair(pair: str, market: str, engine) -> None:
 
     account = state.get_key("account", {})
     balance = account.get("balance") or account.get("cash", 500.0)
-    size    = calculate_position_size(balance, signal["entry"], signal["stop_loss"], pair)
+    _q2u    = get_quote_to_usd_rate(pair, _oanda_connector)
+    size    = calculate_position_size(balance, signal["entry"], signal["stop_loss"], pair, _q2u)
 
     trade_id  = f"{pair}-{int(datetime.now(timezone.utc).timestamp())}"
     record_signal(trade_id, signal, size, balance * 0.01)
@@ -1082,7 +1091,18 @@ def main() -> None:
         # during the ~30-min on_candle_close scan burst). threaded=True
         # spawns a new thread per incoming request instead, so those polls
         # get serviced concurrently rather than waiting in line.
-        dash_app.run(host="0.0.0.0", port=8050, debug=False, use_reloader=False,
+        #
+        # host changed 0.0.0.0 -> 127.0.0.1 (2026-08-12): 0.0.0.0 made the
+        # dashboard — including One-Click Buy/Sell — reachable from any
+        # device on the local network, not just this PC, with no auth layer
+        # in front of it. Also the likely source of the repeated MemoryError
+        # traces in logs/main.log (werkzeug/serving.py's dev server choking
+        # on malformed/garbage requests) — a dev server that's only ever
+        # reachable from localhost has a far smaller, trusted set of clients
+        # that could send it one. User confirmed (2026-08-12): localhost-only
+        # is worth losing LAN/phone access for. Revert to "0.0.0.0" if that
+        # access is ever wanted back — nothing else about this call changes.
+        dash_app.run(host="127.0.0.1", port=8050, debug=False, use_reloader=False,
                      threaded=True)
     t = threading.Thread(target=_run_dash, daemon=True, name="dashboard")
     t.start()
@@ -1233,6 +1253,15 @@ def main() -> None:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot stopped cleanly.")
+    except Exception:
+        # Previously unguarded — any other exception here propagated straight
+        # out of main() to the interpreter's default excepthook, which writes
+        # only to stderr (crash_logging.install() above now also catches this
+        # case, but logging it here too gives a clearer, specifically-scoped
+        # message). Exit nonzero so bot_service.py / run.ps1 actually restart
+        # the process instead of treating this the same as a clean Ctrl+C.
+        logger.critical("scheduler.start() raised an uncaught exception — bot is exiting", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

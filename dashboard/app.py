@@ -784,9 +784,17 @@ app.layout = html.Div(
         # Backtest panel (hidden overlay)
         html.Div(
             id="backtest-panel",
-            style={"display": "none", "position": "fixed", "top": "60px",
+            # height (not just maxHeight) is deliberate: maxHeight alone is a
+            # ceiling that only kicks in once content demands it — before any
+            # backtest has run, the panel's content (tabs + config row) is
+            # short, so the box renders small and its overflowY:auto clips
+            # the pair dropdown's popup menu, which needs ~480px of room to
+            # show all 13 pairs without its own nested scrollbar. An explicit
+            # height reserves that room unconditionally, from the start.
+            style={"display": "none", "position": "fixed", "top": "20px",
                    "left": "50%", "transform": "translateX(-50%)",
-                   "width": "700px", "maxHeight": "80vh", "overflowY": "auto",
+                   "width": "700px", "height": "85vh", "maxHeight": "92vh",
+                   "overflowY": "auto",
                    "background": "#161b22", "border": "1px solid #30363d",
                    "borderRadius": "8px", "padding": "1.5rem", "zIndex": 2000,
                    "boxShadow": "0 8px 32px rgba(0,0,0,0.6)"},
@@ -815,7 +823,8 @@ app.layout = html.Div(
                     dcc.Dropdown(id="bt-pair-select",
                                  options=_pair_options(),
                                  value=config.FOREX_PAIRS[0], clearable=False,
-                                 style={"width": "150px", "fontSize": "0.85rem"}),
+                                 maxHeight=480,
+                                 style={"width": "220px", "fontSize": "0.85rem"}),
                     html.Span("Bars:", style={"color": "#8b949e", "fontSize": "0.8rem",
                                               "alignSelf": "center", "marginLeft": "0.5rem"}),
                     dcc.Input(id="bt-bars-input", type="number", value=1500,
@@ -1983,7 +1992,7 @@ def populate_order_form(form_data, default_lot):
                     entry_val - sl_dist if direction == "long" else entry_val + sl_dist,
                     3 if "JPY" in pair else 5,
                 )
-                from risk.risk_manager import get_tp_levels, calculate_position_size
+                from risk.risk_manager import get_tp_levels, calculate_position_size, get_quote_to_usd_rate
                 tp      = get_tp_levels(entry_val, sl_val, direction, pair)
                 tp1_val = round(tp["tp1"], 3 if "JPY" in pair else 5)
                 tp2_val = round(tp["tp2"], 3 if "JPY" in pair else 5)
@@ -1991,7 +2000,8 @@ def populate_order_form(form_data, default_lot):
                 if not default_lot:
                     account = state.get_key("account", {})
                     balance = account.get("balance") or account.get("cash", 500.0)
-                    lot_val = calculate_position_size(balance, entry_val, sl_val, pair)
+                    q2u     = get_quote_to_usd_rate(pair, connector)
+                    lot_val = calculate_position_size(balance, entry_val, sl_val, pair, q2u)
         except Exception as exc:
             logger.warning("Order form populate failed for %s: %s", pair, exc)
 
@@ -2078,7 +2088,7 @@ def recalc_from_limit_price(limit_price, form_data, default_lot):
             limit_price - sl_dist if direction == "long" else limit_price + sl_dist,
             dec,
         )
-        from risk.risk_manager import get_tp_levels, calculate_position_size
+        from risk.risk_manager import get_tp_levels, calculate_position_size, get_quote_to_usd_rate
         tp = get_tp_levels(limit_price, sl_val, direction, pair)
         tp1_val = round(tp["tp1"], dec)
         tp2_val = round(tp["tp2"], dec)
@@ -2088,7 +2098,8 @@ def recalc_from_limit_price(limit_price, form_data, default_lot):
         if not default_lot:
             account = state.get_key("account", {})
             balance = account.get("balance") or account.get("cash", 500.0)
-            lot_val = calculate_position_size(balance, limit_price, sl_val, pair)
+            q2u     = get_quote_to_usd_rate(pair, connector)
+            lot_val = calculate_position_size(balance, limit_price, sl_val, pair, q2u)
 
         return sl_val, tp1_val, tp2_val, tp3_val, lot_val
     except Exception as exc:
@@ -2288,9 +2299,11 @@ def toggle_close_modal(close_clicks, cancel1, cancel2, confirm, backdrop_n, pair
         except Exception:
             pass
 
+    from risk.risk_manager import get_quote_to_usd_rate
     diff     = (cur_price - entry) if direction == "long" else (entry - cur_price)
     units    = t.get("size", 0) * t.get("remaining", 1.0)
-    floating = round(diff * units, 4)
+    q2u      = get_quote_to_usd_rate(pair_v, connector)
+    floating = round(diff * units * q2u, 4)
     realised = t.get("realised_pnl", 0)
     total_pnl = realised + floating
     pnl_col   = "#00ff88" if total_pnl >= 0 else "#ff3366"
@@ -3437,13 +3450,15 @@ def update_trades_and_account(_):
     # panels agree and both update every 5s — mirrors PaperTrader._calc_
     # unrealized()'s exact formula for consistency with paper mode.
     if mode in ("demo", "live") and trades:
+        from risk.risk_manager import get_quote_to_usd_rate
         unreal_total = 0.0
         for t in trades:
             px     = t.get("last_price", t.get("entry", 0))
             entry  = t.get("entry", 0)
             units  = t.get("size", 0) * t.get("remaining", 1.0)
             diff   = (px - entry) if t.get("direction") == "long" else (entry - px)
-            unreal_total += diff * units
+            q2u    = get_quote_to_usd_rate(t.get("pair", ""), forex_conn)
+            unreal_total += diff * units * q2u
         account = dict(account)
         account["unrealized_pnl"]   = round(unreal_total, 4)
         account["nav"]              = round(account.get("balance", 0) + unreal_total, 2)

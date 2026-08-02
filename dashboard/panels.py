@@ -4,6 +4,7 @@ All functions take plain data (dicts / lists) and return html/dcc components.
 """
 from dash import html, dcc
 import plotly.graph_objects as go
+from risk.risk_manager import get_quote_to_usd_rate as _get_quote_to_usd_rate
 
 # ── Colour constants ──────────────────────────────────────────────────────────
 _BULL  = "#00ff88"
@@ -278,7 +279,8 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
         cur_price = current_prices.get(pair) or t.get("last_price", entry)
         units_rem = t.get("size", 0) * t.get("remaining", 1.0)
         diff = (cur_price - entry) if direction == "long" else (entry - cur_price)
-        floating  = round(diff * units_rem, 4)
+        q2u  = _get_quote_to_usd_rate(pair)
+        floating  = round(diff * units_rem * q2u, 4)
         pnl       = realised + floating
         tp1       = t.get("tp1", entry)
         tp3       = t.get("tp3", entry)
@@ -1165,6 +1167,8 @@ def walk_forward_results(wf: dict) -> html.Div:
         ])),
         html.Tbody(rows),
     ], style={"width": "100%", "borderCollapse": "collapse"})
+
+    return html.Div([summary, chart, table])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
