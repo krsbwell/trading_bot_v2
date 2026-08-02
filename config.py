@@ -207,12 +207,20 @@ WEEKEND_CLOSE_PROFIT_WINDOW_HOURS = 3
 WATCHDOG_STALE_MINUTES = 60
 
 # ── H4 trend gate ────────────────────────────────────────────────────────────
-# Disabled 2026-08-02: H4 hard-block was redundant with the ADX gate (both
-# filter trending markets) and was killing signals that ADX said were fine.
-# Now soft-scored: H4 alignment contributes to the signal score but doesn't
-# hard-block. ADX remains the sole trend-regime hard gate.
-# Per-pair overrides below still work — set True for a specific pair if backtest shows it needs blocking.
-H4_GATE_BLOCKING = False
+# Briefly softened 2026-08-02 as part of the filter-cleanup merge (theory:
+# redundant with the ADX gate, was killing signals ADX said were fine).
+# Reverted same day, alongside the CCI-touch gate revert above — backtesting
+# the merged result showed H4 softening made every single one of the 6
+# active pairs worse (3500 M30 bars each, holding EMA-autofit/adaptive-params
+# at their new post-merge values): USD_CAD PF 1.73->2.07, EUR_AUD PF 1.82->
+# 2.10, GBP_CAD PF 3.51->4.04, CHF_JPY PF 1.19->1.56, EUR_JPY PF 1.51->1.62
+# when hard-blocking was restored (NZD_USD unchanged — it already runs H4
+# loosened via NZD_USD: False below). Total PnL across the roster: $302.37
+# soft-scored -> $368.56 hard-blocked, a clean win with zero exceptions,
+# unlike the CCI-touch gate above which needed a per-pair carve-out. ADX
+# alone is evidently not a sufficient substitute for the H4 gate on this
+# roster — keep both.
+H4_GATE_BLOCKING = True
 
 # Per-pair override of H4_GATE_BLOCKING — a pair not listed here uses the
 # global value above. Same pattern as CONFIRM_TF_PER_PAIR/TP_RR_PER_PAIR.
@@ -229,20 +237,46 @@ H4_GATE_BLOCKING_PER_PAIR: dict = {
 
 # ── CCI-at-touch gate (c4) ───────────────────────────────────────────────────
 # c4 requires CCI to be sufficiently extreme (oversold/overbought) at the exact
-# EMA-touch bar. Currently soft-scored (contributes to the 6-condition ratio
-# but never blocks alone) — this is the single weakest condition across all
-# logged signals (~28% pass rate, the persistent "bottleneck" in the Signal
-# Quality panel). Off by default pending backtest validation (2026-07-24):
-# same convention as H4_GATE_BLOCKING/ML_SCORE_BOOST_ENABLED — a change that
-# alters live trigger rate/frequency shouldn't flip on without a comparison
-# first.
-# Enabled 2026-08-02: c4 had ~28% pass rate — scoring it without blocking was just dragging every signal score down with no quality benefit. Hard-block is cleaner: fewer signals but each one has confirmed CCI extremes at the touch.
-CCI_TOUCH_GATE_BLOCKING = True
+# EMA-touch bar. This is the single weakest condition across all logged
+# signals (~28% pass rate, the persistent "bottleneck" in the Signal Quality
+# panel).
+#
+# Briefly hard-blocked 2026-08-02 as part of the filter-cleanup merge (same
+# day as H4_GATE_BLOCKING softening, EMA auto-fit disable, adaptive-params
+# disable) — reverted same day after backtesting the merged result showed a
+# real regression on 5 of 6 active pairs (3500 M30 bars each, all four
+# changes' combined effect): total PnL across USD_CAD/NZD_USD/EUR_AUD/
+# GBP_CAD/CHF_JPY/EUR_JPY dropped from $345.62 (pre-merge baseline) to
+# $54.50. Bisecting by reverting just this one flag (holding the other
+# three at their new post-merge values) recovered to $284.13 — GBP_CAD
+# PF 4.40->1.52->3.51, EUR_JPY PF 1.61->0.66->1.51, USD_CAD PF 2.07->0.94->
+# 1.74, NZD_USD PF 1.54->2.09->1.54 (exact match to baseline). Root cause:
+# hard-blocking a condition with only a ~28% pass rate discards roughly 3
+# of every 4 signals outright — that outweighs the extra volume the other
+# three changes' loosening was supposed to add, the opposite of
+# filter-cleanup's stated goal (trade counts fell on every single pair,
+# not just PF).
+#
+# CHF_JPY is the one exception found — it does WORSE with this gate soft
+# (PF 1.18->0.95), i.e. it specifically benefits from the hard block. Kept
+# via CCI_TOUCH_GATE_BLOCKING_PER_PAIR below rather than forcing one global
+# answer on a pair where the data disagrees with it.
+CCI_TOUCH_GATE_BLOCKING = False
+
+# Per-pair override — same pattern as H4_GATE_BLOCKING_PER_PAIR above.
+CCI_TOUCH_GATE_BLOCKING_PER_PAIR: dict = {
+    "CHF_JPY": True,
+}
 
 
 def h4_gate_blocking_for(pair: str) -> bool:
     """Resolve H4_GATE_BLOCKING for a pair — H4_GATE_BLOCKING_PER_PAIR wins if set."""
     return H4_GATE_BLOCKING_PER_PAIR.get(pair, H4_GATE_BLOCKING)
+
+
+def cci_touch_gate_blocking_for(pair: str) -> bool:
+    """Resolve CCI_TOUCH_GATE_BLOCKING for a pair — CCI_TOUCH_GATE_BLOCKING_PER_PAIR wins if set."""
+    return CCI_TOUCH_GATE_BLOCKING_PER_PAIR.get(pair, CCI_TOUCH_GATE_BLOCKING)
 
 # ── Minimum SL distance ───────────────────────────────────────────────────────
 MIN_SL_PIPS = 25    # Minimum SL distance in pips — 25 validated by backtest (20 caught H1 noise)
