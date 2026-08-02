@@ -140,7 +140,12 @@ SESSION_END_UTC   = 17  # 17:00 UTC — NY close
 WATCHDOG_STALE_MINUTES = 60
 
 # ── H4 trend gate ────────────────────────────────────────────────────────────
-H4_GATE_BLOCKING = True   # Hard-block counter-trend signals (True) vs diagnostic-only (False)
+# Disabled 2026-08-02: H4 hard-block was redundant with the ADX gate (both
+# filter trending markets) and was killing signals that ADX said were fine.
+# Now soft-scored: H4 alignment contributes to the signal score but doesn't
+# hard-block. ADX remains the sole trend-regime hard gate.
+# Per-pair overrides below still work — set True for a specific pair if backtest shows it needs blocking.
+H4_GATE_BLOCKING = False
 
 # Per-pair override of H4_GATE_BLOCKING — a pair not listed here uses the
 # global value above. Same pattern as CONFIRM_TF_PER_PAIR/TP_RR_PER_PAIR.
@@ -164,7 +169,8 @@ H4_GATE_BLOCKING_PER_PAIR: dict = {
 # same convention as H4_GATE_BLOCKING/ML_SCORE_BOOST_ENABLED — a change that
 # alters live trigger rate/frequency shouldn't flip on without a comparison
 # first.
-CCI_TOUCH_GATE_BLOCKING = False
+# Enabled 2026-08-02: c4 had ~28% pass rate — scoring it without blocking was just dragging every signal score down with no quality benefit. Hard-block is cleaner: fewer signals but each one has confirmed CCI extremes at the touch.
+CCI_TOUCH_GATE_BLOCKING = True
 
 
 def h4_gate_blocking_for(pair: str) -> bool:
@@ -198,6 +204,14 @@ FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")   # Leave blank to disable
 EMA_TEST_PERIODS          = [20, 34, 50, 60, 75, 100, 110, 125, 150, 200, 250]
 EMA_REFIT_EVERY_N_CANDLES = 100  # was 50 on H1; 100 M30 bars ≈ same 50-hour wall-clock refit cadence
 
+# ── EMA auto-fit toggle ──────────────────────────────────────────────────────
+# Disabled 2026-08-02: auto-fit was curve-fitting to the last 200 bars and
+# re-selecting EMAs every ~2 days, causing constant behavior drift. Fixed
+# periods are stable and testable. Re-enable only if out-of-sample backtest
+# proves auto-fit beats fixed periods (not just in-sample).
+EMA_AUTOFIT_ENABLED = False
+EMA_FIXED_PERIODS   = (34, 100, 200)   # short, mid, long — classic widely-used periods
+
 # ── Walk-Forward Optimization ────────────────────────────────────────────────
 # Weekly grid-search over CCI period, MACD settings, and min_score using the
 # last WFO_TRAIN_BARS of live candle data. Runs in a background thread.
@@ -208,7 +222,7 @@ WFO_REFIT_DAYS = 7      # Days between re-fits per pair
 # ── Adaptive parameter tuning ─────────────────────────────────────────────────
 # Adjusts CCI threshold, EMA touch band, and MACD bar count per pair based on
 # recent win rate. See engine/adaptive_params.py for tier definitions.
-ADAPTIVE_PARAMS_ENABLED  = True   # Set False to lock all pairs at base thresholds
+ADAPTIVE_PARAMS_ENABLED  = False  # Disabled 2026-08-02: was fighting WFO for the same params. WFO is the sole optimizer now.
 ADAPTIVE_LOOKBACK_TRADES = 20     # How many recent closed trades to measure win rate from
 ADAPTIVE_REFIT_EVERY_N   = 5      # Minimum new trades before recalculating thresholds
 
