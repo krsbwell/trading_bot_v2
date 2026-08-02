@@ -61,11 +61,13 @@ class TradeManager:
 
         loaded = self._load_state()
         if loaded:
-            self.open_trades:   dict[str, dict] = loaded["open_trades"]
-            self.closed_trades: list[dict]      = loaded["closed_trades"]
+            self.open_trades:    dict[str, dict] = loaded["open_trades"]
+            self.closed_trades:  list[dict]      = loaded["closed_trades"]
+            self.pending_orders: dict[str, dict] = loaded["pending_orders"]
             logger.info(
-                "TradeManager(%s) restored — open=%d  closed=%d",
+                "TradeManager(%s) restored — open=%d  closed=%d  pending=%d",
                 market, len(self.open_trades), len(self.closed_trades),
+                len(self.pending_orders),
             )
         else:
             self.open_trades:   dict[str, dict] = {}   # trade_id → trade_dict
@@ -73,6 +75,7 @@ class TradeManager:
             # closes the same way they see paper closes. Capped at 500 to
             # match PaperTrader's convention.
             self.closed_trades: list[dict] = []
+            self.pending_orders: dict[str, dict] = {}   # order_id → order_dict
 
     # ── Persistence ───────────────────────────────────────────────────────────
     # Same tiered-write strategy as PaperTrader._save_state (kept as an
@@ -88,9 +91,10 @@ class TradeManager:
         try:
             self._save_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
-                "open_trades":   {tid: _ser(t) for tid, t in self.open_trades.items()},
-                "closed_trades": [_ser(t) for t in self.closed_trades[-500:]],
-                "saved_at":      datetime.now(timezone.utc).isoformat(),
+                "open_trades":    {tid: _ser(t) for tid, t in self.open_trades.items()},
+                "closed_trades":  [_ser(t) for t in self.closed_trades[-500:]],
+                "pending_orders": {oid: _ser(o) for oid, o in self.pending_orders.items()},
+                "saved_at":       datetime.now(timezone.utc).isoformat(),
             }
             json_str = json.dumps(payload, indent=2)
             tmp = Path(str(self._save_path) + ".tmp")
@@ -130,12 +134,16 @@ class TradeManager:
             with open(self._save_path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             logger.info(
-                "TradeManager._load_state: reading %s — open=%d  closed=%d",
+                "TradeManager._load_state: reading %s — open=%d  closed=%d  pending=%d",
                 self._save_path, len(raw.get("open_trades", {})), len(raw.get("closed_trades", [])),
+                len(raw.get("pending_orders", {})),
             )
             return {
-                "open_trades":   {tid: _deser(t) for tid, t in raw.get("open_trades", {}).items()},
-                "closed_trades": [_deser(t) for t in raw.get("closed_trades", [])],
+                "open_trades":    {tid: _deser(t) for tid, t in raw.get("open_trades", {}).items()},
+                "closed_trades":  [_deser(t) for t in raw.get("closed_trades", [])],
+                # .get(..., {}) — backward-compatible with state files saved
+                # before pending-order support existed.
+                "pending_orders": {oid: _deser(o) for oid, o in raw.get("pending_orders", {}).items()},
             }
         except Exception as exc:
             logger.warning("TradeManager._load_state FAILED: %s", exc, exc_info=True)
@@ -398,8 +406,18 @@ class TradeManager:
 
     # ── Manual close ──────────────────────────────────────────────────────────
 
-    def close_trade(self, trade_id: str, reason: str = "manual") -> None:
-        """Force-close the entire remaining position."""
+    def close_trade(self, trade_id: str, price: float, reason: str = "manual") -> None:
+        """
+        Force-close the entire remaining position at `price` (the current
+        market quote — the broker fills at whatever the actual market price
+        is, this is just what we record for P&L/logging).
+
+        Mirrors the SL/TP3 path in _eval_candle(): computes realised P&L for
+        the remaining fraction, appends to closed_trades, and feeds ML
+        training data via _finalize_close() — previously this just closed
+        the broker position and deleted local state with no P&L, no
+        closed_trades entry, and no ML logging, unlike every other exit path.
+        """
         t = self.open_trades.get(trade_id)
         if not t:
             logger.warning("close_trade: trade_id %s not found", trade_id)
@@ -409,9 +427,361 @@ class TradeManager:
         except Exception as exc:
             logger.error("Manual close failed for %s: %s", trade_id, exc)
             raise
+        pnl = self._pnl(t["entry"], price, t["direction"], t["size"] * t["remaining"])
+        t["realised_pnl"] = t.get("realised_pnl", 0.0) + pnl
+        t["remaining"] = 0.0
         del self.open_trades[trade_id]
+        self._finalize_close(t, price, reason)
         self._save_state()
-        logger.info("LIVE CLOSED  %s  reason=%s", trade_id, reason)
+
+    # ── Manual edit ───────────────────────────────────────────────────────────
+    # Mirrors PaperTrader.modify_trade()/move_to_breakeven() so the dashboard's
+    # EDIT modal works the same way for real trades. SL is a real broker-side
+    # order here (unlike paper), so it's pushed via the same set_sl_tp() the
+    # breakeven/ATR-trailing paths already use — TP1/2/3 have no broker order
+    # at all (see open_trade()'s comment: "managed internally"), so those are
+    # plain local updates, same as paper.
+
+    def modify_trade(self, trade_id: str, sl: float = None,
+                     tp1: float = None, tp2: float = None,
+                     tp3: float = None) -> bool:
+        """Update SL and/or TP levels on an open trade. Pass None to leave unchanged."""
+        t = self.open_trades.get(trade_id)
+        if not t:
+            return False
+        if sl is not None:
+            try:
+                self.connector.set_sl_tp(trade_id, sl_price=sl, tp_price=None)
+            except Exception as exc:
+                logger.error("Could not update broker SL for %s: %s", trade_id, exc)
+                return False
+            t["sl"] = sl
+        if tp1 is not None: t["tp1"] = tp1
+        if tp2 is not None: t["tp2"] = tp2
+        if tp3 is not None: t["tp3"] = tp3
+        self._save_state()
+        logger.info(
+            "LIVE TRADE MODIFIED  id=%s  SL=%s  TP1=%s  TP2=%s  TP3=%s",
+            trade_id,
+            f"{sl:.5f}"  if sl  else "—",
+            f"{tp1:.5f}" if tp1 else "—",
+            f"{tp2:.5f}" if tp2 else "—",
+            f"{tp3:.5f}" if tp3 else "—",
+        )
+        return True
+
+    def move_to_breakeven(self, trade_id: str) -> bool:
+        """Move SL to the trade's entry price (break-even) — pushed to the broker."""
+        t = self.open_trades.get(trade_id)
+        if not t:
+            return False
+        try:
+            self.connector.set_sl_tp(trade_id, sl_price=t["entry"], tp_price=None)
+        except Exception as exc:
+            logger.error("Could not set breakeven SL for %s: %s", trade_id, exc)
+            return False
+        t["sl"]            = t["entry"]
+        t["breakeven_set"] = True
+        self._save_state()
+        logger.info("LIVE BREAKEVEN SET  id=%s  entry=%.5f", trade_id, t["entry"])
+        return True
+
+    # ── Pending (limit) orders ──────────────────────────────────────────────────
+    # A real limit order fills on OANDA's server automatically, the instant
+    # price reaches it — unlike PaperTrader, which only "fills" a pending
+    # order when our own candle-check notices. So there's no equivalent of
+    # PaperTrader._check_limit_fills() here; instead reconcile_pending_orders()
+    # periodically asks the broker what actually happened.
+
+    def open_limit_order(self, signal: dict, limit_price: float) -> str | None:
+        """
+        Place a real limit order. Same validation/sizing as open_trade()
+        (1%-risk position sizing, pre-trade gate checks) but stores the
+        result in pending_orders (keyed by OANDA's orderID) instead of
+        open_trades — reconcile_pending_orders() promotes it once filled.
+        """
+        pair       = signal["pair"]
+        direction  = signal["direction"]
+        stop_loss  = signal["stop_loss"]
+        tp_levels  = signal["tp_levels"]
+        score      = signal["score"]
+
+        # Duplicate-pair check covers pending orders too, not just open
+        # trades — open_trade()'s own check only looks at open_trades
+        # since it has no pending concept, but a limit order sitting
+        # unfilled is just as much "already committed to this pair".
+        busy_pairs = [t["pair"] for t in self.open_trades.values()] + \
+                     [o["pair"] for o in self.pending_orders.values()]
+        ok, reason = validate_pre_trade(score, len(self.open_trades), pair, busy_pairs)
+        if not ok:
+            logger.warning("Limit order rejected for %s: %s", pair, reason)
+            return None
+
+        account = self._get_account()
+        balance = account.get("balance") or account.get("cash", 0)
+        size    = calculate_position_size(balance, limit_price, stop_loss, pair)
+        if size <= 0:
+            logger.error("Calculated size <= 0 for %s — skipping limit order", pair)
+            return None
+
+        try:
+            order_id = self.connector.place_limit_order(
+                instrument=pair,
+                units=size if direction == "long" else -size,
+                limit_price=limit_price,
+                sl_price=stop_loss,
+                tp_prices=[],          # managed by trade manager, same as open_trade()
+            )
+        except Exception as exc:
+            logger.error("Limit order placement failed for %s: %s", pair, exc)
+            return None
+
+        self.pending_orders[order_id] = {
+            "id":           order_id,
+            "pair":         pair,
+            "direction":    direction,
+            "limit_price":  limit_price,
+            "sl":           stop_loss,
+            "tp1":          tp_levels["tp1"],
+            "tp2":          tp_levels["tp2"],
+            "tp3":          tp_levels["tp3"],
+            "size":         size,
+            "score":        score,
+            "created_time": datetime.now(timezone.utc),
+        }
+        self._save_state()
+        logger.info(
+            "LIVE LIMIT ORDER QUEUED  %s %s  limit=%.5f  sl=%.5f  size=%s  id=%s",
+            direction.upper(), pair, limit_price, stop_loss, size, order_id,
+        )
+        return order_id
+
+    def modify_pending_order(self, order_id: str, limit_price: float = None,
+                             sl: float = None, tp1: float = None,
+                             tp2: float = None, tp3: float = None) -> str | None:
+        """
+        Update limit price/SL/TP on a pending order. Pass None to leave a
+        field unchanged.
+
+        Unlike PaperTrader.modify_pending_order() (which just mutates the
+        dict in place and returns bool), a real OANDA limit order can't be
+        edited in place — this cancels the existing broker order and places
+        a new one with the merged parameters, which gets a NEW orderID.
+        Returns the new order_id on success (callers must update whatever
+        they were tracking the old id under), None on failure/not-found.
+        """
+        order = self.pending_orders.get(order_id)
+        if not order:
+            logger.warning("modify_pending_order: order_id %s not found", order_id)
+            return None
+
+        new_limit = limit_price if limit_price is not None else order["limit_price"]
+        new_sl    = sl          if sl          is not None else order["sl"]
+        new_tp1   = tp1         if tp1         is not None else order["tp1"]
+        new_tp2   = tp2         if tp2         is not None else order["tp2"]
+        new_tp3   = tp3         if tp3         is not None else order["tp3"]
+
+        try:
+            self.connector.cancel_order(order_id)
+        except Exception as exc:
+            logger.error("modify_pending_order: cancel failed for %s: %s", order_id, exc)
+            return None
+
+        size  = order["size"]
+        units = int(round(size)) if order["direction"] == "long" else -int(round(size))
+        try:
+            new_order_id = self.connector.place_limit_order(
+                instrument=order["pair"],
+                units=units,
+                limit_price=new_limit,
+                sl_price=new_sl,
+                tp_prices=[new_tp1],
+            )
+        except Exception as exc:
+            logger.error("modify_pending_order: replace failed for %s: %s", order_id, exc)
+            # The original order is already cancelled broker-side — drop the
+            # stale local record rather than leave it pointing at nothing.
+            del self.pending_orders[order_id]
+            self._save_state()
+            return None
+
+        del self.pending_orders[order_id]
+        self.pending_orders[new_order_id] = {
+            "id":           new_order_id,
+            "pair":         order["pair"],
+            "direction":    order["direction"],
+            "limit_price":  new_limit,
+            "sl":           new_sl,
+            "tp1":          new_tp1,
+            "tp2":          new_tp2,
+            "tp3":          new_tp3,
+            "size":         size,
+            "score":        order.get("score", 0),
+            "created_time": datetime.now(timezone.utc),
+        }
+        self._save_state()
+        logger.info(
+            "LIVE LIMIT ORDER MODIFIED  %s %s  limit=%.5f  SL=%.5f  (old id=%s -> new id=%s)",
+            order["direction"].upper(), order["pair"], new_limit, new_sl, order_id, new_order_id,
+        )
+        return new_order_id
+
+    def cancel_limit_order(self, order_id: str) -> bool:
+        if order_id not in self.pending_orders:
+            logger.warning("cancel_limit_order: order_id %s not found", order_id)
+            return False
+        try:
+            self.connector.cancel_order(order_id)
+        except Exception as exc:
+            logger.error("Cancel limit order failed for %s: %s", order_id, exc)
+            return False
+        del self.pending_orders[order_id]
+        self._save_state()
+        logger.info("LIVE LIMIT ORDER CANCELLED  id=%s", order_id)
+        return True
+
+    def reconcile_pending_orders(self) -> None:
+        """
+        Poll the broker for which local pending orders are still actually
+        pending. Any local pending order no longer listed broker-side has
+        either filled (check open trades to confirm and promote it) or
+        expired/been cancelled broker-side (drop it either way — nothing
+        to promote). Call every tick, same cadence as SL/TP checks — a
+        fill sitting undetected between polls is exactly this morning's
+        CHF_JPY failure mode, applied to a new code path.
+        """
+        if not self.pending_orders:
+            return
+        try:
+            broker_pending = {o["id"] for o in self.connector.get_pending_orders()}
+        except Exception as exc:
+            logger.error("reconcile_pending_orders: could not fetch broker state: %s", exc)
+            return
+
+        resolved = [oid for oid in self.pending_orders if oid not in broker_pending]
+        if not resolved:
+            return
+
+        try:
+            broker_trades = {t["id"]: t for t in self.connector.get_open_trades()}
+        except Exception as exc:
+            logger.error("reconcile_pending_orders: could not fetch open trades: %s", exc)
+            return
+
+        for order_id in resolved:
+            order = self.pending_orders.pop(order_id)
+            # A filled limit order becomes a broker trade with its OWN id —
+            # not guaranteed to equal the order's id — so match by
+            # instrument + direction among trades we don't already track.
+            matched = next(
+                (tid for tid, bt in broker_trades.items()
+                 if bt["instrument"] == order["pair"]
+                 and tid not in self.open_trades
+                 and ((bt["units"] > 0) == (order["direction"] == "long"))),
+                None,
+            )
+            if matched:
+                bt = broker_trades[matched]
+                self.open_trades[matched] = {
+                    "id":            matched,
+                    "pair":          order["pair"],
+                    "market":        self.market,
+                    "direction":     order["direction"],
+                    "entry":         bt["price"],
+                    "sl":            order["sl"],
+                    "tp1":           order["tp1"],
+                    "tp2":           order["tp2"],
+                    "tp3":           order["tp3"],
+                    "size":          order["size"],
+                    "remaining":     1.0,
+                    "tp1_hit":       False,
+                    "tp2_hit":       False,
+                    "tp3_hit":       False,
+                    "breakeven_set": False,
+                    "risk_dollar":   0.0,
+                    "score":         order.get("score", 0),
+                    "open_time":     datetime.now(timezone.utc),
+                    "realised_pnl":  0.0,
+                }
+                logger.info(
+                    "LIVE LIMIT ORDER FILLED  %s %s  entry=%.5f  id=%s (was order %s)",
+                    order["direction"].upper(), order["pair"], bt["price"], matched, order_id,
+                )
+            else:
+                logger.info(
+                    "LIVE LIMIT ORDER EXPIRED/CANCELLED  %s %s  limit=%.5f  id=%s",
+                    order["direction"].upper(), order["pair"], order["limit_price"], order_id,
+                )
+        self._save_state()
+
+    def reconcile_open_trades(self) -> None:
+        """
+        Detect local open trades whose broker-side position is already
+        gone. Our own SL/TP check (_eval_candle, via on_candle_close) uses
+        mid-price M30 candle data — but OANDA's attached SL/TP orders
+        trigger off bid/ask, so a close within a pip or two of the
+        recorded level can execute broker-side without our own candle
+        data ever showing the level breached at all. Confirmed live
+        2026-07-31: NZD_USD's real SL filled at 0.58792 (ask-side) while
+        the same-window M30 candle's high only reached 0.58788 — meaning
+        _eval_candle() could NEVER have caught this independently, no
+        matter how often it runs. This is the only reliable way to catch
+        that class of gap: ask the broker directly what it still has.
+
+        Pulls the trade's real close details from OANDA and finalizes it
+        properly (same closed_trades/ML-logging path as every other exit)
+        instead of leaving a phantom open position that the dashboard
+        keeps showing and Close keeps failing to act on.
+        """
+        if not self.open_trades:
+            return
+        try:
+            broker_ids = {t["id"] for t in self.connector.get_open_trades()}
+        except Exception as exc:
+            logger.error("reconcile_open_trades: could not fetch broker state: %s", exc)
+            return
+
+        missing = [tid for tid in self.open_trades if tid not in broker_ids]
+        for trade_id in missing:
+            t = self.open_trades.pop(trade_id)
+            try:
+                detail = self.connector.get_trade_details(trade_id)
+            except Exception as exc:
+                logger.error(
+                    "reconcile_open_trades: could not fetch details for %s: %s",
+                    trade_id, exc,
+                )
+                # Still gone broker-side either way — finalize with our
+                # best estimate rather than leave a permanent phantom.
+                exit_price = t.get("last_price", t["entry"])
+                pnl = self._pnl(t["entry"], exit_price, t["direction"],
+                                t["size"] * t["remaining"])
+                t["realised_pnl"] = t.get("realised_pnl", 0.0) + pnl
+                t["remaining"] = 0.0
+                self._finalize_close(t, exit_price, "unknown_broker_close")
+                continue
+
+            exit_price = detail["avg_close_price"] or t.get("last_price", t["entry"])
+            realized    = detail["realized_pl"]
+            if realized:
+                # OANDA's own realizedPL is the ground truth when available
+                # — includes spread/slippage our own _pnl() estimate can't.
+                t["realised_pnl"] = realized
+            else:
+                pnl = self._pnl(t["entry"], exit_price, t["direction"],
+                                t["size"] * t["remaining"])
+                t["realised_pnl"] = t.get("realised_pnl", 0.0) + pnl
+            t["remaining"] = 0.0
+            reason = detail["close_reason"]
+            logger.info(
+                "LIVE RECONCILED CLOSE  %s %s  reason=%s  exit=%.5f  pnl=%+.2f  id=%s "
+                "(detected via broker poll, not our own candle check)",
+                t["direction"].upper(), t["pair"], reason, exit_price,
+                t["realised_pnl"], trade_id,
+            )
+            self._finalize_close(t, exit_price, reason)
+        if missing:
+            self._save_state()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

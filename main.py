@@ -11,6 +11,7 @@ Live mode:              set MODE = "live" in config.py — real orders on
 Dashboard opens at:     http://localhost:8050
 """
 import logging
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -55,6 +56,33 @@ _LOG_DIR.mkdir(parents=True, exist_ok=True)
 _log_formatter = logging.Formatter(
     "%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%H:%M:%S",
 )
+
+
+def _safe_log_text(text: str) -> str:
+    """Replace unsupported characters so Windows console logging does not crash."""
+    return text.encode("ascii", errors="replace").decode("ascii")
+
+
+class _SafeStream:
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, message: str) -> int:
+        try:
+            return self._stream.write(message)
+        except UnicodeEncodeError:
+            return self._stream.write(_safe_log_text(message))
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def isatty(self) -> bool:
+        return getattr(self._stream, "isatty", lambda: False)()
+
+    def fileno(self):
+        return getattr(self._stream, "fileno", lambda: None)()
+
+
 _log_file_handler = RotatingFileHandler(
     # backupCount raised 3 -> 20 (2026-07-20): confirmed today that 3 backups
     # (20MB total) isn't enough headroom — the 2026-07-19 scheduler-freeze
@@ -63,14 +91,21 @@ _log_file_handler = RotatingFileHandler(
     # normal volume plus a handful of restarts. 20 backups (~100MB) gives a
     # much longer window for a future freeze's heartbeat/lock-timing logs to
     # actually survive until someone looks at them.
-    _LOG_DIR / "main.log", maxBytes=5 * 1024 * 1024, backupCount=20,
+    _LOG_DIR / "main.log", maxBytes=5 * 1024 * 1024, backupCount=20, encoding="utf-8",
 )
 _log_file_handler.setFormatter(_log_formatter)
-_log_console_handler = logging.StreamHandler()
+_log_console_handler = logging.StreamHandler(stream=_SafeStream(sys.stderr))
 _log_console_handler.setFormatter(_log_formatter)
 
 logging.basicConfig(level=logging.INFO, handlers=[_log_console_handler, _log_file_handler])
 logger = logging.getLogger(__name__)
+
+# Dash's dev server logs every single HTTP request at INFO via the "werkzeug"
+# logger — with 4 dcc.Interval polls/callbacks running (down to 1s), that's
+# 20+ lines/sec of pure "200 OK" noise into both the console and main.log,
+# drowning out the trading/scheduler messages this handler exists to capture.
+# WARNING+ still surfaces real dev-server errors (e.g. a bind failure).
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 
 # ── Globals initialised in main() ─────────────────────────────────────────────
@@ -79,7 +114,7 @@ _paper_trader      = None
 _forex_engine      = None
 _pattern_learner   = PatternLearner()
 _trade_manager_fx  = None
-_last_candle_hour  = None   # UTC hour of last on_candle_close() run (prevents restart duplicates)
+_last_candle_slot  = None   # UTC :00/:30 slot of last on_candle_close() run (prevents restart duplicates)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -106,7 +141,7 @@ def _write_heartbeat() -> None:
 
 def on_candle_close() -> None:
     """
-    Main scheduled job. Runs every hour (on the hour).
+    Main scheduled job. Runs every 30 minutes, on :00 and :30 UTC.
     1. Update account state in dashboard
     2. Tick open paper trades (SL/TP check)
     3. Run signal engine for every pair
@@ -115,20 +150,28 @@ def on_candle_close() -> None:
     6. Refresh suggestion cards if due
     7. Midnight UTC: reset daily drawdown counter
     """
-    global _last_candle_hour
+    global _last_candle_slot
     now_close = datetime.now(timezone.utc)
-    current_hour = now_close.replace(minute=0, second=0, microsecond=0)
+    # Truncate to the same :00/:30 grid this job is scheduled on (CronTrigger
+    # minute="0,30") — truncating to the hour instead (as this used to do)
+    # made the :30 firing indistinguishable from the :00 one that already ran
+    # that hour, so the restart-duplicate guard below silently skipped every
+    # single :30 close, permanently halving this job's real frequency. Caught
+    # 2026-07-31 via a live CHF_JPY trade whose SL fired but went unnoticed
+    # for 3 hours instead of ~30 minutes because of this.
+    current_slot = now_close.replace(minute=(now_close.minute // 30) * 30,
+                                      second=0, microsecond=0)
     _write_heartbeat()   # scheduler fired — record this before any early return below
 
-    # Guard against restart duplicates: if this hour was already fully processed
-    # (e.g. bot restarted mid-hour), skip to avoid duplicate audit entries + double alerts.
-    if _last_candle_hour is not None and current_hour <= _last_candle_hour:
+    # Guard against restart duplicates: if this slot was already fully processed
+    # (e.g. bot restarted mid-slot), skip to avoid duplicate audit entries + double alerts.
+    if _last_candle_slot is not None and current_slot <= _last_candle_slot:
         logger.info(
-            "Candle close %s skipped — hour already processed (last=%s)",
-            current_hour.strftime("%H:%M UTC"), _last_candle_hour.strftime("%H:%M UTC"),
+            "Candle close %s skipped — slot already processed (last=%s)",
+            current_slot.strftime("%H:%M UTC"), _last_candle_slot.strftime("%H:%M UTC"),
         )
         return
-    _last_candle_hour = current_hour
+    _last_candle_slot = current_slot
 
     logger.info("── Candle close %s ──────────────────────────────────────────",
                 now_close.strftime("%Y-%m-%d %H:%M UTC"))
@@ -656,7 +699,7 @@ def _weekend_close_check() -> None:
                 if not hard_deadline and not profitable:
                     continue
                 reason = "weekend_close" if hard_deadline and not profitable else "weekend_close_profit"
-                _trade_manager_fx.close_trade(t["id"], reason=reason)
+                _trade_manager_fx.close_trade(t["id"], price or t["entry"], reason=reason)
                 logger.info("WEEKEND CLOSE (%s): %s trade %s closed ahead of the weekend",
                             "in-profit" if profitable else "deadline", pair, t["id"])
                 _sync_live_state()
@@ -725,6 +768,19 @@ def _tick_live_trades() -> None:
     for manager in (_trade_manager_fx,):
         if manager is None:
             continue
+        try:
+            manager.reconcile_pending_orders()
+        except Exception as exc:
+            logger.error("reconcile_pending_orders failed: %s", exc)
+        try:
+            manager.reconcile_open_trades()
+        except Exception as exc:
+            logger.error("reconcile_open_trades failed: %s", exc)
+        # Sync unconditionally here — an order that just expired/cancelled
+        # (no fill), or a trade closed via reconciliation rather than our
+        # own candle check, wouldn't otherwise clear from the dashboard
+        # until the next open trade happened to loop through below.
+        _sync_live_state()
         for pair in manager.open_pairs():
             connector = _oanda_connector
             if connector is None:
@@ -772,16 +828,18 @@ def _tick_live_trades() -> None:
 
 
 def _sync_live_state() -> None:
-    """Push TradeManager's open/closed trades into dashboard state — mirrors
+    """Push TradeManager's open/closed/pending into dashboard state — mirrors
     _sync_paper_state(). Without this, live trades wouldn't appear on the
     dashboard even though they're real broker positions."""
-    open_trades, closed_trades = [], []
+    open_trades, closed_trades, pending_orders = [], [], []
     for manager in (_trade_manager_fx,):
         if manager is None:
             continue
         open_trades.extend(manager.open_trades.values())
         closed_trades.extend(manager.closed_trades)
-    state.update(open_trades=open_trades, closed_trades=closed_trades)
+        pending_orders.extend(manager.pending_orders.values())
+    state.update(open_trades=open_trades, closed_trades=closed_trades,
+                 pending_orders=pending_orders)
 
 
 def _backfill_equity_curve() -> None:
@@ -1021,6 +1079,11 @@ def main() -> None:
     else:
         if _oanda_connector:
             _trade_manager_fx = TradeManager(_oanda_connector, "forex")
+            state.update(trade_manager_fx=_trade_manager_fx)   # expose to dashboard close/edit
+            _sync_live_state()   # push loaded trades into state["open_trades"] immediately
+            _refresh_account()   # push current balance + append latest equity point
+            logger.info("TradeManager(forex): open_trades=%d  closed=%d",
+                        len(_trade_manager_fx.open_trades), len(_trade_manager_fx.closed_trades))
 
     # ── Signal engines ────────────────────────────────────────────────────────
     _forex_engine = _init_engines(_oanda_connector)

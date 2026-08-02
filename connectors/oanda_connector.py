@@ -290,6 +290,41 @@ class OandaConnector:
             })
         return result
 
+    def get_trade_details(self, trade_id: str) -> dict:
+        """
+        Return the full lifecycle of one trade (open or closed) as a dict:
+            state, open_time, close_time, avg_close_price, realized_pl,
+            close_reason ("sl" | "tp" | "unknown")
+
+        Used for reconciliation when a local open trade no longer appears
+        in get_open_trades() — this fetches what actually happened to it
+        (a real SL/TP fill fires off bid/ask on the broker's side, which
+        can close a position before our own mid-price candle data ever
+        shows the level being crossed).
+        """
+        req = trades.TradeDetails(accountID=self.account_id, tradeID=str(trade_id))
+        try:
+            resp = self.client.request(req)
+        except V20Error as exc:
+            logger.error("get_trade_details failed — trade_id=%s: %s", trade_id, exc)
+            raise
+
+        t = resp.get("trade", {})
+        close_reason = "unknown"
+        if t.get("stopLossOrder", {}).get("state") == "FILLED":
+            close_reason = "sl"
+        elif t.get("takeProfitOrder", {}).get("state") == "FILLED":
+            close_reason = "tp"
+
+        return {
+            "state":            t.get("state", ""),
+            "open_time":        t.get("openTime"),
+            "close_time":       t.get("closeTime"),
+            "avg_close_price":  float(t["averageClosePrice"]) if t.get("averageClosePrice") else None,
+            "realized_pl":      float(t.get("realizedPL", 0) or 0),
+            "close_reason":     close_reason,
+        }
+
     # ── Orders ────────────────────────────────────────────────────────────────
 
     def place_market_order(
@@ -368,6 +403,134 @@ class OandaConnector:
             trade_id,
         )
         return str(trade_id)
+
+    def place_limit_order(
+        self,
+        instrument: str,
+        units: int,
+        limit_price: float,
+        sl_price: float,
+        tp_prices: list,
+        expiry_minutes: int = None,
+    ) -> str:
+        """
+        Place a limit order with a stop-loss and TP1 attached (mirrors
+        place_market_order — same SL/TP1-only convention, tp2/tp3 managed
+        by trade_manager on subsequent candles once filled).
+
+        units          : positive = long, negative = short
+        limit_price    : order triggers when market reaches this price
+        expiry_minutes : GTD (good-till-date) window — OANDA cancels the
+                         order itself if unfilled by then, so expiry is
+                         enforced broker-side rather than depending on our
+                         own process being alive to notice and cancel it.
+                         Defaults to config.LIMIT_ORDER_EXPIRY_CANDLES ×
+                         the primary timeframe's minutes.
+
+        Returns the OANDA orderID (NOT a tradeID — the order hasn't filled
+        yet; use get_pending_orders()/get_open_trades() to detect when it
+        does).
+        Raises V20Error on API failure or ValueError if the order was rejected.
+        """
+        if expiry_minutes is None:
+            candles = getattr(config, "LIMIT_ORDER_EXPIRY_CANDLES", 8)
+            expiry_minutes = candles * 30   # primary timeframe is M30
+
+        from datetime import datetime, timezone, timedelta
+        gtd_time = (datetime.now(timezone.utc) + timedelta(minutes=expiry_minutes)) \
+            .strftime("%Y-%m-%dT%H:%M:%S.000000000Z")
+
+        order_body: dict = {
+            "order": {
+                "type": "LIMIT",
+                "instrument": instrument,
+                "units": str(units),
+                "price": self._fmt(instrument, limit_price),
+                "timeInForce": "GTD",
+                "gtdTime": gtd_time,
+                "stopLossOnFill": {
+                    "price": self._fmt(instrument, sl_price),
+                    "timeInForce": "GTC",
+                },
+                "positionFill": "DEFAULT",
+            }
+        }
+        if tp_prices:
+            order_body["order"]["takeProfitOnFill"] = {
+                "price": self._fmt(instrument, tp_prices[0]),
+                "timeInForce": "GTC",
+            }
+
+        req = orders.OrderCreate(accountID=self.account_id, data=order_body)
+
+        try:
+            resp = self.client.request(req)
+        except V20Error as exc:
+            logger.error(
+                "place_limit_order failed — %s units=%s limit=%.5f: %s",
+                instrument, units, limit_price, exc,
+            )
+            raise
+
+        if "orderRejectTransaction" in resp:
+            reason = resp["orderRejectTransaction"].get("rejectReason", "unknown")
+            logger.error("Limit order rejected for %s: %s", instrument, reason)
+            raise ValueError(f"Oanda rejected limit order for {instrument}: {reason}")
+
+        create_txn = resp.get("orderCreateTransaction", {})
+        order_id   = create_txn.get("id")
+        if not order_id:
+            ids = resp.get("relatedTransactionIDs", [])
+            order_id = ids[-1] if ids else "unknown"
+            logger.warning(
+                "orderCreateTransaction not in response; guessing order_id=%s", order_id
+            )
+
+        direction = "BUY" if units > 0 else "SELL"
+        logger.info(
+            "%s LIMIT %s  units=%s  limit=%.5f  SL=%.5f  TP1=%s  expires=%s  → order_id=%s",
+            direction, instrument, units, limit_price, sl_price,
+            f"{tp_prices[0]:.5f}" if tp_prices else "none",
+            gtd_time, order_id,
+        )
+        return str(order_id)
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel a pending (unfilled) order."""
+        req = orders.OrderCancel(accountID=self.account_id, orderID=str(order_id))
+        try:
+            resp = self.client.request(req)
+        except V20Error as exc:
+            logger.error("cancel_order failed — order_id=%s: %s", order_id, exc)
+            raise
+        logger.info("Order %s cancelled", order_id)
+        return resp
+
+    def get_pending_orders(self) -> list:
+        """
+        Return all pending (unfilled) orders from the broker as a list of
+        dicts with keys: id, instrument, units, price, state.
+        """
+        req = orders.OrdersPending(accountID=self.account_id)
+        try:
+            resp = self.client.request(req)
+        except V20Error as exc:
+            logger.error("get_pending_orders failed: %s", exc)
+            return []
+
+        result = []
+        for o in resp.get("orders", []):
+            try:
+                result.append({
+                    "id":         o["id"],
+                    "instrument": o.get("instrument", ""),
+                    "units":      int(o.get("units", 0)),
+                    "price":      float(o.get("price", 0)),
+                    "state":      o.get("state", ""),
+                })
+            except (KeyError, ValueError):
+                continue
+        return result
 
     # ── Trade management ──────────────────────────────────────────────────────
 

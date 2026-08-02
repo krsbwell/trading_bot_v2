@@ -173,7 +173,7 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     macd_signal_p    = ap.get("MACD_SIGNAL",      config.MACD_SIGNAL)
     adx_threshold    = ap.get("adx_threshold",    config.ADX_THRESHOLD)
 
-    # ── Session gate — London + New York only (07:00–17:00 UTC) ──────────────
+    # ── Session gate — window defined by config.SESSION_START_UTC/END_UTC ────
     last_bar_hour = df_h1.index[-1].hour
     if not (config.SESSION_START_UTC <= last_bar_hour < config.SESSION_END_UTC):
         return 0.0
@@ -285,7 +285,7 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     macd_signal_p    = ap.get("MACD_SIGNAL",      config.MACD_SIGNAL)
     adx_threshold    = ap.get("adx_threshold",    config.ADX_THRESHOLD)
 
-    # ── Session gate — London + New York only (07:00–17:00 UTC) ──────────────
+    # ── Session gate — window defined by config.SESSION_START_UTC/END_UTC ────
     last_bar_hour = df_h1.index[-1].hour
     if not (config.SESSION_START_UTC <= last_bar_hour < config.SESSION_END_UTC):
         return 0.0

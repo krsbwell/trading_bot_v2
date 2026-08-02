@@ -1565,10 +1565,11 @@ def update_and_save_ema_settings(periods, _cc, _wc, _vc,
 # ── Order type toggle (Market ↔ Limit) ───────────────────────────────────────
 
 @app.callback(
-    Output("order-type-market-btn", "style"),
-    Output("order-type-limit-btn",  "style"),
-    Output("order-limit-row",       "style"),
-    Output("order-form-store",      "data"),
+    Output("order-type-market-btn", "style", allow_duplicate=True),
+    Output("order-type-limit-btn",  "style", allow_duplicate=True),
+    Output("order-limit-row",       "style", allow_duplicate=True),
+    Output("order-form-store",      "data",  allow_duplicate=True),
+    Output("order-confirm-btn",     "children", allow_duplicate=True),
     Input("order-type-market-btn",  "n_clicks"),
     Input("order-type-limit-btn",   "n_clicks"),
     State("order-form-store",       "data"),
@@ -1577,7 +1578,7 @@ def update_and_save_ema_settings(periods, _cc, _wc, _vc,
 def toggle_order_type(market_n, limit_n, form_data):
     ctx = callback_context
     if not ctx.triggered:
-        return no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update
     btn = ctx.triggered[0]["prop_id"].split(".")[0]
     is_limit = (btn == "order-type-limit-btn")
 
@@ -1594,6 +1595,7 @@ def toggle_order_type(market_n, limit_n, form_data):
         active   if is_limit else inactive,
         limit_row_style,
         new_data,
+        "✓ Place Limit Order" if is_limit else "✓ Place Market Order",
     )
 
 
@@ -1886,10 +1888,11 @@ def update_spread(_, pair):
     Input("quick-sell-btn",    "n_clicks"),
     Input("order-cancel-btn",  "n_clicks"),
     Input("order-confirm-btn", "n_clicks"),
-    State("pair-select", "value"),
+    State("pair-select",       "value"),
+    State("order-form-store",  "data"),
     prevent_initial_call=True,
 )
-def set_order_form(buy_n, sell_n, cancel_n, confirm_n, pair):
+def set_order_form(buy_n, sell_n, cancel_n, confirm_n, pair, form_data):
     ctx = callback_context
     if not ctx.triggered:
         return no_update
@@ -1899,7 +1902,14 @@ def set_order_form(buy_n, sell_n, cancel_n, confirm_n, pair):
     if not pair:
         return no_update
     direction = "long" if triggered == "quick-buy-btn" else "short"
-    return {"direction": direction, "pair": pair}
+    # Preserve order_type (Market/Limit) across a BUY/SELL re-click — this
+    # used to always reset to {"direction", "pair"} only, silently
+    # discarding a prior Limit selection back to market with no visual
+    # indication the toggle had reverted.
+    new_data = dict(form_data or {})
+    new_data["direction"] = direction
+    new_data["pair"]      = pair
+    return new_data
 
 
 # ── Order form: populate fields when store changes ────────────────────────────
@@ -1909,12 +1919,17 @@ def set_order_form(buy_n, sell_n, cancel_n, confirm_n, pair):
     Output("order-form-title",  "children"),
     Output("order-form-title",  "style"),
     Output("order-entry-input", "value"),
-    Output("order-sl-input",    "value"),
-    Output("order-tp1-input",   "value"),
-    Output("order-tp2-input",   "value"),
-    Output("order-tp3-input",   "value"),
-    Output("order-lot-input",   "value"),
+    Output("order-sl-input",    "value", allow_duplicate=True),
+    Output("order-tp1-input",   "value", allow_duplicate=True),
+    Output("order-tp2-input",   "value", allow_duplicate=True),
+    Output("order-tp3-input",   "value", allow_duplicate=True),
+    Output("order-lot-input",   "value", allow_duplicate=True),
     Output("order-confirm-btn", "style"),
+    Output("order-confirm-btn", "children", allow_duplicate=True),
+    Output("order-type-market-btn", "style", allow_duplicate=True),
+    Output("order-type-limit-btn",  "style", allow_duplicate=True),
+    Output("order-limit-row",       "style", allow_duplicate=True),
+    Output("order-limit-input",     "value"),
     Input("order-form-store",   "data"),
     State("lot-size-input",     "value"),
     prevent_initial_call=True,
@@ -1924,11 +1939,22 @@ def populate_order_form(form_data, default_lot):
     _no = no_update
 
     if not form_data:
-        return _hidden, _no, _no, _no, _no, _no, _no, _no, _no, _no
+        return _hidden, _no, _no, _no, _no, _no, _no, _no, _no, _no, _no, _no, _no, _no, _no
 
     direction = form_data["direction"]
     pair      = form_data["pair"]
     connector = state.get_key("forex_connector")
+
+    # Restore the Market/Limit toggle to match the persisted order_type —
+    # without this, a Limit selection surviving a BUY/SELL re-click (see
+    # set_order_form) would submit correctly but the toggle would visually
+    # show Market again, silently lying about what's about to be placed.
+    is_limit = form_data.get("order_type", "market") == "limit"
+    _active   = {**_tf_btn_style(True),  "fontSize": "0.72rem", "padding": "2px 10px"}
+    _inactive = {**_tf_btn_style(False), "fontSize": "0.72rem", "padding": "2px 10px"}
+    market_btn_style = _inactive if is_limit else _active
+    limit_btn_style  = _active   if is_limit else _inactive
+    limit_row_style  = {"display": "block"} if is_limit else {"display": "none"}
 
     entry_val = sl_val = tp1_val = tp2_val = tp3_val = None
     lot_val = default_lot or 0.01
@@ -1992,9 +2018,82 @@ def populate_order_form(form_data, default_lot):
         "fontSize":     "0.85rem",
         "fontWeight":   700,
     }
+    confirm_label = "✓ Place Limit Order" if is_limit else "✓ Place Market Order"
+    # Sane starting point instead of a static 0 — the field previously had
+    # no default at all, which is why it always showed 0 and, since nothing
+    # ever read it either, a Limit order silently used the live-refreshing
+    # Entry price instead of any price the user actually chose.
+    limit_val = entry_val
 
     return (panel_style, f"{arrow}  {pair.replace('_', '/')}", title_style,
-            entry_val, sl_val, tp1_val, tp2_val, tp3_val, lot_val, confirm_style)
+            entry_val, sl_val, tp1_val, tp2_val, tp3_val, lot_val, confirm_style,
+            confirm_label, market_btn_style, limit_btn_style, limit_row_style, limit_val)
+
+
+# ── Order form: recalc SL/TP/Lot when Limit Price changes ────────────────────
+# Entry only ever reflected the live market price at the moment the form
+# opened — for a Limit order the actual fill level is Limit Price, which can
+# be far from Entry (that's the whole point of a limit order). Without this,
+# SL/TP/Lot stayed anchored to Entry's defaults even after the user moved
+# Limit Price, which could leave e.g. a long's SL sitting above its own
+# limit price once the two diverged enough.
+
+@app.callback(
+    Output("order-sl-input",  "value", allow_duplicate=True),
+    Output("order-tp1-input", "value", allow_duplicate=True),
+    Output("order-tp2-input", "value", allow_duplicate=True),
+    Output("order-tp3-input", "value", allow_duplicate=True),
+    Output("order-lot-input", "value", allow_duplicate=True),
+    Input("order-limit-input", "value"),
+    State("order-form-store",  "data"),
+    State("lot-size-input",    "value"),
+    prevent_initial_call=True,
+)
+def recalc_from_limit_price(limit_price, form_data, default_lot):
+    _no5 = (no_update,) * 5
+    if not form_data or form_data.get("order_type") != "limit" or not limit_price:
+        return _no5
+
+    direction = form_data.get("direction", "long")
+    pair      = form_data.get("pair", "")
+    connector = state.get_key("forex_connector")
+    if not pair or not connector:
+        return _no5
+
+    try:
+        limit_price = float(limit_price)
+        dec = 3 if "JPY" in pair else 5
+        df  = connector.get_candles(pair, "H1", 50)
+        if df is None or df.empty:
+            return _no5
+
+        from engine.indicators import atr as _atr
+        try:
+            atr_val = float(_atr(df["high"], df["low"], df["close"], 14).iloc[-1])
+            sl_dist = atr_val * 1.5
+        except Exception:
+            sl_dist = 0.005
+
+        sl_val = round(
+            limit_price - sl_dist if direction == "long" else limit_price + sl_dist,
+            dec,
+        )
+        from risk.risk_manager import get_tp_levels, calculate_position_size
+        tp = get_tp_levels(limit_price, sl_val, direction, pair)
+        tp1_val = round(tp["tp1"], dec)
+        tp2_val = round(tp["tp2"], dec)
+        tp3_val = round(tp["tp3"], dec)
+
+        lot_val = no_update
+        if not default_lot:
+            account = state.get_key("account", {})
+            balance = account.get("balance") or account.get("cash", 500.0)
+            lot_val = calculate_position_size(balance, limit_price, sl_val, pair)
+
+        return sl_val, tp1_val, tp2_val, tp3_val, lot_val
+    except Exception as exc:
+        logger.warning("Limit-price recalc failed for %s: %s", pair, exc)
+        return _no5
 
 
 # ── Order form: confirm → place trade ────────────────────────────────────────
@@ -2005,6 +2104,7 @@ def populate_order_form(form_data, default_lot):
     Input("order-confirm-btn",  "n_clicks"),
     State("order-form-store",   "data"),
     State("order-entry-input",  "value"),
+    State("order-limit-input",  "value"),
     State("order-sl-input",     "value"),
     State("order-tp1-input",    "value"),
     State("order-tp2-input",    "value"),
@@ -2012,68 +2112,98 @@ def populate_order_form(form_data, default_lot):
     State("order-lot-input",    "value"),
     prevent_initial_call=True,
 )
-def confirm_order(n, form_data, entry, sl, tp1, tp2, tp3, lot):
+def confirm_order(n, form_data, entry, limit_price, sl, tp1, tp2, tp3, lot):
     if not n or not form_data:
         return no_update, no_update
 
-    direction = form_data["direction"]
-    pair      = form_data["pair"]
+    direction  = form_data["direction"]
+    pair       = form_data["pair"]
+    order_type = form_data.get("order_type", "market")
 
     if any(v is None for v in (entry, sl, tp1, lot)):
         return ("✗ Fill in Entry, SL, TP1 and Lot Size",
                 {"color": "#ff3366", "fontSize": "0.78rem"})
+    if order_type == "limit" and not limit_price:
+        return ("✗ Set a Limit Price",
+                {"color": "#ff3366", "fontSize": "0.78rem"})
 
     entry = float(entry)
+    limit_price = float(limit_price) if limit_price else entry
     sl    = float(sl)
     tp1   = float(tp1)
     tp2   = float(tp2) if tp2 is not None else entry
     tp3   = float(tp3) if tp3 is not None else entry
     lot   = float(lot)
 
+    tp_levels    = {"tp1": tp1, "tp2": tp2, "tp3": tp3}
     paper_trader = state.get_key("paper_trader")
-    if paper_trader is None:
-        return ("✗ Paper trader unavailable (live mode: use broker)",
-                {"color": "#ff3366", "fontSize": "0.78rem"})
+    tm           = state.get_key("trade_manager_fx")
+    size_used    = lot
 
-    order_type  = form_data.get("order_type", "market")
-    tp_levels   = {"tp1": tp1, "tp2": tp2, "tp3": tp3}
-
-    if order_type == "limit":
-        # Limit order: entry is the limit price, fills when price reaches it
-        limit_price = entry   # user set entry field = limit price
-        trade_id    = paper_trader.open_limit_order(
-            pair=pair, direction=direction,
-            limit_price=limit_price, sl=sl,
-            tp_levels=tp_levels, size=lot,
+    if paper_trader is not None:
+        if order_type == "limit":
+            trade_id = paper_trader.open_limit_order(
+                pair=pair, direction=direction,
+                limit_price=limit_price, sl=sl,
+                tp_levels=tp_levels, size=lot,
+            )
+            order_label = "LIMIT"
+        else:
+            trade_id = paper_trader.open_trade(
+                pair=pair, direction=direction,
+                entry_price=entry, sl=sl,
+                tp_levels=tp_levels, size=lot,
+            )
+            order_label = "MARKET"
+        state.update(
+            open_trades    = list(paper_trader.open_trades),
+            closed_trades  = list(paper_trader.closed_trades),
+            pending_orders = list(paper_trader.pending_orders),
         )
-        order_label = "LIMIT"
+        if not trade_id:
+            return ("✗ Rejected (duplicate pair or max trades)",
+                    {"color": "#ff3366", "fontSize": "0.78rem"})
+
+    elif tm is not None:
+        # Real demo/live order. TradeManager sizes itself off account risk %
+        # internally (no caller-supplied size), so the Lot Size field above
+        # only applies to paper mode here.
+        signal = {
+            "pair": pair, "direction": direction, "entry": entry,
+            "stop_loss": sl, "tp_levels": tp_levels,
+            "score": 100,   # manual click — bypass the automated min-score gate
+        }
+        if order_type == "limit":
+            trade_id = tm.open_limit_order(signal, limit_price=limit_price)
+            state.update(pending_orders=list(tm.pending_orders.values()))
+            if not trade_id:
+                return ("✗ Rejected (duplicate pair, max trades, or drawdown halt)",
+                        {"color": "#ff3366", "fontSize": "0.78rem"})
+            order_label = "LIMIT"
+            size_used   = tm.pending_orders[trade_id]["size"]
+        else:
+            trade_id = tm.open_trade(signal)
+            state.update(
+                open_trades   = list(tm.open_trades.values()),
+                closed_trades = list(tm.closed_trades),
+            )
+            if not trade_id:
+                return ("✗ Rejected (duplicate pair, max trades, or drawdown halt)",
+                        {"color": "#ff3366", "fontSize": "0.78rem"})
+            order_label = "MARKET"
+            size_used   = tm.open_trades[trade_id]["size"]
+
     else:
-        trade_id = paper_trader.open_trade(
-            pair=pair, direction=direction,
-            entry_price=entry, sl=sl,
-            tp_levels=tp_levels, size=lot,
-        )
-        order_label = "MARKET"
-
-    state.update(
-        open_trades    = list(paper_trader.open_trades),
-        closed_trades  = list(paper_trader.closed_trades),
-        pending_orders = list(paper_trader.pending_orders),
-    )
-
-    if not trade_id:
-        return ("✗ Rejected (duplicate pair or max trades)",
+        return ("✗ No trader available",
                 {"color": "#ff3366", "fontSize": "0.78rem"})
 
-    pip        = 0.01 if "JPY" in pair else 0.0001
-    sl_pips    = round(abs(entry - sl) / pip)
-    arrow      = "▲ LONG" if direction == "long" else "▼ SHORT"
-    dec        = 3 if "JPY" in pair else 5
-    clr        = "#00ff88" if direction == "long" else "#ff3366"
-    pair_disp  = pair.replace("_", "/")
-    msg        = (f"{arrow} {order_label}  {pair_disp}  @{entry:.{dec}f}  "
-                  f"SL {sl:.{dec}f} ({sl_pips}p)  TP1 {tp1:.{dec}f}  Lot {lot}")
-    return msg, {"color": clr, "fontSize": "0.78rem"}
+    # No lingering confirmation banner here on success — Open Trades/Pending
+    # Trades already show the real thing accurately, and with several orders
+    # placed in a session this panel would otherwise just accumulate stale
+    # recaps under the BUY/SELL buttons, which is exactly what this panel
+    # isn't for. Errors above still return their own message, since a
+    # rejection needs feedback right where the attempt was made.
+    return "", {}
 
 
 # ── Close trade: CLOSE button → show modal ───────────────────────────────────
@@ -2216,7 +2346,8 @@ def confirm_close_trade(n, store, pair):
 
     tid = store.get("id", "")
     pt  = state.get_key("paper_trader")
-    if not pt:
+    tm  = state.get_key("trade_manager_fx")
+    if not pt and not tm:
         return no_update, no_update
 
     # Find current price for the exit
@@ -2238,11 +2369,23 @@ def confirm_close_trade(n, store, pair):
         except Exception:
             pass
 
-    ok = pt.manual_close(tid, float(exit_price))
-    state.update(
-        open_trades   = list(pt.open_trades),
-        closed_trades = list(pt.closed_trades),
-    )
+    # Real demo/live trades live in TradeManager, not the paper trader — route
+    # by which manager actually holds this trade_id rather than by mode, since
+    # both objects can coexist (e.g. mid-migration or in tests).
+    if tm and tid in tm.open_trades:
+        tm.close_trade(tid, float(exit_price), reason="manual")
+        state.update(
+            open_trades   = list(tm.open_trades.values()),
+            closed_trades = list(tm.closed_trades),
+        )
+    elif pt:
+        pt.manual_close(tid, float(exit_price))
+        state.update(
+            open_trades   = list(pt.open_trades),
+            closed_trades = list(pt.closed_trades),
+        )
+    else:
+        return no_update, no_update
 
     # Update cooldown for this pair
     from datetime import datetime as _dt_now, timezone as _tz
@@ -2380,30 +2523,37 @@ def confirm_edit_modal(confirm_n, be_n, store, sl, tp1, tp2, tp3):
 
     tid = store.get("id", "")
     pt  = state.get_key("paper_trader")
-    if not pt:
-        return "✗ Paper trader unavailable", no_update
+    tm  = state.get_key("trade_manager_fx")
+    mgr = tm if (tm and tid in tm.open_trades) else pt
+    if not mgr:
+        return "✗ Trader unavailable", no_update
 
     from dashboard.panels import open_trades_panel
 
+    def _refresh_trades():
+        if mgr is tm:
+            state.update(open_trades=list(tm.open_trades.values()),
+                         closed_trades=list(tm.closed_trades))
+        else:
+            state.update(open_trades=list(pt.open_trades),
+                         closed_trades=list(pt.closed_trades))
+        return state.get_key("open_trades") or []
+
     if triggered == "edit-modal-breakeven-btn":
-        ok = pt.move_to_breakeven(tid)
-        state.update(open_trades=list(pt.open_trades),
-                     closed_trades=list(pt.closed_trades))
-        trades = state.get_key("open_trades") or []
+        ok = mgr.move_to_breakeven(tid)
+        trades = _refresh_trades()
         return ("✓ SL moved to breakeven" if ok else "✗ Trade not found",
                 open_trades_panel(trades, state.get_key("mode", "paper")))
 
     if triggered == "edit-modal-confirm-btn":
-        ok = pt.modify_trade(
+        ok = mgr.modify_trade(
             tid,
             sl  = float(sl)  if sl  is not None else None,
             tp1 = float(tp1) if tp1 is not None else None,
             tp2 = float(tp2) if tp2 is not None else None,
             tp3 = float(tp3) if tp3 is not None else None,
         )
-        state.update(open_trades=list(pt.open_trades),
-                     closed_trades=list(pt.closed_trades))
-        trades = state.get_key("open_trades") or []
+        trades = _refresh_trades()
         return ("✓ Trade updated" if ok else "✗ Trade not found",
                 open_trades_panel(trades, state.get_key("mode", "paper")))
 
@@ -2508,17 +2658,29 @@ def confirm_edit_pending(confirm_n, store, limit_price, sl, tp1, tp2, tp3):
 
     oid = store.get("id", "")
     pt  = state.get_key("paper_trader")
-    if not pt:
-        return "✗ Paper trader unavailable", no_update
-
-    ok = pt.modify_pending_order(
-        oid,
+    tm  = state.get_key("trade_manager_fx")
+    kwargs = dict(
         limit_price = float(limit_price) if limit_price is not None else None,
         sl          = float(sl)  if sl  is not None else None,
         tp1         = float(tp1) if tp1 is not None else None,
         tp2         = float(tp2) if tp2 is not None else None,
         tp3         = float(tp3) if tp3 is not None else None,
     )
+
+    if tm and oid in tm.pending_orders:
+        # Real order: cancel-and-replace under a NEW id (OANDA limit orders
+        # can't be edited in place) — modify_pending_order() returns that
+        # new id (or None on failure), unlike paper's plain bool.
+        new_oid = tm.modify_pending_order(oid, **kwargs)
+        pending = list(tm.pending_orders.values())
+        state.update(pending_orders=pending)
+        return ("✓ Order updated" if new_oid else "✗ Order not found",
+                pending_orders_panel(pending, state.get_key("mode", "paper")))
+
+    if not pt:
+        return "✗ Trader unavailable", no_update
+
+    ok = pt.modify_pending_order(oid, **kwargs)
     pending = list(pt.pending_orders)
     state.update(pending_orders=pending)
     return ("✓ Order updated" if ok else "✗ Order not found",
@@ -2572,18 +2734,21 @@ app.clientside_callback(
     prevent_initial_call=True,
 )
 def handle_chart_trade_modify(data):
-    """Receives SL/TP drag events from chart.js and persists via paper_trader."""
+    """Receives SL/TP drag events from chart.js and persists via paper_trader
+    or (for real demo/live trades) TradeManager, whichever holds this id."""
     if not data:
         return no_update
-    pt = state.get_key("paper_trader")
-    if not pt:
-        return no_update
     tid = data.get("id", "")
+    pt  = state.get_key("paper_trader")
+    tm  = state.get_key("trade_manager_fx")
+    mgr = tm if (tm and tid in tm.open_trades) else pt
+    if not mgr:
+        return no_update
     sl  = data.get("sl")
     tp1 = data.get("tp1")
     tp2 = data.get("tp2")
     tp3 = data.get("tp3")
-    ok = pt.modify_trade(
+    ok = mgr.modify_trade(
         tid,
         sl  = float(sl)  if sl  is not None else None,
         tp1 = float(tp1) if tp1 is not None else None,
@@ -2591,8 +2756,12 @@ def handle_chart_trade_modify(data):
         tp3 = float(tp3) if tp3 is not None else None,
     )
     if ok:
-        state.update(open_trades=list(pt.open_trades),
-                     closed_trades=list(pt.closed_trades))
+        if mgr is tm:
+            state.update(open_trades=list(tm.open_trades.values()),
+                         closed_trades=list(tm.closed_trades))
+        else:
+            state.update(open_trades=list(pt.open_trades),
+                         closed_trades=list(pt.closed_trades))
     return ""
 
 
@@ -3260,6 +3429,26 @@ def update_trades_and_account(_):
             except Exception:
                 pass
 
+    # Demo/live account dict comes from a broker snapshot taken once per
+    # 30-min candle-close cycle (main.py::_refresh_account), so a trade
+    # opened mid-cycle shows $0 unrealised for up to 30 minutes even though
+    # the sidebar above already computed its real P&L from the same
+    # current_prices this tick just fetched. Recompute it here so both
+    # panels agree and both update every 5s — mirrors PaperTrader._calc_
+    # unrealized()'s exact formula for consistency with paper mode.
+    if mode in ("demo", "live") and trades:
+        unreal_total = 0.0
+        for t in trades:
+            px     = t.get("last_price", t.get("entry", 0))
+            entry  = t.get("entry", 0)
+            units  = t.get("size", 0) * t.get("remaining", 1.0)
+            diff   = (px - entry) if t.get("direction") == "long" else (entry - px)
+            unreal_total += diff * units
+        account = dict(account)
+        account["unrealized_pnl"]   = round(unreal_total, 4)
+        account["nav"]              = round(account.get("balance", 0) + unreal_total, 2)
+        account["open_trade_count"] = len(trades)
+
     if closed:
         wins_all = sum(1 for t in closed if t.get("realised_pnl", 0) > 0)
         wr_all   = wins_all / len(closed)
@@ -3302,12 +3491,14 @@ def cancel_pending_order(clicks):
     except (json.JSONDecodeError, AttributeError, KeyError):
         return no_update
 
-    pt = state.get_key("paper_trader")
-    if not pt:
+    pt  = state.get_key("paper_trader")
+    tm  = state.get_key("trade_manager_fx")
+    mgr = tm if (tm and oid in tm.pending_orders) else pt
+    if not mgr:
         return no_update
 
-    pt.cancel_limit_order(oid)
-    pending = list(pt.pending_orders)
+    mgr.cancel_limit_order(oid)
+    pending = list(tm.pending_orders.values()) if mgr is tm else list(pt.pending_orders)
     state.update(pending_orders=pending)
     return pending_orders_panel(pending, state.get_key("mode", "paper"))
 
