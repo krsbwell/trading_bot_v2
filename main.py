@@ -414,43 +414,15 @@ def _process_pair(pair: str, market: str, engine) -> None:
         _block(_gate_reason)
         return
 
-    # ── Trending structure filter — EMA-bounce only ───────────────────────────
-    _mkt_struct = signal.get("market_structure", "")
-    if _trending_structure_gate_applies(pair, _mkt_struct):
-        _struct_reason = f"Trending structure ({_mkt_struct}) — EMA bounce has no edge in trends"
-        logger.info("STRUCTURE BLOCKED: %s %s score=%d — %s", pair, signal["direction"], score, _struct_reason)
-        _audit_blocked(
-            pair=pair, timeframe=signal.get("timeframe", "H1"),
-            direction=signal["direction"],
-            ema_score=signal.get("ema_score", 0),
-            structure_score=signal.get("structure_score", 0),
-            pa_score=signal.get("pa_score", 0),
-            confluence_score=score,
-            result="BLOCKED", reject_reason=_struct_reason,
-        )
-        _block(_struct_reason)
-        return
+    # ── Trending structure filter — REMOVED 2026-08-02 ────────────────────────
+    # The ADX gate inside the strategy already blocks trending markets.
+    # This was redundant and was killing signals that ADX said were fine.
+    # Keep _trending_structure_gate_applies() for potential future diagnostic use.
 
-    # ── Session filter: only open trades during London / NY overlap ──────────
-    now_utc = datetime.now(timezone.utc)
-    in_session = config.SESSION_START_UTC <= now_utc.hour < config.SESSION_END_UTC
-    if not in_session:
-        _sess_reason = (
-            f"Out of session ({now_utc.strftime('%H:%M')} UTC, "
-            f"window {config.SESSION_START_UTC:02d}:00–{config.SESSION_END_UTC:02d}:00)"
-        )
-        logger.info("Session filter: %s %s score=%d — %s", pair, signal["direction"], score, _sess_reason)
-        _audit_blocked(
-            pair=pair, timeframe=signal.get("timeframe", "H1"),
-            direction=signal["direction"],
-            ema_score=signal.get("ema_score", 0),
-            structure_score=signal.get("structure_score", 0),
-            pa_score=signal.get("pa_score", 0),
-            confluence_score=score,
-            result="BLOCKED", reject_reason=_sess_reason,
-        )
-        _block(_sess_reason)
-        return
+    # ── Session filter — REMOVED 2026-08-02 ──────────────────────────────────
+    # Redundant: the session gate already fires inside check_buy/sell_signal
+    # (returns 0.0 before the signal is even scored). This second check
+    # in _process_pair was dead code that could never fire.
 
     # ── News blackout filter ──────────────────────────────────────────────────
     # ForexFactory: free XML feed, no API key required — always active

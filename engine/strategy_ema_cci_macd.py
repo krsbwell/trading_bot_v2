@@ -68,7 +68,16 @@ def get_best_emas(pair: str, timeframe: str, df: pd.DataFrame) -> tuple[int, int
     Select the 3 best-scoring EMA periods for this pair+timeframe.
     Re-fits every EMA_REFIT_EVERY_N_CANDLES candles; result is cached.
     Returns (short_period, mid_period, long_period) sorted ascending.
+
+    When config.EMA_AUTOFIT_ENABLED is False (default since 2026-08-02),
+    returns fixed periods from config.EMA_FIXED_PERIODS instead of
+    auto-fitting — avoids curve-fitting and constant behavior drift.
     """
+    # Fixed EMA periods — no auto-fitting
+    if not getattr(config, 'EMA_AUTOFIT_ENABLED', False):
+        short, mid, long_ = config.EMA_FIXED_PERIODS
+        return short, mid, long_
+
     n = len(df)
     cached = _cache.get(pair, {}).get(timeframe)
     if cached:
@@ -234,9 +243,9 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         # MACD momentum: histogram is rising (not just positive but building)
         c7 = len(macd_hist) >= 2 and float(macd_hist.iloc[-1]) > float(macd_hist.iloc[-2])
 
-    # c2 is a hard gate (already returned 0 if False) — score remaining 6 conditions
-    passed = sum([c1, c3, c4, c5, c6, c7])
-    score  = round(25 * passed / 6)
+    # c2 is soft-scored (H4_GATE_BLOCKING=False since 2026-08-02) — score all 7 conditions
+    passed = sum([c1, c2, c3, c4, c5, c6, c7])
+    score  = round(25 * passed / 7)
     logger.debug(
         "BUY %s  c1=%s c2(H4gate)=True c3=%s c4=%s(cci_touch=%.1f,thr=-%d) "
         "c5=%s c6=%s(macd≥%d) c7=%s → %d",
@@ -346,9 +355,9 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
         # MACD momentum: histogram is falling (building bearish momentum)
         c7 = len(macd_hist) >= 2 and float(macd_hist.iloc[-1]) < float(macd_hist.iloc[-2])
 
-    # c2 is a hard gate (already returned 0 if False) — score remaining 6 conditions
-    passed = sum([c1, c3, c4, c5, c6, c7])
-    score  = round(25 * passed / 6)
+    # c2 is soft-scored (H4_GATE_BLOCKING=False since 2026-08-02) — score all 7 conditions
+    passed = sum([c1, c2, c3, c4, c5, c6, c7])
+    score  = round(25 * passed / 7)
     logger.debug(
         "SELL %s  c1=%s c2(H4gate)=True c3=%s c4=%s(cci_touch=%.1f,thr=+%d) "
         "c5=%s c6=%s(macd≥%d) c7=%s → %d",

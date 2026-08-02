@@ -19,7 +19,9 @@ def test_get_returns_empty_dict_for_unfitted_pair(tmp_path):
     assert ap.get("USD_CAD") == {}
 
 
-def test_get_returns_real_tier_params_after_force_tier(tmp_path):
+def test_get_returns_real_tier_params_after_force_tier(tmp_path, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "ADAPTIVE_PARAMS_ENABLED", True)  # tier logic itself, independent of the current global default
     ap = _ap(tmp_path)
     ap.force_tier("EUR_USD", win_rate=0.20)  # < 30% -> "strict" tier
     params = ap.get("EUR_USD")

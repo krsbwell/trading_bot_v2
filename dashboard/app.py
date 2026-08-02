@@ -131,8 +131,8 @@ def _style_btn_style(active: bool = False) -> dict:
 # ── EMA / Moving Average settings ─────────────────────────────────────────────
 
 _EMA_DEFAULTS = [
-    {"period": 34,  "color": "#ffd700", "visible": True, "width": 1},
-    {"period": 100, "color": "#ff9900", "visible": True, "width": 1},
+    {"period": 20,  "color": "#ffd700", "visible": True, "width": 1},
+    {"period": 50,  "color": "#ff9900", "visible": True, "width": 1},
     {"period": 200, "color": "#ff3366", "visible": True, "width": 1},
 ]
 

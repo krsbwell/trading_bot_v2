@@ -23,7 +23,7 @@ def build_chart_data(
     df: pd.DataFrame,
     pair: str,
     tf: str             = "H1",
-    ema_periods: tuple  = (34, 100, 200),
+    ema_periods: tuple  = (20, 50, 200),
     ema_colors: list    = None,
     ema_widths: list    = None,
     signal_levels: dict = None,   # {entry, sl, tp1, tp2, tp3, direction} or None

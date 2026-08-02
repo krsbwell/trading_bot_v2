@@ -34,7 +34,7 @@ def build_chart(
     df: pd.DataFrame,
     pair: str,
     tf: str         = "H1",
-    ema_periods: tuple = (34, 100, 200),
+    ema_periods: tuple = (20, 50, 200),
     sr_zones: list     = None,
     open_trades: list  = None,
     pivots: dict       = None,
