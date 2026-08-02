@@ -51,7 +51,9 @@ def get_last_diag(pair: str, direction: str) -> dict:
 
 
 def _get_pip(pair: str) -> float:
-    return 0.01 if "JPY" in pair.upper() else 0.0001
+    """1 pip = 0.01 for JPY pairs and XAU_USD (OANDA pipLocation -2), 0.0001 for all other FX pairs."""
+    p = pair.upper()
+    return 0.01 if ("JPY" in p or "XAU" in p) else 0.0001
 
 
 def _is_consolidated(df_h1: pd.DataFrame) -> bool:
@@ -210,7 +212,7 @@ def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
     atr_val  = float(atr(df_h1["high"], df_h1["low"], df_h1["close"], 14).iloc[-1])
     entry    = float(df_h1["close"].iloc[-1])
     pip      = _get_pip(pair)
-    min_dist = pip * config.MIN_SL_PIPS
+    min_dist = pip * config.min_sl_pips_for(pair)
 
     if direction == "long":
         broken_level = pivots["highs"][-1] if pivots["highs"] else entry - atr_val

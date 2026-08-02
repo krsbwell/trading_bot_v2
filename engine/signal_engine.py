@@ -178,7 +178,7 @@ class SignalEngine:
         # ── Early ATR computation (needed for ML features below + volatility gate) ─
         _atr_series = calc_atr(df_h1["high"], df_h1["low"], df_h1["close"], 14)
         _atr_val    = float(_atr_series.iloc[-1])
-        _pip_size   = 0.01 if "JPY" in pair.upper() else 0.0001
+        _pip_size   = 0.01 if ("JPY" in pair.upper() or "XAU" in pair.upper()) else 0.0001
         _atr_pips   = _atr_val / _pip_size
 
         # Fetch condition diagnostics set by check_buy/sell_signal (moved ahead of
@@ -246,9 +246,10 @@ class SignalEngine:
         # ── Compute SL/TP early — needed for chart overlay on WATCHING signals too ─
         _watch_sl = _sl_fn(pair, df_h1, direction)
         _watch_sl_pips = abs(entry - _watch_sl) / _pip_size
-        if _watch_sl_pips < config.MIN_SL_PIPS:
+        _min_sl_pips = config.min_sl_pips_for(pair)
+        if _watch_sl_pips < _min_sl_pips:
             _sl_dir  = -1 if direction == "long" else 1
-            _watch_sl = round(entry + _sl_dir * config.MIN_SL_PIPS * _pip_size, 5)
+            _watch_sl = round(entry + _sl_dir * _min_sl_pips * _pip_size, 5)
         _watch_tp = get_tp_levels(entry, _watch_sl, direction, pair)
 
         # Use WFO per-pair min_score when available, else fall back to global config
@@ -292,8 +293,10 @@ class SignalEngine:
             }
 
         # ── ATR volatility gates ──────────────────────────────────────────────
-        if _atr_pips < config.ATR_MIN_PIPS:
-            reason = f"ATR_TOO_LOW: {_atr_pips:.1f} pips < min {config.ATR_MIN_PIPS}"
+        _atr_min_pips = config.atr_min_pips_for(pair)
+        _atr_max_pips = config.atr_max_pips_for(pair)
+        if _atr_pips < _atr_min_pips:
+            reason = f"ATR_TOO_LOW: {_atr_pips:.1f} pips < min {_atr_min_pips}"
             logger.info("ATR gate blocked %s %s — %s", pair, direction, reason)
             _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
                    direction=direction,
@@ -312,8 +315,8 @@ class SignalEngine:
                 "watching": True, "gate_blocked": "ATR_TOO_LOW",
             }
 
-        if _atr_pips > config.ATR_MAX_PIPS:
-            reason = f"ATR_TOO_HIGH: {_atr_pips:.1f} pips > max {config.ATR_MAX_PIPS}"
+        if _atr_pips > _atr_max_pips:
+            reason = f"ATR_TOO_HIGH: {_atr_pips:.1f} pips > max {_atr_max_pips}"
             logger.info("ATR gate blocked %s %s — %s", pair, direction, reason)
             _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
                    direction=direction,

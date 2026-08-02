@@ -1,3 +1,378 @@
+# Change: XAU_USD (gold) support + trend-pullback strategy (2026-08-01) — SHELVED, see review below
+
+## Why
+User wants to add XAU_USD to the bot. Before touching config/pairs, established
+(via discussion) that gold needs its own strategy rather than reusing
+EMA-bounce/breakout-retest as-is — those are FX-session mean-reversion/structure
+recipes, gold's regime (risk-sentiment/real-yields driven, trends harder than
+any FX pair on the roster) doesn't obviously match either.
+
+User supplied a "white paper" transcript (from a YouTube video) describing an
+XAU/USD momentum system. Stripped of jargon, it's: 200 EMA regime filter + 50
+EMA pullback retest + RSI(14) 40-60 zone momentum-hook confirmation, with a
+fixed 15-pip stop / 30-pip target (2:1) and breakeven at 1:1, on M15.
+
+Assessed against the existing codebase:
+- This entry shape (EMA touch + oscillator confirmation) is structurally the
+  same recipe as `engine/strategy_trend_follow.py` (CCI/MACD instead of RSI,
+  same-regime-inverted ADX gate) — shelved 2026-07-02 for FX because forcing
+  a mean-reversion recipe into "trending" FX regimes didn't help
+  ([[project_trend_follow_experiment]]). Gold is exactly the persistently-
+  trending case that idea was never tested against, so it's a stronger
+  candidate here than starting from scratch.
+- The document's fixed 15/30 pip stop doesn't fit how any strategy in this
+  bot sizes risk — every existing strategy uses dynamic sizing (EMA distance,
+  1.5xATR fallback, see `strategy_ema_cci_macd.get_stop_loss` at
+  `engine/strategy_ema_cci_macd.py:369`), never a flat pip count. Gold's
+  per-bar volatility is much higher than FX: a flat $1.50 stop is likely to
+  get chopped by noise. Plan to keep the doc's *entry* logic but let stops
+  inherit the bot's existing dynamic sizing instead of hardcoding 15/30.
+- Blocking bug found along the way: `_get_pip()` is duplicated in
+  `engine/strategy_ema_cci_macd.py:27` and
+  `engine/strategy_breakout_retest.py:53`, both hardcode
+  `0.01 if "JPY" else 0.0001` — XAU_USD would silently get the wrong pip
+  size (gold quotes ~2 decimals, not 4) and every SL/TP distance computed
+  from it would be wrong by orders of magnitude. Must fix before any gold
+  strategy can size stops correctly.
+
+A second source (a different YouTube video's transcript, "Powerful XAUUSD
+Gold Trading Strategy") was reviewed and rejected as not usable: it
+references a named third-party paid indicator ("the 10X trading system")
+with no disclosed formula/inputs, has no stop-loss or take-profit defined
+at all, relies on discretionary concepts ("hidden demand level", "bottom
+of a consolidation") that aren't quantifiable rules, and its "81% win rate
+over 319 trades" claim has no stated methodology, date range, or drawdown
+— unverifiable, so it shouldn't move confidence either way. Not
+incorporated into the plan below; noted here so this evaluation doesn't
+need to be redone.
+
+## Plan
+- [x] Fix `_get_pip()` (both copies) to add a real XAU_USD branch instead of
+      the JPY-or-else binary; confirm the actual pip/precision OANDA reports
+      for XAU_USD via `connectors/oanda_connector.py` rather than guessing.
+      DONE 2026-08-01: fixed `strategy_ema_cci_macd.py:27` and
+      `strategy_breakout_retest.py:53` (both now `0.01` for XAU_USD, same as
+      JPY). Also found and fixed a third copy of the same bug while in
+      there: `oanda_connector.py:239`'s `_fmt()` (order-submission price
+      formatting) had the identical JPY-or-else binary — would have sent
+      XAU_USD prices with 5 decimals and gotten rejected by OANDA with
+      `PRICE_PRECISION_EXCEEDED`. Now 2 decimals for XAU_USD (OANDA's
+      documented `displayPrecision`), 3 for JPY, 5 otherwise. Full 257-test
+      suite still passes. Pip value used (0.01, pipLocation -2) is OANDA's
+      documented XAU_USD convention, not independently re-verified against
+      a live instruments API call — flag if a real order ever gets
+      precision-rejected.
+      **Note for step 2**: `config.MIN_SL_PIPS = 25` (global,
+      `config.py:208`) would give gold a minimum stop distance of just
+      $0.25 (25 x 0.01) — almost certainly far too tight for XAU_USD's
+      actual volatility. Don't reuse the global value for gold; needs its
+      own minimum, informed by the backtest, not guessed now.
+- [ ] Add `engine/strategy_gold_trend.py`: 200 EMA regime filter, 50 EMA
+      pullback-touch trigger (reuse `_find_touch`-style logic already in
+      strategy_ema_cci_macd.py rather than reimplementing), RSI(14)
+      confirmation harmonized from two independent sources: dip to <=40
+      (buys) / >=60 (sells), then a clean cross back through the 50
+      midline in the trend direction (more precise than doc 1's "40-60
+      zone... breaks back outward", same underlying idea as doc 3's
+      "drop to 40, hook up above 50"). Stop-loss: backtest BOTH the bot's
+      existing dynamic/ATR pattern AND doc 3's alternative (behind the
+      previous week's swing high/low) — don't assume either wins without
+      a number. Take-profit via `risk_manager.get_tp_levels` (respects
+      per-pair R:R override pattern already established via
+      `config.TP_RR_PER_PAIR`), not the documents' fixed pip numbers.
+      Timeframe: build primary/confirm TF as parameters (same pattern as
+      `config.TIMEFRAMES`/`CONFIRM_TF_PER_PAIR`), not hardcoded — user's
+      call (2026-08-01, asked directly): backtest both the bot's existing
+      M30/H4 cadence AND Daily, decide off actual numbers rather than
+      picking a timeframe from either source or guessing.
+      Third source reviewed 2026-08-01 ("beginner-friendly gold trading
+      strategy", Daily-chart framing): confirms the EMA-trend +
+      RSI-pullback-hook shape independently (single 50 EMA vs doc 1's
+      200/50 pair), added swing-high/low stop-loss idea above, and
+      confirmed `risk_manager.calculate_position_size` already handles
+      1-2% risk sizing correctly for any pip size — its `pip` variable
+      cancels out algebraically (`sl_pips x pip = sl_distance` always),
+      so no fix was needed there despite also containing a JPY-or-else
+      pip binary at `risk_manager.py:15`.
+- [x] Wire into `engine/signal_engine.py` via `STRATEGY_OVERRIDE` the same
+      way `breakout_retest` is wired for GBP_USD — new pair, new strategy,
+      no changes to any existing pair's logic.
+      DONE 2026-08-01: `engine/strategy_gold_trend.py` created (6-condition
+      buy/sell check, 200/50 EMA + RSI dip-and-hook, reuses `_find_touch`
+      from strategy_ema_cci_macd.py per the plan). `config.STRATEGY_OVERRIDE["XAU_USD"]
+      = "gold_trend"` added (inert — XAU_USD isn't in FOREX_PAIRS/FOREX_WATCH
+      yet). Wired into `engine/strategy_dispatch.py`'s `STRATEGY_FNS` and
+      `backtest/runner.py`'s cache-clear list + CLI `--strategy` choices.
+      Also added `--primary-tf`/`--confirm-tf` CLI override flags to
+      `backtest/runner.py` (previously hardcoded to `config.TIMEFRAMES`,
+      no way to run a Daily backtest at all) — needed for the "backtest
+      both M30/H4 and Daily" decision. 257/257 tests still pass.
+
+      **Two real infra findings while wiring this up, both fixed:**
+      1. `engine/signal_engine.py` had a 4th (previously unfound) copy of
+         the JPY-or-else pip binary at line ~181, used to gate the live
+         ATR volatility filter (`ATR_MIN_PIPS`/`ATR_MAX_PIPS`) and the
+         `MIN_SL_PIPS` fallback. Fixed to recognize XAU_USD. Also added
+         `config.ATR_MIN_PIPS_PER_PAIR`/`ATR_MAX_PIPS_PER_PAIR` (mirroring
+         the CONFIRM_TF_PER_PAIR idiom) — the global 5-35 pip bound would
+         have permanently tripped ATR_TOO_HIGH for gold (real fetched
+         XAU_USD H1 ATR sample: $11.40-$23.22, i.e. ~1140-2320 pips at
+         gold's 0.01 pip size). XAU_USD placeholder: 200-4000 pips,
+         grounded in that one real sample, NOT backtest-validated — retune
+         once real trade data exists. `backtest/runner.py`'s own duplicate
+         pip binary (line 137, cosmetic ATR-pips display only, not a gate)
+         fixed too.
+      2. `risk.calculate_position_size()` returns `int(units)` — gold's
+         realistic stop distances (~$10-30, vs. FX's ~0.001-0.005) combined
+         with a small test balance make `units` a fraction of a troy ounce,
+         which truncates to **zero**, silently blocking every trade
+         regardless of signal quality. Confirmed directly: a $500-balance
+         backtest produced 27 real qualifying signals (score >= confluence
+         threshold) but 0 trades — every one hit `size <= 0`. Re-ran at a
+         $5000 notional balance (evaluation-only workaround, NOT a live
+         sizing decision) and got real trades through — see results below.
+         **Not fixed** — the real fix is a business decision (how much
+         capital a gold trade should risk, and whether OANDA allows
+         fractional units for XAU_USD) not a code bug; needs your input
+         before touching `calculate_position_size`.
+
+      **Also found, unrelated to code**: this OANDA practice account has
+      no metals/XAU_USD in its 68-instrument tradeable list at all —
+      `AccountInstruments` returns `INSTRUMENT_NOT_TRADEABLE` for XAU_USD.
+      Historical candle data (`get_candles`) works fine (separate,
+      unrestricted endpoint) so backtesting is unaffected, but real
+      order placement (demo/live) will fail until metals/CFD trading is
+      enabled on the account itself — likely an OANDA account-settings
+      change, possibly a different account type. This blocks step "wire
+      into live" regardless of backtest results; flag to OANDA/account
+      settings before ever flipping XAU_USD out of paper mode.
+
+- [ ] Add `XAU_USD` to config in **watch-only** form first (signals shown,
+      no trades) — do not add to `FOREX_PAIRS`/active trading yet.
+- [x] Backtest `strategy_gold_trend` against real OANDA XAU_USD history —
+      FULL 4-VARIANT SWEEP DONE 2026-08-01 (dynamic/swing stop x M30-H4/
+      Daily-Weekly), all at $5000 notional to sidestep the position-sizing
+      truncation issue above (evaluation only, not a live sizing decision):
+
+      | Variant          | Trades | WR    | PF   | PnL      | MaxDD |
+      |------------------|--------|-------|------|----------|-------|
+      | dynamic, M30/H4  | 16     | 18.8% | 0.63 | -$171.02 | 8.3%  |
+      | swing,   M30/H4  | 2      | 0%    | 0.00 | -$41.31  | 1.8%  |
+      | dynamic, D/W     | 2      | 0%    | 0.00 | -$45.17  | 1.2%  |
+      | swing,   D/W     | 8      | 12.5% | 0.48 | -$113.41 | 3.2%  |
+
+      **Every variant is net-losing.** Samples are all well under the
+      ~30-trade trust threshold ([[project_pair_config]]), so this isn't
+      a statistically airtight rejection — but 4/4 losing with no variant
+      even close to breakeven is a real, consistent signal, not noise
+      that a bigger sample would plausibly flip. Conclusion: the entry
+      mechanic as directly reconciled from the two source documents (200/
+      50 EMA regime+pullback, RSI 40/60 dip-and-hook, fixed periods) does
+      NOT show an edge on XAU_USD with these default parameters. Whether
+      different parameters (ADX threshold, RSI extremes, EMA periods) or
+      a completely different mechanic (EMA-bounce/breakout-retest applied
+      to gold, per the original plan's "nearly free" comparison) would do
+      better is untested — did not sweep parameters or run the comparison
+      to avoid unilaterally p-hacking a small sample without a checkpoint;
+      awaiting user direction on whether that's worth pursuing.
+
+      **Extended sweep 2026-08-01 (user asked for more timeframes + param
+      tuning after the 4-variant table above came back all-negative):**
+
+      Two more timeframe combos added (dynamic + swing stop each):
+      | Variant         | Trades | WR    | PF   | PnL      |
+      |-----------------|--------|-------|------|----------|
+      | dynamic, H1/H4  | 7      | 28.6% | 1.12 | +$21.72  |
+      | swing,   H1/H4  | 0      | —     | —    | $0       |
+      | dynamic, H4/D   | 0      | —     | —    | $0       |
+      | swing,   H4/D   | 0      | —     | —    | $0       |
+
+      H1/H4 dynamic was the first positive number in the whole sweep
+      (small sample, 7 trades) — used as a second base for one-factor-at-
+      a-time parameter tuning (ADX threshold, RSI extremes, EMA periods),
+      alongside M30/H4 dynamic (the highest-N base, 16 trades):
+
+      | Base    | Variation      | Trades | WR    | PF   | PnL      |
+      |---------|----------------|--------|-------|------|----------|
+      | M30/H4  | adx=20         | 25     | 32.0% | 1.13 | +$78.76  |
+      | M30/H4  | adx=24         | 23     | 26.1% | 0.79 | -$122.94 |
+      | M30/H4  | rsi=35/65      | 14     | 21.4% | 0.77 | -$88.07  |
+      | M30/H4  | rsi=45/55      | 16     | 25.0% | 0.89 | -$49.54  |
+      | M30/H4  | ema=100/20     | 20     | 25.0% | 0.86 | -$72.87  |
+      | M30/H4  | ema=150/34     | 14     | 14.3% | 0.50 | -$200.65 |
+      | H1/H4   | **adx=20**     | **32** | **37.5%** | **1.80** | **+$529.48** |
+      | H1/H4   | adx=24         | 13     | 23.1% | 0.89 | -$32.39  |
+      | H1/H4   | rsi=35/65      | 7      | 28.6% | 1.12 | +$21.72  |
+      | H1/H4   | rsi=45/55      | 7      | 28.6% | 1.12 | +$21.72  |
+      | H1/H4   | ema=100/20     | 21     | 19.1% | 0.59 | -$224.72 |
+      | H1/H4   | ema=150/34     | 14     | 21.4% | 0.63 | -$150.42 |
+
+      **One standout: H1 primary / H4 confirm, ADX threshold loosened to
+      20 (default 28), dynamic stop — 32 trades, 37.5% WR, PF 1.80,
+      +$529.48, 4.6% MaxDD.** First result in the entire sweep (18 backtest
+      variants total across both tables) that clears the ~30-trade sample
+      bar AND looks genuinely good, not just barely positive.
+
+      **Important caveat, stated plainly rather than oversold**: this
+      emerged from a one-factor-at-a-time sweep of ~18 variations where
+      every other combination was flat or losing. Finding one clear winner
+      out of that many tries is exactly the situation where a real signal
+      and a lucky multiple-comparisons artifact look identical — this
+      result has NOT been validated out-of-sample (different date range)
+      or checked in combination with the other parameter changes (only
+      ADX was varied here; RSI/EMA stayed at defaults). Don't promote this
+      to paper/live off this number alone — same "don't overclaim" standard
+      as everything else in this project ([[feedback_dont_overclaim_fixes]]).
+      rsi=35/65 and rsi=45/55 producing byte-identical results to the H1/H4
+      baseline (both 7 trades) is not a bug — confirmed the adaptive dict
+      does reach check_buy/sell_signal correctly (M30/H4's RSI variations
+      DID change trade count); it means none of this window's actual
+      touch-point RSI values fell in the 35-45/55-65 boundary zone being
+      tested, so the same touches qualified either way at this sample size.
+
+      **Out-of-sample validation 2026-08-01 — the standout did NOT hold
+      up.** Split one 4999-bar H1 fetch (+ matching 1249-bar H4, same
+      calendar span) at its calendar midpoint into two non-overlapping
+      ~5-month windows (2025-09-25 to 2026-02-27, and 2026-02-27 to
+      2026-07-31) and re-ran the exact H1/H4, ADX=20, dynamic-stop config
+      on each independently:
+
+      | Window                          | Trades | WR    | PF   | PnL      |
+      |----------------------------------|--------|-------|------|----------|
+      | Newer half (overlaps original test) | 24  | 37.5% | 2.07 | +$459.55 |
+      | Older half (genuinely out-of-sample) | 15 | 20.0% | 0.66 | -$137.55 |
+
+      Same config, same instrument, non-overlapping period, opposite sign.
+      This is the textbook signature of overfitting a small multiple-
+      comparisons search rather than a real edge — confirms the caveat
+      raised when this result first appeared. **Verdict: the 200/50 EMA +
+      RSI dip-and-hook mechanic (as reconciled from the two source
+      documents) does not show a robust, generalizing edge on XAU_USD.**
+      Every clean baseline (4 variants) lost money; the one parameter
+      combination that looked good in-sample failed the very next check.
+      Not recommending further tuning of this specific mechanic — see
+      tasks/todo.md's open question on whether to try EMA-bounce/
+      breakout-retest against gold instead (the original pre-YouTube-
+      sources plan) or shelve gold for now.
+
+      **Comparison against the bot's two proven FX strategies, 2026-08-01**
+      (the original pre-YouTube-sources plan — "nearly free" once the pip
+      fix was in): also loses, at both timeframes tried, no exceptions:
+
+      | Strategy         | TF     | Trades | WR    | PF   | PnL      |
+      |------------------|--------|--------|-------|------|----------|
+      | EMA-bounce       | M30/H4 | 48     | 25.0% | 0.84 | -$206.45 |
+      | EMA-bounce       | H1/H4  | 53     | 18.9% | 0.54 | -$637.63 |
+      | breakout-retest  | M30/H4 | 15     | 20.0% | 0.65 | -$164.69 |
+      | breakout-retest  | H1/H4  | 12     | 16.7% | 0.47 | -$223.90 |
+
+      EMA-bounce at M30/H4 has the largest sample of anything tested today
+      (48 trades, clears the ~30-trade threshold) and is the closest to
+      breakeven (PF 0.84) of any config tried all day — still a real loser,
+      not close enough to call promising, and given the H1/H4 ADX=20
+      lesson just above, no further parameter tuning attempted on these
+      without a specific reason to expect it'd generalize any better.
+
+      **Cumulative verdict after today's full search** (custom gold_trend
+      mechanic: 4 baselines + ~18 parameter variations + 1 out-of-sample
+      check; EMA-bounce/breakout-retest: 2 timeframes each) — every single
+      configuration lost money except one, and that one failed out-of-
+      sample validation. No strategy/timeframe/parameter combination tried
+      today shows a real, validated edge on XAU_USD. This is a broad
+      enough search that "haven't found the right knob yet" is a weaker
+      explanation than "this instrument doesn't suit any of these three
+      entry mechanics at all, at least not over this ~5-11 month data
+      window." Not continuing to sweep further without new direction —
+      see conversation for what's next.
+
+      **Two more real bugs found and fixed while running this sweep**
+      (both would have affected any future Daily-bar or parameter-sweep
+      backtest, not just gold):
+      1. `backtest/runner.py`'s `run_backtest()` calls
+         `stop_loss_fn(pair, slice_h1, direction)` WITHOUT forwarding the
+         `adaptive` dict passed into `run_backtest()` itself — so the
+         `gold_stop_method` override silently never reached
+         `get_stop_loss()`, and the first "swing" test above actually
+         re-ran "dynamic" (identical results were the tell). Not changed
+         (would affect every strategy's stop-loss adaptive params, wider
+         blast radius than today's scope) — worked around by passing a
+         closure-wrapped `stop_loss_fn` instead for this sweep. Flagging
+         for a future fix rather than doing it unprompted.
+      2. `backtest/runner.py` has its OWN second, independent session gate
+         (`# Session filter: skip trades outside London/NY overlap`,
+         applied after `final_score >= min_score`) — separate from the
+         one inside each strategy module. Fixing the gate inside
+         `strategy_gold_trend.py` alone still left every Daily/Weekly
+         backtest at zero signals because of this second copy. Fixed with
+         the same "skip for bars >=20h apart" rule.
+- [ ] Only promote to active (real paper trades) if the backtest clears the
+      same bar as every other pair: ~30+ trade sample, positive PnL, PF
+      that holds up — not just a good-looking small sample.
+
+## Explicitly not doing (yet)
+- Not adding XAU_USD to live/real-money trading — paper/watch only until a
+  backtest sample exists, consistent with how every other pair here was
+  vetted.
+- Not adopting the document's fixed 15/30 pip risk numbers — using the bot's
+  existing dynamic stop-sizing instead.
+- Not touching `FOREX_PAIRS`, `STRATEGY_OVERRIDE` for any existing pair, or
+  any other strategy module.
+
+## Review — shelved 2026-08-01
+
+**Decision: gold is shelved.** Removed `"XAU_USD": "gold_trend"` from
+`config.STRATEGY_OVERRIDE` — XAU_USD was never in `FOREX_PAIRS`/
+`FOREX_WATCH` (never got past backtesting per the plan above), so this was
+the only actual "list" it was ever added to. 257/257 tests pass after
+removal.
+
+**Why**: exhaustive same-day search found no validated edge. Summary of
+everything tried (full detail in the entries above):
+- Custom `strategy_gold_trend.py` (200/50 EMA + RSI dip-and-hook, reconciled
+  from two YouTube-sourced documents): 4 clean baselines (dynamic/swing
+  stop x M30-H4/Daily-Weekly) all lost money. ~18-variant one-factor-at-a-
+  time parameter sweep (ADX threshold, RSI extremes, EMA periods) found
+  exactly one apparent winner (H1/H4, ADX=20: PF 1.80, +$529). Out-of-
+  sample validation on a non-overlapping calendar period flipped it to
+  PF 0.66, -$137 — confirmed overfitting, not edge.
+- The bot's two existing, live-proven FX strategies (EMA-bounce,
+  breakout-retest) also both lost money against XAU_USD at both M30/H4
+  and H1/H4.
+- Net: every configuration tested lost money except one, and that one
+  failed validation the moment it was checked out-of-sample. Broad enough
+  a search that "wrong parameters" is a weaker explanation than "none of
+  these three entry mechanics suit this instrument" (at least over the
+  ~5-11 month windows tested).
+
+**What stays in the repo** (left in place, deliberately not deleted, all
+inert with `XAU_USD` out of `STRATEGY_OVERRIDE`):
+- `engine/strategy_gold_trend.py` — the module itself, in case gold is
+  revisited with a genuinely different mechanic later.
+- Its entry in `engine/strategy_dispatch.py`'s `STRATEGY_FNS` and
+  `backtest/runner.py`'s CLI `--strategy gold_trend` choice / cache-clear
+  list — unreachable without a `STRATEGY_OVERRIDE` entry or explicit
+  `--strategy gold_trend` flag.
+- The `--primary-tf`/`--confirm-tf` CLI override flags added to
+  `backtest/runner.py` — general infra, useful for any future non-default-
+  timeframe backtest, not gold-specific.
+- All the pip-size fixes (`_get_pip` in both strategy files, `_fmt` in
+  `oanda_connector.py`, the `_pip_size` copy in `signal_engine.py`, the
+  `ATR_MIN/MAX_PIPS_PER_PAIR` and `MIN_SL_PIPS_PER_PAIR` config overrides)
+  — these are real, general correctness fixes (the ATR-gate and order-
+  formatting bugs would have bitten any future 2-decimal-precision
+  instrument, not just gold) and are harmless with gold inactive; not
+  reverting.
+- **Not fixed, flagged for later if ever relevant**: `calculate_position_size()`'s
+  `int(units)` truncation (blocks any instrument with FX-small stop
+  distances relative to account balance) and `run_backtest()` not
+  forwarding `adaptive` to `stop_loss_fn`.
+- **Not this bot's problem to fix, but worth remembering**: this OANDA
+  practice account has no metals instruments enabled at all
+  (`INSTRUMENT_NOT_TRADEABLE`) — moot now, but relevant if gold (or any
+  metal) ever comes back.
+
+---
+
 # Change: Add MODE="demo" — real OANDA orders on the practice account (2026-07-30) — LIVE-AFFECTING, PENDING APPROVAL
 
 ## Why
@@ -2309,3 +2684,166 @@ backtest run (`python -m backtest.runner --pair GBP_USD --bars 4999
 (overwrites on each run — not treated as a durable artifact). All figures
 above pulled directly from `data/paper_state.json`, `data/signal_audit.csv`,
 and `data/signal_log.csv`, not from memory or prior session notes.
+
+---
+
+# Feature: Real limit orders for demo/live mode via One-Click Buy/Sell (2026-07-31) — LIVE-AFFECTING, PENDING APPROVAL
+
+## Why
+User's One-Click Buy/Sell panel already places real market orders correctly
+as of today's earlier fix (TradeManager.open_trade routing). User now wants
+the same panel's "Limit" order type to also work for real demo/live trades
+— tested and confirmed working weeks ago, but only ever in paper mode;
+demo/live as a real trading path didn't exist until yesterday's MODE="demo"
+switch, so this was never built for it, not a regression from today's work.
+Must work in both demo and eventual real-money live mode — same code path,
+gated only by which OANDA account credentials MODE resolves to (no new
+mode-specific branching needed beyond what already exists).
+
+Confirmed via code: `connectors/oanda_connector.py` has zero limit-order
+capability today (`place_market_order` only). `TradeManager` has zero
+`pending_orders` concept (storage, fill-detection, cancel) — `PaperTrader`
+has all of this already (`open_limit_order`, `cancel_limit_order`,
+`modify_pending_order`, `_check_limit_fills`) and stays the reference
+implementation for parity. `oandapyV20.endpoints.orders` (already an
+installed dependency, no new package needed) exposes `OrderCreate`,
+`OrderCancel`, `OrderDetails`, `OrdersPending` — everything needed exists.
+
+Key structural difference from paper mode: a paper limit order only "fills"
+when our own code checks candle high/low against it
+(`PaperTrader._check_limit_fills`, driven by `_tick_paper_trades()`). A
+real OANDA limit order fills **on the broker's server**, automatically,
+the instant price reaches it — independent of whether our bot is even
+awake at that moment. So this isn't "port the paper logic" — it's "place
+the order and later ask OANDA whether it filled," which is a materially
+different, more reconciliation-heavy design than every other fix today.
+
+## Plan
+- [x] `connectors/oanda_connector.py`:
+  - `place_limit_order(instrument, units, limit_price, sl_price, tp_prices, expiry_time=None)`
+    — `OrderCreate` with `order.type="LIMIT"`, `price=limit_price`,
+    `stopLossOnFill`/`takeProfitOnFill` same as `place_market_order`.
+    `timeInForce`: use `"GTD"` with a `gtdTime` computed from
+    `config.LIMIT_ORDER_EXPIRY_CANDLES` × the primary timeframe (M30) —
+    lets OANDA enforce expiry server-side, which is *more* robust than
+    paper's client-side "missed N candles" counter (doesn't depend on our
+    bot being alive to expire it — directly relevant after this morning's
+    lesson about state drifting from broker reality while unwatched).
+    Returns the OANDA **orderID** (distinct from a tradeID — the order
+    hasn't filled yet).
+  - `cancel_order(order_id)` — `OrderCancel`.
+  - `get_pending_orders()` — `OrdersPending`, for the reconciliation poll
+    below.
+- [x] `trade/trade_manager.py`:
+  - Add `self.pending_orders: dict[str, dict]` (mirrors `open_trades`'
+    shape), included in `_save_state()`/`_load_state()` — schema addition
+    to `data/live_state_forex.json`, backward-compatible (`.get(...,  {})`
+    on load for files saved before this change).
+  - `open_limit_order(signal, limit_price)` — calls
+    `connector.place_limit_order(...)`, stores the pending record keyed by
+    orderID.
+  - `cancel_limit_order(order_id)` — calls `connector.cancel_order`,
+    removes local record.
+  - `reconcile_pending_orders()` — polls `connector.get_pending_orders()`
+    each cycle; any local pending order no longer listed there has either
+    filled or expired — check `connector.get_open_trades()` to tell which,
+    and promote to `open_trades` (fill) or drop (expiry/cancel) accordingly.
+- [x] `main.py`: call `_trade_manager_fx.reconcile_pending_orders()` from
+  inside `_tick_live_trades()` (now correctly running every 30 min after
+  today's dedup fix — a pending-order fill sitting undetected for hours
+  is exactly the CHF_JPY failure mode from this morning, applied to a new
+  code path). Also: `_sync_live_state()` (main.py:817-827) currently only
+  pushes `open_trades`/`closed_trades` into dashboard state — needs
+  `pending_orders=...` added too, or a filled/pending real order simply
+  won't render in the Pending Trades panel regardless of everything else
+  working. Confirmed `pending_orders_panel()` itself needs no changes —
+  it already reads a plain dict list generically, not paper-specific.
+- [x] `dashboard/app.py`:
+  - `confirm_order`'s limit branch: replace today's rejection message with
+    a real call to `tm.open_limit_order(...)`.
+  - `cancel_pending_order` callback: same `tm`/`pt` routing pattern as the
+    close/edit fixes earlier today (currently hard-paper-only, hits the
+    same "if not pt: return no_update" gap).
+  - Pending Trades panel: confirm it already reads `state["pending_orders"]`
+    generically (not paper-specific) — likely yes already, given it renders
+    from a plain list today, but verify rather than assume.
+- [x] Tests: new coverage in `tests/test_trade.py` for
+  `TradeManager.open_limit_order`/`cancel_limit_order`/
+  `reconcile_pending_orders` (fill case, expiry case, cancel-before-fill
+  case), using the existing `MockForexConnector` pattern.
+- [x] Full test suite — confirm zero regressions (237 passing today).
+
+## Review
+
+**What changed**: `connectors/oanda_connector.py` gained `place_limit_order()`
+(OANDA `LIMIT` order, `GTD` expiry so the broker itself enforces the window
+rather than depending on our process being alive to cancel it —
+`config.LIMIT_ORDER_EXPIRY_CANDLES × 30min`, same 8-candle/4h default as
+paper, unchanged per no objection raised), `cancel_order()`, and
+`get_pending_orders()`. `trade/trade_manager.py` gained a `pending_orders`
+dict (persisted, backward-compatible load for pre-existing state files),
+`open_limit_order()` (same validation/sizing as `open_trade()`, plus a
+pending-pair duplicate check `open_trade()` itself doesn't need since it
+has no pending concept), `cancel_limit_order()`, and
+`reconcile_pending_orders()` — polls the broker each tick; anything no
+longer pending gets matched against `get_open_trades()` by
+instrument+direction (broker order IDs and trade IDs aren't the same
+sequence) and either promoted to `open_trades` or dropped as
+expired/cancelled. `main.py` wires the reconcile call into
+`_tick_live_trades()` (runs every 30 min, same cadence as everything else
+post-dedup-fix) and adds `pending_orders` to `_sync_live_state()`.
+`dashboard/app.py`: the quick-trade Limit branch now calls
+`tm.open_limit_order()` instead of rejecting; `cancel_pending_order`
+routes to whichever manager (paper or real) actually holds the order,
+same pattern as today's earlier close/edit fixes.
+
+**Verification**: 10 new tests covering open/reject-low-score/
+reject-duplicate-pending-pair/cancel/cancel-not-found/still-pending-no-op/
+promote-on-fill/drop-on-expiry/persistence-across-restart/backward-compat-
+load-of-old-state-files-with-no-pending_orders-key. Full suite: 247/247
+passing (237 prior + 10 new), zero regressions.
+
+**Follow-up same day**: user tested this and hit a real bug — a Limit order
+placed via One-Click Buy/Sell filled immediately as a MARKET order instead.
+Root cause was unrelated to the new backend: `set_order_form` (BUY/SELL
+click handler, `dashboard/app.py`) rebuilt `order-form-store`'s data from
+scratch as `{"direction", "pair"}` on every click, silently discarding
+whatever `order_type` the Market/Limit toggle had previously set — so
+selecting Limit and then re-clicking BUY/SELL (to refresh price, switch
+direction, etc.) reverted to market with no visual indication. Fixed by
+merging into existing store data instead of replacing it, and — since the
+toggle buttons/limit-row visibility weren't restored either — added that
+sync to `populate_order_form()` too, so the UI can no longer visually show
+"Market" while a preserved `order_type: "limit"` would actually submit as
+limit (or vice versa). Verified via `dashboard.app` import (Dash validates
+duplicate-Output declarations at callback-registration time, not just
+Python syntax — required adding `allow_duplicate=True` to
+`toggle_order_type`'s outputs once `populate_order_form` also started
+writing to them).
+
+Also built `TradeManager.modify_pending_order()` (was flagged as
+deliberately out of scope, then requested same day). Real limit orders
+can't be edited in place on OANDA — this cancels the existing broker order
+and places a new one with the merged parameters, returning the NEW
+order_id (unlike `PaperTrader`'s in-place bool-returning version) since
+callers must re-key whatever they were tracking the old id under. Dashboard's
+`confirm_edit_pending` now routes to whichever manager holds the order and
+handles both return conventions.
+
+**Verification**: 13 new tests total (10 from the initial build + 3 for
+modify_pending_order: new-id-returned, partial-update-preserves-other-
+fields, not-found). Full suite: 250/250 passing, zero regressions.
+
+**Requires a live process restart** to take effect, same as every other
+fix today — `TradeManager`/`main.py`/dashboard callbacks are loaded at
+process start.
+
+## Open design questions before starting (need your call)
+- **Expiry window**: paper defaults to 4 missed candles (~2h on M30).  Same
+  default OK for real orders, or different for demo/live specifically?
+- **Reconciliation cadence**: tied to the 30-min candle-close cycle (same
+  as everything else, simplest, consistent with today's dedup fix) — or
+  does a limit order's fill need to be noticed faster than that? Real
+  broker-side SL/TP already don't need this (broker enforces them
+  instantly regardless of our poll rate) — a filled limit order becoming
+  an open trade is the thing that would sit undetected between polls.

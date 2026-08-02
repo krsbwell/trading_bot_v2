@@ -43,7 +43,16 @@ STRATEGY_OVERRIDE = {
                                      # GBP_CAD was ALSO tested under breakout-retest and showed a
                                      # persistent, worsening conflict (PF 0.44, -$42.79 at 4999 bars)
                                      # — deliberately stays on EMA-bounce, not an oversight.
+    # XAU_USD/"gold_trend" removed 2026-08-01 — shelved, see tasks/todo.md.
+    # engine/strategy_gold_trend.py and its STRATEGY_FNS entry are left in
+    # place (unused, harmless) in case gold is revisited later.
 }
+
+# Stop-loss method for strategy_gold_trend.py — "dynamic" (behind the 50 EMA
+# pullback level, ATR fallback) or "swing" (behind the previous calendar
+# week's high/low). Neither is validated yet; backtest both before trusting
+# this default. See engine/strategy_gold_trend.get_stop_loss docstring.
+GOLD_STOP_METHOD = "dynamic"
 
 # Pairs under monitoring — signals shown, NO trades opened. Only pairs with
 # POSITIVE backtested PnL belong here; a losing pair isn't worth watching.
@@ -127,6 +136,31 @@ LIMIT_ORDER_EXPIRY_CANDLES = 8      # Cancel unfilled limit orders after N candl
 ATR_MIN_PIPS = 5     # Skip signals when market is too quiet (ATR < 5 pips)
 ATR_MAX_PIPS = 35    # Skip signals during extreme volatility (ATR > 35 pips)
 
+# Per-pair override — the two constants above assume FX-scale pip sizes
+# (0.0001, or 0.01 for JPY). XAU_USD's pip is also 0.01 (see _get_pip in the
+# strategy modules) but gold's price moves are ~$10-20 per H1 bar, i.e.
+# ~1000+ "pips" — the global 5-35 bound would permanently trip ATR_TOO_HIGH
+# and block every gold signal forever. Placeholder below is grounded in one
+# real 200-bar H1 sample fetched 2026-08-01 (ATR range $11.40-$23.22, median
+# $14.50 -> ~1140-2320 pips, median ~1450), NOT a validated range from a full
+# backtest — retune once engine/strategy_gold_trend.py has real backtest data.
+ATR_MIN_PIPS_PER_PAIR: dict = {
+    "XAU_USD": 200,    # ~$2 floor — skip only truly dead/holiday markets
+}
+ATR_MAX_PIPS_PER_PAIR: dict = {
+    "XAU_USD": 4000,   # ~$40 — above the observed sample max, room for news spikes
+}
+
+
+def atr_min_pips_for(pair: str) -> float:
+    """Resolve ATR_MIN_PIPS for a pair — ATR_MIN_PIPS_PER_PAIR wins if set."""
+    return ATR_MIN_PIPS_PER_PAIR.get(pair, ATR_MIN_PIPS)
+
+
+def atr_max_pips_for(pair: str) -> float:
+    """Resolve ATR_MAX_PIPS for a pair — ATR_MAX_PIPS_PER_PAIR wins if set."""
+    return ATR_MAX_PIPS_PER_PAIR.get(pair, ATR_MAX_PIPS)
+
 # ── ADX regime gate ───────────────────────────────────────────────────────────
 # ADX(14) measures trend strength (not direction). EMA-bounce is mean-reversion
 # and only works when the market is ranging. When ADX > threshold the market is
@@ -206,6 +240,18 @@ def h4_gate_blocking_for(pair: str) -> bool:
 
 # ── Minimum SL distance ───────────────────────────────────────────────────────
 MIN_SL_PIPS = 25    # Minimum SL distance in pips — 25 validated by backtest (20 caught H1 noise)
+
+# Per-pair override — same reasoning as ATR_MIN/MAX_PIPS_PER_PAIR above: the
+# global 25-pip floor is $0.25 at gold's 0.01 pip size, meaningless next to
+# gold's real volatility. Placeholder pending backtest tuning, not validated.
+MIN_SL_PIPS_PER_PAIR: dict = {
+    "XAU_USD": 300,   # ~$3
+}
+
+
+def min_sl_pips_for(pair: str) -> float:
+    """Resolve MIN_SL_PIPS for a pair — MIN_SL_PIPS_PER_PAIR wins if set."""
+    return MIN_SL_PIPS_PER_PAIR.get(pair, MIN_SL_PIPS)
 
 # ── Breakeven buffer ──────────────────────────────────────────────────────────
 # After TP1 is hit, SL moves to entry + this many pips in profit direction.

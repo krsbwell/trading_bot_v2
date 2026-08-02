@@ -26,6 +26,7 @@ from engine.strategy_ema_cci_macd import (
 )
 from engine.strategy_breakout_retest import clear_cache as _clear_breakout_cache
 from engine.strategy_trend_follow import clear_cache as _clear_trend_cache
+from engine.strategy_gold_trend import clear_cache as _clear_gold_cache
 from engine.strategy_market_structure import (
     detect_pivots, classify_structure, detect_bos_choch, get_sr_zones, score_structure,
 )
@@ -134,7 +135,7 @@ def _bt_sig_features(
         _macd = 0.0
     try:
         _atr_v = float(_atr_fn(slice_h1["high"], slice_h1["low"], slice_h1["close"]).iloc[-1])
-        _pip   = 0.01 if "JPY" in pair else 0.0001
+        _pip   = 0.01 if ("JPY" in pair or "XAU" in pair) else 0.0001
         _atr_p = _atr_v / _pip
     except Exception:
         _atr_p = 0.0
@@ -259,6 +260,7 @@ def run_backtest(
     _clear_ema_cache()
     _clear_breakout_cache()
     _clear_trend_cache()
+    _clear_gold_cache()
 
     if len(df_h1) < _WARMUP + 50 or len(df_h4) < 50:
         logger.warning("Backtest %s: insufficient data (%d primary, %d confirm)", pair, len(df_h1), len(df_h4))
@@ -354,10 +356,17 @@ def run_backtest(
         if final_score < min_score:
             continue
 
-        # Session filter: skip trades outside London/NY overlap (07:00–21:00 UTC)
-        bar_hour = bar_time.hour if hasattr(bar_time, 'hour') else 12
-        if not (config.SESSION_START_UTC <= bar_hour < config.SESSION_END_UTC):
-            continue
+        # Session filter: skip trades outside London/NY overlap (07:00–21:00 UTC).
+        # Intraday bars only — Daily+ candles are timestamped at the broker's
+        # daily close (OANDA: 21:00 UTC), outside every FX session window by
+        # construction, which would zero out 100% of Daily/Weekly backtests
+        # regardless of the strategy's own decision (found 2026-08-01 testing
+        # strategy_gold_trend.py at Daily — same fix applied inside that
+        # module's own session gate, this is a second, independent copy).
+        if len(slice_h1) < 2 or (slice_h1.index[-1] - slice_h1.index[-2]) < pd.Timedelta(hours=20):
+            bar_hour = bar_time.hour if hasattr(bar_time, 'hour') else 12
+            if not (config.SESSION_START_UTC <= bar_hour < config.SESSION_END_UTC):
+                continue
 
         # Place simulated trade
         stop_loss = stop_loss_fn(pair, slice_h1, direction)
@@ -589,10 +598,18 @@ if __name__ == "__main__":
     parser.add_argument("--balance", type=float, default=500.0)
     parser.add_argument("--output",  default="data/backtest_results.csv")
     parser.add_argument("--strategy", default="ema_bounce",
-                        choices=["ema_bounce", "trend_follow", "breakout_retest"],
+                        choices=["ema_bounce", "trend_follow", "breakout_retest", "gold_trend"],
                         help="ema_bounce (default, ranging-market mean-reversion), "
-                             "trend_follow (fires only when ADX > threshold), or "
-                             "breakout_retest (break of structure + retest confirmation)")
+                             "trend_follow (fires only when ADX > threshold), "
+                             "breakout_retest (break of structure + retest confirmation), or "
+                             "gold_trend (XAU_USD 200/50 EMA + RSI pullback)")
+    parser.add_argument("--primary-tf", default=None,
+                        help="Override config.TIMEFRAMES['primary'] (e.g. 'D' for Daily). "
+                             "Needed to A/B a gold_trend backtest at Daily vs the bot's "
+                             "default M30/H4 cadence — see tasks/todo.md 2026-08-01.")
+    parser.add_argument("--confirm-tf", default=None,
+                        help="Override config.confirm_tf_for(pair) (e.g. 'W' for Weekly, "
+                             "pairing with --primary-tf D).")
     args = parser.parse_args()
 
     if args.strategy == "trend_follow":
@@ -602,15 +619,20 @@ if __name__ == "__main__":
         from engine.strategy_breakout_retest import (
             check_buy_signal as _buy_fn, check_sell_signal as _sell_fn, get_stop_loss as _sl_fn,
         )
+    elif args.strategy == "gold_trend":
+        from engine.strategy_gold_trend import (
+            check_buy_signal as _buy_fn, check_sell_signal as _sell_fn, get_stop_loss as _sl_fn,
+        )
     else:
         _buy_fn, _sell_fn, _sl_fn = check_buy_signal, check_sell_signal, get_stop_loss
 
     from connectors.oanda_connector import OandaConnector
     conn = OandaConnector()
 
-    primary   = config.TIMEFRAMES["primary"]
-    confirm   = config.confirm_tf_for(args.pair)
-    _cf_bars  = args.bars // confirm_tf_ratio(args.pair)
+    primary   = args.primary_tf or config.TIMEFRAMES["primary"]
+    confirm   = args.confirm_tf or config.confirm_tf_for(args.pair)
+    _ratio    = max(1, _TF_MINUTES.get(confirm, 240) // _TF_MINUTES.get(primary, 30))
+    _cf_bars  = max(50, args.bars // _ratio)
     logger.info("Fetching %d %s + %d %s bars for %s (strategy=%s) …",
                 args.bars, primary, _cf_bars, confirm, args.pair, args.strategy)
     df_h1 = conn.get_candles(args.pair, primary, args.bars)

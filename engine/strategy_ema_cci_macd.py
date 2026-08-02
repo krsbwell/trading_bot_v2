@@ -25,8 +25,9 @@ def get_last_diag(pair: str, direction: str) -> dict:
     return dict(_sell_diag.get(pair, {}))
 
 def _get_pip(pair: str) -> float:
-    """1 pip = 0.01 for JPY pairs, 0.0001 for all others."""
-    return 0.01 if "JPY" in pair.upper() else 0.0001
+    """1 pip = 0.01 for JPY pairs and XAU_USD (OANDA pipLocation -2), 0.0001 for all other FX pairs."""
+    p = pair.upper()
+    return 0.01 if ("JPY" in p or "XAU" in p) else 0.0001
 
 
 # ── EMA auto-fit ──────────────────────────────────────────────────────────────
@@ -380,7 +381,7 @@ def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
     mid_val   = float(ema(df_h1["close"], mid).iloc[-1])
     entry     = float(df_h1["close"].iloc[-1])
     pip       = _get_pip(pair)
-    min_pips  = config.MIN_SL_PIPS     # minimum SL distance in pips
+    min_pips  = config.min_sl_pips_for(pair)   # minimum SL distance in pips
     min_dist  = pip * min_pips
 
     if direction == "long":

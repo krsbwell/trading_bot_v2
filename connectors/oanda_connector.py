@@ -239,10 +239,16 @@ class OandaConnector:
     def _fmt(instrument: str, price: float) -> str:
         """
         Format a price for OANDA API submission.
-        JPY pairs need 3 decimal places; all others need 5.
-        Using wrong precision causes PRICE_PRECISION_EXCEEDED rejections.
+        XAU_USD needs 2 decimal places (OANDA displayPrecision=2), JPY pairs
+        need 3, all others need 5. Using wrong precision causes
+        PRICE_PRECISION_EXCEEDED rejections.
         """
-        decimals = 3 if "JPY" in instrument else 5
+        if "XAU" in instrument:
+            decimals = 2
+        elif "JPY" in instrument:
+            decimals = 3
+        else:
+            decimals = 5
         return f"{price:.{decimals}f}"
 
     # ── Open positions (for live reconciliation) ──────────────────────────────
