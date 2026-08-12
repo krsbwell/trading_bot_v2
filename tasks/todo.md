@@ -1,3 +1,111 @@
+# Fix: reconcile_open_trades() mislabels/mis-prices closes when TradeDetails 404s on a closed trade (2026-08-12) — DONE
+
+## Why
+User asked me to look at trade #77 (NZD_USD), which reconcile closed out
+this morning after the overnight reboot with `close_reason:
+unknown_broker_close`, exit 0.58682, pnl -$3.01. Pulled OANDA's real
+transaction log directly (`TransactionIDRange`) and found the true story:
+a completely normal stop-loss fill at 0.58583 (exact SL price) for
+realizedPL -$5.0224, at 2026-08-12T09:52:14Z — over an hour before the bot
+even restarted. `reconcile_open_trades()`'s primary path
+(`connector.get_trade_details()` → OANDA's `TradeDetails` endpoint) 404s
+with `NO_SUCH_TRADE` on this closed practice-account trade — reproduced
+directly, not a timing fluke — so the code fell into its
+`except Exception` fallback (`trade/trade_manager.py:797-812`), which has
+no way to know the real price/reason and guesses from a stale cached
+`last_price`, mislabeling a routine SL hit as `unknown_broker_close` and
+getting the PnL off by ~$2.
+
+Confirmed low current blast radius: only 1 of 16 `closed_trades` in
+`live_state_forex.json` currently carries `unknown_broker_close` (this
+one) — but the trigger (`TradeDetails` failing on a closed trade) will
+recur every time a trade closes while the bot is offline or otherwise
+misses the live candle check, which is exactly the scenario
+`reconcile_open_trades()` exists to catch (see its docstring, referencing
+the 2026-07-31 NZD_USD SL case).
+
+OANDA's transactions endpoint (`TransactionIDRange`/`TransactionsSinceID`)
+reliably returns the real closing fill (price, `realizedPL`, reason) for
+this same trade when `TradeDetails` won't — verified directly against the
+live account before writing any code.
+
+## Plan
+- [x] `connectors/oanda_connector.py`: add
+      `get_trade_close_from_transactions(trade_id, since_id=None)` —
+      queries `TransactionsSinceID` from the trade's own open transaction
+      ID (== trade_id in OANDA's ID scheme) forward, scans for the
+      `ORDER_FILL` whose `tradesClosed` includes this trade, returns
+      `{exit_price, realized_pl, close_reason}` (reason mapped from the
+      txn's `type`/`reason`: STOP_LOSS_ORDER→"sl",
+      TRAILING_STOP_LOSS_ORDER→"sl", TAKE_PROFIT_ORDER→"tp",
+      MARKET_ORDER_TRADE_CLOSE→"manual", MARGIN_CLOSEOUT→"margin_closeout",
+      else "unknown"). Returns `None` if nothing found (keeps the existing
+      last-resort fallback as a true last resort, not the common path).
+- [x] `trade/trade_manager.py::reconcile_open_trades()`: in the
+      `except Exception` branch (currently the only path, since
+      `TradeDetails` reliably fails here), try the new transactions-based
+      lookup before falling back to the blind `last_price` guess. Keep the
+      guess as the final fallback if the transaction scan also comes up
+      empty — never leave a phantom open trade unclosed.
+- [x] Correct trade #77's already-saved record in
+      `data/live_state_forex.json` using the real numbers pulled above
+      (exit 0.58583, realised_pnl -5.0224, close_reason "sl") — a one-time
+      data fix, not part of the code path.
+- [x] New test(s): 3 in `tests/test_trade.py` (TradeManager-level,
+      reproducing `TradeDetails` raising exactly like the real
+      `NO_SUCH_TRADE` case) + 4 in `tests/test_connectors.py` (connector-
+      level, exercising the real transaction-log parsing logic against a
+      trimmed copy of trade #77's actual OANDA payload).
+- [x] Full test suite green; report back with a review section here.
+
+## Review
+
+**What changed:**
+- `connectors/oanda_connector.py` — new `get_trade_close_from_transactions()`
+  method + a `_CLOSE_REASON_MAP` dict, using OANDA's `TransactionsSinceID`
+  endpoint (already-imported `oandapyV20.endpoints.transactions`, one new
+  top-level import). Pure read, no order-placement risk.
+- `trade/trade_manager.py::reconcile_open_trades()` — the `except Exception`
+  branch (where `TradeDetails` failures land) now tries the new method
+  before falling back to the old blind `last_price` guess. The guess path
+  is untouched and still runs if the transaction lookup also fails or
+  finds nothing — no trade can end up stuck as a permanent phantom.
+- `data/live_state_forex.json` — trade #77's saved record corrected to the
+  real broker numbers (exit 0.58583, realised_pnl -5.0224, close_reason
+  "sl"). One-time data fix, not a code path.
+- Tests: +2 in `tests/test_trade.py` (transaction-fallback success case;
+  transaction-fallback itself raising still finalizes safely), 1 existing
+  test's docstring/scope updated to reflect it's now the *second* fallback
+  layer, not the first. +4 in `tests/test_connectors.py`, all monkeypatching
+  `connector.client.request` directly rather than the whole connector —
+  these exercise the actual parsing logic (id matching, price/PnL
+  extraction, reason mapping, empty-result and request-failure cases)
+  against payload shapes trimmed from trade #77's real OANDA response, not
+  just the TradeManager-level contract.
+
+**Verification:** full suite 281/281 pass (275 prior + 6 new). `ast.parse`
+clean on all 4 changed/added-to files. Both the connector method and the
+reconcile fallback path are now covered independently — bug in either
+layer would be caught without relying on the other.
+
+**Security check:** no new credentials, no new outbound endpoint beyond
+what the connector already talks to (same OANDA account, read-only
+transaction history — `TransactionsSinceID` cannot place or modify orders).
+No sensitive data added to any frontend-facing code; this is backend
+trade-reconciliation logic only, same trust boundary as the rest of
+`trade_manager.py`.
+
+**Not done / explicitly out of scope:** did not change `_finalize_close()`
+to stamp the *real* broker close time (it still uses
+`datetime.now(timezone.utc)`, i.e. whenever reconcile happened to detect
+the gap) — kept consistent with every other reconciled trade already in
+this state file, which all follow that same pattern. Revisit only if
+close-time accuracy for reconciled trades becomes something that actually
+matters (e.g. for time-of-day performance analysis) — not needed for
+today's fix, which was about price/PnL/reason correctness.
+
+---
+
 # Fix: duplicate/max-open/cooldown gate was paper-mode-only — silently no-op in demo/live, explains "missed trades" (2026-08-12) — DONE
 
 ## Why

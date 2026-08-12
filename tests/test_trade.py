@@ -364,6 +364,14 @@ class MockForexConnector:
         # what "the broker says happened" to a trade that's no longer open.
         self.trade_details = {}
         self.trade_details_raises = set()   # trade_ids where the fetch itself fails
+        # get_trade_close_from_transactions() simulation — the fallback used
+        # when get_trade_details() raises (confirmed happening live: OANDA's
+        # TradeDetails 404s NO_SUCH_TRADE on a trade that's been closed for
+        # hours). Keyed by trade_id; None/absent means "nothing found".
+        self.tx_close_data = {}
+
+    def get_trade_close_from_transactions(self, trade_id):
+        return self.tx_close_data.get(trade_id)
 
     def place_market_order(self, instrument, units, sl_price, tp_prices):
         self._counter += 1
@@ -804,14 +812,55 @@ class TestTradeManagerReconcileOpenTrades:
         tm.reconcile_open_trades()
         assert tm.closed_trades[-1]["close_reason"] == "tp"
 
-    def test_detail_fetch_failure_still_finalizes_with_best_estimate(self):
-        """The trade is definitely gone broker-side either way — don't leave
-        a permanent phantom just because the follow-up detail fetch also failed."""
+    def test_detail_fetch_failure_falls_back_to_transaction_log(self):
+        """Real case, 2026-08-12: OANDA's TradeDetails 404'd NO_SUCH_TRADE
+        on a trade closed hours earlier by a normal SL fill (confirmed live
+        via the transaction log directly). Before guessing from a stale
+        price, reconcile must try get_trade_close_from_transactions() —
+        which has the real exit price/PnL/reason even when TradeDetails
+        won't serve them — and use that instead of a blind estimate."""
         conn = MockForexConnector()
         tm = TradeManager(conn, "forex", save_path=False)
         tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
         conn.broker_trades = []
         conn.trade_details_raises.add(tid)
+        conn.tx_close_data[tid] = {
+            "exit_price": 1.0780, "realized_pl": -40.0, "close_reason": "sl",
+        }
+        tm.reconcile_open_trades()
+        assert tid not in tm.open_trades
+        closed = tm.closed_trades[-1]
+        assert closed["close_reason"] == "sl"
+        assert closed["exit_price"] == 1.0780
+        assert closed["realised_pnl"] == -40.0
+
+    def test_detail_fetch_failure_still_finalizes_with_best_estimate(self):
+        """The trade is definitely gone broker-side either way — if the
+        transaction-log fallback also comes up empty, don't leave a
+        permanent phantom, fall back to a best-estimate guess."""
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
+        conn.broker_trades = []
+        conn.trade_details_raises.add(tid)
+        # tx_close_data left empty — transaction fallback also finds nothing.
+        tm.reconcile_open_trades()
+        assert tid not in tm.open_trades
+        assert tm.closed_trades[-1]["close_reason"] == "unknown_broker_close"
+
+    def test_transaction_fallback_itself_raising_still_finalizes_with_estimate(self):
+        """Belt and suspenders: if the transaction-log fallback call itself
+        raises (e.g. that request also times out), still finalize with the
+        best-estimate guess rather than propagate and leave a phantom."""
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
+        conn.broker_trades = []
+        conn.trade_details_raises.add(tid)
+
+        def _boom(trade_id):
+            raise RuntimeError("network error")
+        conn.get_trade_close_from_transactions = _boom
         tm.reconcile_open_trades()
         assert tid not in tm.open_trades
         assert tm.closed_trades[-1]["close_reason"] == "unknown_broker_close"

@@ -801,8 +801,33 @@ class TradeManager:
                     "reconcile_open_trades: could not fetch details for %s: %s",
                     trade_id, exc,
                 )
-                # Still gone broker-side either way — finalize with our
-                # best estimate rather than leave a permanent phantom.
+                # TradeDetails is confirmed unreliable for closed trades on
+                # this account (404 NO_SUCH_TRADE hours after a clean SL
+                # fill) — before falling back to a blind price guess, try
+                # the transaction log directly. It has the real exit price/
+                # PnL/reason even when TradeDetails won't serve them.
+                tx_close = None
+                try:
+                    tx_close = self.connector.get_trade_close_from_transactions(trade_id)
+                except Exception as tx_exc:
+                    logger.error(
+                        "reconcile_open_trades: transaction fallback also "
+                        "failed for %s: %s", trade_id, tx_exc,
+                    )
+                if tx_close:
+                    t["realised_pnl"] = t.get("realised_pnl", 0.0) + tx_close["realized_pl"]
+                    t["remaining"] = 0.0
+                    logger.info(
+                        "LIVE RECONCILED CLOSE  %s %s  reason=%s  exit=%.5f  pnl=%+.2f  id=%s "
+                        "(via transaction log — TradeDetails 404'd)",
+                        t["direction"].upper(), t["pair"], tx_close["close_reason"],
+                        tx_close["exit_price"], t["realised_pnl"], trade_id,
+                    )
+                    self._finalize_close(t, tx_close["exit_price"], tx_close["close_reason"])
+                    continue
+                # Still gone broker-side either way, and the transaction
+                # log had nothing either — finalize with our best estimate
+                # rather than leave a permanent phantom.
                 exit_price = t.get("last_price", t["entry"])
                 pnl = self._pnl(t["entry"], exit_price, t["direction"],
                                 t["size"] * t["remaining"], t.get("pair", ""))

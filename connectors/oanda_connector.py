@@ -5,6 +5,7 @@ import oandapyV20
 import oandapyV20.endpoints.instruments as instruments
 import oandapyV20.endpoints.orders as orders
 import oandapyV20.endpoints.trades as trades
+import oandapyV20.endpoints.transactions as transactions
 import oandapyV20.endpoints.accounts as accounts
 import oandapyV20.endpoints.pricing as oanda_pricing
 from oandapyV20.exceptions import V20Error
@@ -324,6 +325,53 @@ class OandaConnector:
             "realized_pl":      float(t.get("realizedPL", 0) or 0),
             "close_reason":     close_reason,
         }
+
+    _CLOSE_REASON_MAP = {
+        "STOP_LOSS_ORDER":          "sl",
+        "TRAILING_STOP_LOSS_ORDER": "sl",
+        "TAKE_PROFIT_ORDER":        "tp",
+        "MARKET_ORDER_TRADE_CLOSE": "manual",
+        "MARGIN_CLOSEOUT":          "margin_closeout",
+    }
+
+    def get_trade_close_from_transactions(self, trade_id: str) -> dict | None:
+        """
+        Fallback for get_trade_details() when OANDA's TradeDetails endpoint
+        fails to return a closed trade — confirmed happening on this
+        practice account (a trade closed for hours still 404s with
+        NO_SUCH_TRADE). The transaction log doesn't have that gap: OANDA
+        assigns the trade its ID from the opening ORDER_FILL transaction,
+        so scanning transactions from that ID forward for the ORDER_FILL
+        that lists this trade in tradesClosed gets the real exit price,
+        realized PnL, and close reason straight from the ground truth,
+        instead of reconcile_open_trades() guessing from a stale cached
+        price.
+
+        Returns None if no closing transaction is found (caller should
+        keep its own last-resort fallback for that case).
+        """
+        req = transactions.TransactionsSinceID(
+            accountID=self.account_id, params={"id": str(trade_id)},
+        )
+        try:
+            resp = self.client.request(req)
+        except V20Error as exc:
+            logger.error(
+                "get_trade_close_from_transactions failed — trade_id=%s: %s",
+                trade_id, exc,
+            )
+            return None
+
+        for txn in resp.get("transactions", []):
+            for closed in txn.get("tradesClosed", []):
+                if str(closed.get("tradeID")) != str(trade_id):
+                    continue
+                return {
+                    "exit_price":   float(txn.get("price") or txn.get("fullVWAP") or 0),
+                    "realized_pl":  float(closed.get("realizedPL", 0) or 0),
+                    "close_reason": self._CLOSE_REASON_MAP.get(txn.get("reason", ""), "unknown"),
+                }
+        return None
 
     # ── Orders ────────────────────────────────────────────────────────────────
 
