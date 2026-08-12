@@ -25849,3 +25849,1472 @@ MemoryError
 22:21:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
 22:21:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
 22:21:47  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:22:39 EDT)" executed successfully
+22:22:09  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:22:39 EDT)" (scheduled at 2026-08-11 22:22:09.522238-04:00)
+22:22:09  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:22:09  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:22:39 EDT)" executed successfully
+22:22:39  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:23:39 EDT)" (scheduled at 2026-08-11 22:22:39.521940-04:00)
+22:22:39  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:23:09 EDT)" (scheduled at 2026-08-11 22:22:39.522238-04:00)
+22:22:39  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:22:39  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:22:39  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:23:09 EDT)" executed successfully
+22:22:39  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:22:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:22:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:22:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:22:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:22:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:22:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:22:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:22:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:22:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:22:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:22:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:22:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:22:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:22:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:22:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:22:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:22:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:22:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:22:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:22:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:22:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:22:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:22:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:22:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:22:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:22:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:22:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:22:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:22:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:22:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:22:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:22:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:22:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:22:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:22:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:22:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:22:47  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:22:47  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:23:39 EDT)" executed successfully
+22:23:09  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:23:39 EDT)" (scheduled at 2026-08-11 22:23:09.522238-04:00)
+22:23:09  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:23:09  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:23:39 EDT)" executed successfully
+22:23:39  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:24:39 EDT)" (scheduled at 2026-08-11 22:23:39.521940-04:00)
+22:23:39  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:24:09 EDT)" (scheduled at 2026-08-11 22:23:39.522238-04:00)
+22:23:39  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:23:39  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_2  last stream tick=no ticks yet
+22:23:39  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:24:09 EDT)" executed successfully
+22:23:39  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:23:39  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:23:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:23:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:23:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:23:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:23:40  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:23:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:23:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:23:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:23:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:23:41  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:23:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:23:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:23:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:23:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:23:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:23:42  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:23:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:23:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:23:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:23:43  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:23:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:23:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:23:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:23:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:23:44  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:23:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:23:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:23:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:23:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:23:45  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:23:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:23:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:23:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:23:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:23:46  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:23:47  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:23:47  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:24:39 EDT)" executed successfully
+22:24:21  INFO      ══════════════════════════════════════════════════════
+22:24:21  INFO        Trading Bot  |  Mode: DEMO
+22:24:21  INFO        Forex pairs : NZD_USD, GBP_CAD, GBP_USD, CHF_JPY, EUR_JPY
+22:24:21  INFO      ══════════════════════════════════════════════════════
+22:24:21  INFO      setting up API-client for environment practice
+22:24:21  INFO      OandaConnector ready — env=practice  account=101-001-9445956-004
+22:24:21  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:24:21  INFO      ✓ Oanda  connected (practice)  last NZD_USD close=0.58723
+22:24:21  INFO      TradeManager._load_state: reading C:\Users\deeja.000\trading_bot_v2\data\live_state_forex.json — open=1  closed=15  pending=0
+22:24:21  INFO      TradeManager(forex) restored — open=1  closed=15  pending=0
+22:24:21  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/summary
+22:24:22  INFO      TradeManager(forex): open_trades=1  closed=15
+22:24:22  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/openTrades
+22:24:22  INFO      Reconcile OK — trade 77 found locally
+22:24:23  INFO      Dashboard: http://localhost:8050
+22:24:23  INFO      Dash is running on http://127.0.0.1:8050/
+
+22:24:23  INFO      Adding job tentatively -- it will be properly scheduled when the scheduler starts
+22:24:23  INFO      Adding job tentatively -- it will be properly scheduled when the scheduler starts
+22:24:23  INFO      Adding job tentatively -- it will be properly scheduled when the scheduler starts
+22:24:23  INFO      Adding job tentatively -- it will be properly scheduled when the scheduler starts
+22:24:23  INFO      Adding job tentatively -- it will be properly scheduled when the scheduler starts
+22:24:23  INFO      Adding job tentatively -- it will be properly scheduled when the scheduler starts
+22:24:23  INFO      WFO weekly re-fit scheduled — Sundays 02:00 UTC
+22:24:23  INFO      Scheduler ready — M30 close on :00/:30, diagnostics at :10/:20/:40/:50, live feed every 60s
+22:24:23  INFO      Press Ctrl+C to stop.
+
+22:24:23  INFO      ── Candle close 2026-08-12 02:24 UTC ──────────────────────────────────────────
+22:24:23  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/summary
+22:24:23  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/openTrades
+22:24:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:24:23  INFO        Scanning 5 trade pairs + 8 watch pairs …
+22:24:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:24:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:24:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:24:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:24:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:24:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:24:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:24:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:24:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:24:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:24:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:24:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:24:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:24:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:24:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:24:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:24:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:24:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:24:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:24:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:24:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:24:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:24:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:24:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:24:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:24:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:24:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:24:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:24:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:24:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:24:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:24:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:24:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:24:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:24:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:24:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:24:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:24:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:24:30  WARNING   ForexFactory fetch failed (https://nfs.faireconomy.media/ff_calendar_nextweek.xml): HTTP Error 404: Not Found
+22:24:30  INFO      ForexFactory: fetched 71 events
+22:24:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:24:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:24:30  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:30  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:30  INFO        No qualifying signals this candle (all scores 0)
+22:24:30  INFO      PatternLearner: retraining…
+22:24:32  INFO      PatternLearner: XGBoost trained on 151 samples  features=18  AUC=0.588±0.103  pos_weight=1.3
+22:24:32  INFO      Added job "on_candle_close" to job store "default"
+22:24:32  INFO      Added job "_diagnostic_scan" to job store "default"
+22:24:32  INFO      Added job "_live_diagnostic_scan" to job store "default"
+22:24:32  INFO      Added job "main.<locals>._scheduler_heartbeat" to job store "default"
+22:24:32  INFO      Added job "main.<locals>._shadow_outcomes_job" to job store "default"
+22:24:32  INFO      Added job "main.<locals>._wfo_job" to job store "default"
+22:24:32  INFO      Scheduler started
+22:24:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:51  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:24:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:25:23 EDT)" (scheduled at 2026-08-11 22:24:53.158285-04:00)
+22:24:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:24:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:25:23 EDT)" executed successfully
+22:25:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:26:23 EDT)" (scheduled at 2026-08-11 22:25:23.158063-04:00)
+22:25:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:25:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:25:53 EDT)" (scheduled at 2026-08-11 22:25:23.158285-04:00)
+22:25:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:25:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:25:53 EDT)" executed successfully
+22:25:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:25:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:25:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:25:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:25:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:25:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:25:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:25:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:25:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:25:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:25:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:25:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:25:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:25:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:25:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:25:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:25:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:25:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:25:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:25:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:25:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:25:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:25:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:25:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:25:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:25:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:25:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:25:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:25:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:25:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:25:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:25:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:25:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:25:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:25:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:25:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:25:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:25:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:25:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:25:30  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:26:23 EDT)" executed successfully
+22:25:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:52  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:52  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:26:23 EDT)" (scheduled at 2026-08-11 22:25:53.158285-04:00)
+22:25:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:25:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:26:23 EDT)" executed successfully
+22:25:59  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:25:59  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:06  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:06  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:26:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:13  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:19  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:19  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:27:23 EDT)" (scheduled at 2026-08-11 22:26:23.158063-04:00)
+22:26:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:26:53 EDT)" (scheduled at 2026-08-11 22:26:23.158285-04:00)
+22:26:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:26:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:26:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:26:53 EDT)" executed successfully
+22:26:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:26:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:26:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:26:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:26:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:26:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:26:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:26:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:26:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:26:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:26:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:26:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:26:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:26:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:26:26  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:26  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:26:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:26:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:26:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:26:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:26:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:26:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:26:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:26:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:26:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:26:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:26:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:26:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:26:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:26:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:26:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:26:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:26:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:26:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:26:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:26:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:26:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:26:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:26:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:26:31  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:27:23 EDT)" executed successfully
+22:26:32  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:32  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:26:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:27:23 EDT)" (scheduled at 2026-08-11 22:26:53.158285-04:00)
+22:26:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:26:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:27:23 EDT)" executed successfully
+22:27:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:28:23 EDT)" (scheduled at 2026-08-11 22:27:23.158063-04:00)
+22:27:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:27:53 EDT)" (scheduled at 2026-08-11 22:27:23.158285-04:00)
+22:27:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:27:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:27:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:27:53 EDT)" executed successfully
+22:27:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:27:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:27:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:27:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:27:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:27:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:27:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:27:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:27:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:27:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:27:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:27:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:27:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:27:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:27:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:27:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:27:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:27:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:27:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:27:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:27:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:27:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:27:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:27:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:27:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:27:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:27:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:27:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:27:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:27:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:27:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:27:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:27:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:27:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:27:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:27:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:27:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:27:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:27:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:27:31  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:28:23 EDT)" executed successfully
+22:27:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:28:23 EDT)" (scheduled at 2026-08-11 22:27:53.158285-04:00)
+22:27:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:27:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:28:23 EDT)" executed successfully
+22:27:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:27:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:28:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:10  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:10  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:15  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:15  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:29:23 EDT)" (scheduled at 2026-08-11 22:28:23.158063-04:00)
+22:28:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:28:53 EDT)" (scheduled at 2026-08-11 22:28:23.158285-04:00)
+22:28:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:28:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:28:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:28:53 EDT)" executed successfully
+22:28:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:28:23  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:23  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:28:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:28:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:28:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:28:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:28:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:28:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:28:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:28:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:28:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:28:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:28:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:28:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:28:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:28:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:28:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:28:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:28:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:28:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:28:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:28:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:28:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:28:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:28:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:28:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:28:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:28:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:28:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:28:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:28:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:28:29  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:28:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:28:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:28:29  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:28:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:28:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:28:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:28:30  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:29:23 EDT)" executed successfully
+22:28:34  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:41  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:41  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:49  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:49  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:29:23 EDT)" (scheduled at 2026-08-11 22:28:53.158285-04:00)
+22:28:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:28:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:29:23 EDT)" executed successfully
+22:28:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:28:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:01  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:01  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:29:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:19  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:20  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:30:23 EDT)" (scheduled at 2026-08-11 22:29:23.158063-04:00)
+22:29:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:29:53 EDT)" (scheduled at 2026-08-11 22:29:23.158285-04:00)
+22:29:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:29:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:29:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:29:53 EDT)" executed successfully
+22:29:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:29:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:29:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:29:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:29:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:29:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:29:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:29:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:29:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:29:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:29:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:29:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:29:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:29:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:29:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:29:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:29:26  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:29:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:29:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:29:26  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:29:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:29:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:29:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:29:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:29:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:29:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:29:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:29:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:29:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:29:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:29:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:29:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:29:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:29:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:29:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:29:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:29:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:29:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:29:30  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:30:23 EDT)" executed successfully
+22:29:34  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:34  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:46  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:46  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:30:23 EDT)" (scheduled at 2026-08-11 22:29:53.158285-04:00)
+22:29:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:29:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:30:23 EDT)" executed successfully
+22:29:54  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:29:54  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:00  INFO      Running job "on_candle_close (trigger: cron[minute='0,30'], next run at: 2026-08-11 23:00:00 EDT)" (scheduled at 2026-08-11 22:30:00-04:00)
+22:30:00  INFO      ── Candle close 2026-08-12 02:30 UTC ──────────────────────────────────────────
+22:30:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/summary
+22:30:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/openTrades
+22:30:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:30:00  INFO        Scanning 5 trade pairs + 8 watch pairs …
+22:30:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:30:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:30:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:30:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:30:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:30:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:30:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:30:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:30:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:30:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:30:03  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:30:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:30:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:30:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:30:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:30:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:30:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:30:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:30:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:30:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:30:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:30:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:30:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:30:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:30:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:30:08  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:08  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:08  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:30:09  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:30:09  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:30:09  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:30:09  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:30:10  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:30:10  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:30:10  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:30:11  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:30:11  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:30:11  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:30:12  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:30:12  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:30:13  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:30:14  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:30:14  INFO        No qualifying signals this candle (all scores 0)
+22:30:14  INFO      Job "on_candle_close (trigger: cron[minute='0,30'], next run at: 2026-08-11 23:00:00 EDT)" executed successfully
+22:30:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:31:23 EDT)" (scheduled at 2026-08-11 22:30:23.158063-04:00)
+22:30:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:30:53 EDT)" (scheduled at 2026-08-11 22:30:23.158285-04:00)
+22:30:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:30:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:30:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:30:53 EDT)" executed successfully
+22:30:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:30:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:30:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:30:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:30:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:30:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:30:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:30:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:30:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:30:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:30:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:30:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:30:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:30:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:30:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:30:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:30:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:30:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:30:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:30:33  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:30:33  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:30:33  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:30:34  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:30:34  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:30:35  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:30:36  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:30:37  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:30:37  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:30:37  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:30:37  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:30:38  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:30:38  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:30:38  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:30:38  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:30:38  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:30:38  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:30:39  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:30:39  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:30:39  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:31:23 EDT)" executed successfully
+22:30:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:30:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:31:23 EDT)" (scheduled at 2026-08-11 22:30:53.158285-04:00)
+22:30:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:30:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:31:23 EDT)" executed successfully
+22:31:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:32:23 EDT)" (scheduled at 2026-08-11 22:31:23.158063-04:00)
+22:31:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:31:53 EDT)" (scheduled at 2026-08-11 22:31:23.158285-04:00)
+22:31:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:31:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:31:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:31:53 EDT)" executed successfully
+22:31:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:31:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:31:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:31:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:31:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:31:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:31:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:31:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:31:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:31:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:31:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:31:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:31:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:31:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:31:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:31:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:31:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:31:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:31:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:31:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:31:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:31:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:31:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:31:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:31:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:31:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:31:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:31:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:31:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:31:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:31:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:31:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:31:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:31:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:31:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:31:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:31:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:31:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:31:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:31:30  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:32:23 EDT)" executed successfully
+22:31:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:32:23 EDT)" (scheduled at 2026-08-11 22:31:53.158285-04:00)
+22:31:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:31:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:32:23 EDT)" executed successfully
+22:31:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:31:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:32:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:15  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:15  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:21  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:21  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:33:23 EDT)" (scheduled at 2026-08-11 22:32:23.158063-04:00)
+22:32:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:32:53 EDT)" (scheduled at 2026-08-11 22:32:23.158285-04:00)
+22:32:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:32:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:32:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:32:53 EDT)" executed successfully
+22:32:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:32:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:32:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:32:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:32:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:32:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:32:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:32:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:32:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:32:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:32:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:32:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:32:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:32:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:32:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:32:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:32:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:32:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:32:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:32:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:32:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:32:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:32:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:32:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:32:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:32:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:32:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:32:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:32:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:32:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:32:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:32:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:32:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:32:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:32:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:32:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:32:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:32:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:32:30  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:33:23 EDT)" executed successfully
+22:32:32  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:32  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:51  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:33:23 EDT)" (scheduled at 2026-08-11 22:32:53.158285-04:00)
+22:32:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:32:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:33:23 EDT)" executed successfully
+22:32:59  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:32:59  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:06  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:33:06  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:14  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:14  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:34:23 EDT)" (scheduled at 2026-08-11 22:33:23.158063-04:00)
+22:33:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:33:53 EDT)" (scheduled at 2026-08-11 22:33:23.158285-04:00)
+22:33:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:33:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:33:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:33:53 EDT)" executed successfully
+22:33:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:33:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:33:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:33:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:33:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:33:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:33:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:33:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:33:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:33:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:33:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:33:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:33:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:33:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:33:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:33:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:33:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:33:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:33:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:33:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:33:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:33:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:33:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:33:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:33:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:33:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:33:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:33:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:33:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:33:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:33:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:33:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:33:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:33:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:33:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:33:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:33:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:33:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:33:29  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:34:23 EDT)" executed successfully
+22:33:30  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:30  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:43  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:43  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:34:23 EDT)" (scheduled at 2026-08-11 22:33:53.158285-04:00)
+22:33:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:33:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:34:23 EDT)" executed successfully
+22:33:56  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:33:56  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:34:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:19  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:19  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:35:23 EDT)" (scheduled at 2026-08-11 22:34:23.158063-04:00)
+22:34:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:34:53 EDT)" (scheduled at 2026-08-11 22:34:23.158285-04:00)
+22:34:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:34:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:34:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:34:53 EDT)" executed successfully
+22:34:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:34:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:34:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:34:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:34:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:34:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:34:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:34:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:34:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:34:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:34:24  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:34:25  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:34:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:34:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:34:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:34:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:34:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:34:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:34:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:34:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:34:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:34:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:34:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:34:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:34:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:34:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:34:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:34:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:34:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:34:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:34:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:34:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:34:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:34:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:34:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:34:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:34:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:34:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:34:30  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:35:23 EDT)" executed successfully
+22:34:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:44  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:35:23 EDT)" (scheduled at 2026-08-11 22:34:53.158285-04:00)
+22:34:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:34:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:35:23 EDT)" executed successfully
+22:34:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:34:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:01  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:01  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:35:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:36:23 EDT)" (scheduled at 2026-08-11 22:35:23.158063-04:00)
+22:35:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:35:53 EDT)" (scheduled at 2026-08-11 22:35:23.158285-04:00)
+22:35:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:35:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:35:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:35:53 EDT)" executed successfully
+22:35:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:35:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:35:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:35:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:35:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:35:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:35:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:35:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:35:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:35:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:35:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:35:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:35:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:35:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:35:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:35:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:35:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:35:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:35:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:35:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:35:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:35:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:35:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:35:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:35:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:35:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:35:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:35:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:35:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:35:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:35:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:35:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:35:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:35:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:35:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:35:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:35:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:35:30  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:35:30  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:31  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:36:23 EDT)" executed successfully
+22:35:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:48  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:48  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:36:23 EDT)" (scheduled at 2026-08-11 22:35:53.158285-04:00)
+22:35:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:35:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:36:23 EDT)" executed successfully
+22:35:54  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:35:54  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:06  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:06  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:36:13  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:13  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:20  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:20  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:37:23 EDT)" (scheduled at 2026-08-11 22:36:23.158063-04:00)
+22:36:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:36:53 EDT)" (scheduled at 2026-08-11 22:36:23.158285-04:00)
+22:36:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:36:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:36:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:36:53 EDT)" executed successfully
+22:36:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:36:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:36:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:36:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:36:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:36:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:36:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:36:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:36:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:36:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:36:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:36:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:36:25  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:36:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:36:25  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:36:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:36:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:36:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:36:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:36:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:36:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:36:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:36:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:36:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:36:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:36:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:36:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:36:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:36:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:36:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:36:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:36:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:36:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:36:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:36:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:36:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:36:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:36:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:36:30  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:37:23 EDT)" executed successfully
+22:36:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:51  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:37:23 EDT)" (scheduled at 2026-08-11 22:36:53.158285-04:00)
+22:36:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:36:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:37:23 EDT)" executed successfully
+22:36:56  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:36:56  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:37:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:19  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:19  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:38:23 EDT)" (scheduled at 2026-08-11 22:37:23.158063-04:00)
+22:37:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:37:53 EDT)" (scheduled at 2026-08-11 22:37:23.158285-04:00)
+22:37:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:37:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:37:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:37:53 EDT)" executed successfully
+22:37:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:37:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:37:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:37:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:37:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:37:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:37:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:37:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:37:24  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:37:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:37:25  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:37:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:37:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:37:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:37:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:37:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:37:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:37:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:37:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:37:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:37:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:37:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:37:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:37:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:37:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:37:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:37:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:37:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:37:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:37:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:37:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:37:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:37:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:37:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:37:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:37:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:37:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:37:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:37:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:37:30  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:38:23 EDT)" executed successfully
+22:37:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:38:23 EDT)" (scheduled at 2026-08-11 22:37:53.158285-04:00)
+22:37:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:37:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:38:23 EDT)" executed successfully
+22:38:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:39:23 EDT)" (scheduled at 2026-08-11 22:38:23.158063-04:00)
+22:38:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:38:53 EDT)" (scheduled at 2026-08-11 22:38:23.158285-04:00)
+22:38:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:38:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:38:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:38:53 EDT)" executed successfully
+22:38:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:38:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:38:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:38:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:38:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:38:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:38:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:38:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:38:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:38:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:38:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:38:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:38:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:38:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:38:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:38:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:38:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:38:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:38:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:38:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:38:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:38:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:38:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:38:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:38:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:38:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:38:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:38:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:38:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:38:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:38:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:38:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:38:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:38:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:38:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:38:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:38:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:38:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:38:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:38:31  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:39:23 EDT)" executed successfully
+22:38:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:39:23 EDT)" (scheduled at 2026-08-11 22:38:53.158285-04:00)
+22:38:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:38:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:39:23 EDT)" executed successfully
+22:38:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:38:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:39:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:05  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:10  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:10  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:15  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:15  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:20  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:20  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:40:23 EDT)" (scheduled at 2026-08-11 22:39:23.158063-04:00)
+22:39:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:39:53 EDT)" (scheduled at 2026-08-11 22:39:23.158285-04:00)
+22:39:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:39:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:39:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:39:53 EDT)" executed successfully
+22:39:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:39:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:39:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:39:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:39:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:39:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:39:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:39:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:39:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:39:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:39:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:39:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:39:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:39:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:39:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:39:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:39:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:39:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:39:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:39:27  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:27  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:39:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:39:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:39:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:39:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:39:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:39:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:39:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:39:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:39:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:39:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:39:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:39:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:39:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:39:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:39:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:39:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:39:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:39:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:39:31  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:40:23 EDT)" executed successfully
+22:39:33  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:33  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:39  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:46  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:46  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:40:23 EDT)" (scheduled at 2026-08-11 22:39:53.158285-04:00)
+22:39:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_0  last stream tick=no ticks yet
+22:39:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:40:23 EDT)" executed successfully
+22:39:54  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:39:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:00  INFO      Running job "_diagnostic_scan (trigger: cron[minute='10,20,40,50'], next run at: 2026-08-11 22:50:00 EDT)" (scheduled at 2026-08-11 22:40:00-04:00)
+22:40:00  INFO      Diagnostic scan 02:40 UTC
+22:40:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:40:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:40:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:40:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:40:00  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:40:00  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:40:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:40:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:40:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:40:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:40:01  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:40:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:40:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:40:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:40:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:40:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:40:02  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:40:03  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:40:03  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:40:03  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:40:03  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:40:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:40:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:40:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:40:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:40:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:40:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:40:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:40:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:40:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:40:05  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:40:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:40:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:40:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:40:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:40:06  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:40:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:40:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:40:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:40:07  INFO      Job "_diagnostic_scan (trigger: cron[minute='10,20,40,50'], next run at: 2026-08-11 22:50:00 EDT)" executed successfully
+22:40:08  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:08  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:08  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:40:15  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:15  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:21  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:21  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:41:23 EDT)" (scheduled at 2026-08-11 22:40:23.158063-04:00)
+22:40:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:40:53 EDT)" (scheduled at 2026-08-11 22:40:23.158285-04:00)
+22:40:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:40:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:40:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:40:53 EDT)" executed successfully
+22:40:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:40:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:40:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:40:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:40:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:40:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:40:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:40:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:40:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:40:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:40:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:40:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:40:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:40:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:40:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:40:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:40:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:40:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:40:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:40:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:40:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:40:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:40:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:40:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:40:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:40:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:40:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:40:30  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:40:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:40:30  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:40:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:40:32  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:40:32  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:40:32  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:40:33  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:40:33  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:40:33  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:40:33  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:40:33  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:41:23 EDT)" executed successfully
+22:40:37  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:37  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:40:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:41:23 EDT)" (scheduled at 2026-08-11 22:40:53.158285-04:00)
+22:40:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:40:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:41:23 EDT)" executed successfully
+22:41:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:42:23 EDT)" (scheduled at 2026-08-11 22:41:23.158063-04:00)
+22:41:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:41:53 EDT)" (scheduled at 2026-08-11 22:41:23.158285-04:00)
+22:41:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:41:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:41:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:41:53 EDT)" executed successfully
+22:41:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:41:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:41:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:41:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:41:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:41:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:41:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:41:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:41:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:41:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:41:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:41:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:41:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:41:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:41:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:41:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:41:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:41:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:41:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:41:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:41:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:41:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:41:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:41:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:41:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:41:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:41:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:41:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:41:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:41:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:41:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:41:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:41:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:41:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:41:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:41:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:41:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:41:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:41:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:41:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:31  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:31  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:42:23 EDT)" executed successfully
+22:41:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:35  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:45  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:50  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:42:23 EDT)" (scheduled at 2026-08-11 22:41:53.158285-04:00)
+22:41:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:41:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:42:23 EDT)" executed successfully
+22:41:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:41:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:04  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:04  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:04  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:42:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:12  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:20  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:20  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:43:23 EDT)" (scheduled at 2026-08-11 22:42:23.158063-04:00)
+22:42:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:42:53 EDT)" (scheduled at 2026-08-11 22:42:23.158285-04:00)
+22:42:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:42:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:42:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:42:53 EDT)" executed successfully
+22:42:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:42:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:42:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:42:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:42:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:42:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:42:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:42:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:42:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:42:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:42:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:42:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:42:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:42:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:42:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:42:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:42:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:42:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:42:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:42:27  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:42:27  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:42:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:42:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:42:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:42:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:42:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:42:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:42:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:42:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:42:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:42:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:42:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:42:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:42:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:42:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:42:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:42:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:42:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:42:31  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:43:23 EDT)" executed successfully
+22:42:33  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:34  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:40  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:46  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:46  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:53  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:43:23 EDT)" (scheduled at 2026-08-11 22:42:53.158285-04:00)
+22:42:53  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:42:53  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:43:23 EDT)" executed successfully
+22:42:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:42:55  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:43:01  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:43:01  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:43:07  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:43:13  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:43:13  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:43:23  INFO      Running job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:44:23 EDT)" (scheduled at 2026-08-11 22:43:23.158063-04:00)
+22:43:23  INFO      Running job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:43:53 EDT)" (scheduled at 2026-08-11 22:43:23.158285-04:00)
+22:43:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:43:23  INFO      HEARTBEAT  thread=ThreadPoolExecutor-0_1  last stream tick=no ticks yet
+22:43:23  INFO      Job "main.<locals>._scheduler_heartbeat (trigger: interval[0:00:30], next run at: 2026-08-11 22:43:53 EDT)" executed successfully
+22:43:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:43:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles
+22:43:23  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:43:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:43:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_CAD/candles
+22:43:24  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:43:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:43:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles
+22:43:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:43:25  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:43:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CHF_JPY/candles
+22:43:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:43:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:43:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles
+22:43:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:43:26  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:43:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CHF/candles
+22:43:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:43:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:43:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/AUD_JPY/candles
+22:43:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:43:27  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:43:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:43:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_CAD/candles
+22:43:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:43:28  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:43:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:43:28  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles
+22:43:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:43:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:43:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/CAD_CHF/candles
+22:43:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:43:29  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:43:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/NZD_CHF/candles
+22:43:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:43:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:43:30  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles
+22:43:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:43:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:43:31  INFO      performing request https://api-fxpractice.oanda.com/v3/instruments/EUR_AUD/candles
+22:43:31  INFO      Job "_live_diagnostic_scan (trigger: interval[0:01:00], next run at: 2026-08-11 22:44:23 EDT)" executed successfully
+22:43:32  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing
+22:43:32  INFO      performing request https://api-fxpractice.oanda.com/v3/accounts/101-001-9445956-004/pricing

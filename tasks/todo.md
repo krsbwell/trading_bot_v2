@@ -1,3 +1,164 @@
+# Fix: silent process death, no auto-recovery, and a broken/nonexistent boot supervisor (2026-08-12) — DONE
+
+## Why
+Same session as the WFO fix below — while restarting the bot to apply that
+fix, found the live process (started ~19:52 EDT after an earlier manual
+restart) had actually died again by 19:51:46 EDT with **zero trace in
+logs/main.log** — just stops mid-request, no traceback, no shutdown
+message. Same failure signature as the 2026-07-17 death in
+[[bugs_process_death_no_logging]] ("unrecoverable cause"). User: "go after
+it and this time complete it all the way" — not a recommendation this time,
+an actual fix.
+
+## Investigation
+- Checked Windows Event Viewer (Application + System logs, WER records)
+  around the death timestamp and in WER's crash history generally: **zero
+  python.exe crash/fault entries, ever.** Rules out an OS-level crash
+  (segfault, access violation) — this was an in-process Python exit.
+- Read `main.py`'s only exception guard around the entire blocking scheduler
+  loop: `try: scheduler.start() except (KeyboardInterrupt, SystemExit):` —
+  catches nothing else. Any other exception propagates to Python's default
+  `sys.excepthook`, which writes straight to **stderr**, completely
+  bypassing the `logging` module (and therefore the RotatingFileHandler
+  that's supposedly been "the fix" since 2026-07-17). If that stderr is an
+  ephemeral terminal window, the traceback is gone the instant it scrolls
+  away or the window closes — exactly matching "process died, main.log
+  shows nothing."
+- Background daemon threads (`wfo-refit`, `shadow-outcomes`) had the same
+  gap one level down: an uncaught exception there kills just that thread,
+  silently, via Python's default `threading.excepthook` — doesn't crash the
+  process, but is the same missing-logging pattern.
+- Checked what's actually supposed to bring the bot back up. Found **three
+  independent, incomplete pieces**:
+  - `run.ps1` — a manual restart-on-crash loop. Only helps while someone
+    has it open in a terminal; does nothing after a reboot/logoff, and its
+    "restarting in 15s..." messages only ever go to that terminal's
+    console, never to a file.
+  - `scripts/watchdog.py` — registered in Task Scheduler as
+    `ApexBotWatchdog`, running every 10 min (confirmed healthy,
+    `LastTaskResult=0`). **Alert-only** — sends a Telegram "bot down"
+    message after `WATCHDOG_STALE_MINUTES=60` minutes stale. Never
+    restarts anything.
+  - `TradingBot_v2` — a Task Scheduler boot-trigger task, **registered but
+    broken**: its action pointed at `bot_service.py`, a file that has
+    **never existed anywhere in this repo's git history**
+    (`git log --all -- bot_service.py` returns nothing). Confirmed broken
+    via `Get-ScheduledTaskInfo` failing with "the system cannot find the
+    file specified." This task has silently done nothing at every boot for
+    as long as it's existed.
+  - Net effect: **no unattended auto-recovery path existed at all.** A
+    crash meant the bot stayed dead until a human happened to notice (best
+    case 60 min later via Telegram, worst case never) — exactly what
+    happened here; the user only found out because this session's earlier
+    WFO investigation happened to check the heartbeat file.
+- Separately, found the likely (not certain) proximate trigger class: 3x
+  `MemoryError` in `logs/main.log` earlier the same day (08:48:03-05),
+  traced to `werkzeug/serving.py`'s dev server choking on
+  `self.rfile.read(10_000_000)` — a known Werkzeug dev-server weak point
+  when it receives malformed/oversized requests. Root cause of *why* it's
+  receiving those: `main.py`'s dashboard was bound to `host="0.0.0.0"`,
+  making it reachable from **any device on the local network**, not just
+  this PC — with no auth layer, and including the One-Click Buy/Sell
+  controls. Can't prove this specific pattern caused the exact 19:51:46
+  death (no traceback survived to check), but it's a real, live security
+  exposure independent of that, and the most plausible source of unsolicited
+  traffic hitting a dev server that was never meant to be exposed.
+
+## What changed
+- **New `crash_logging.py`**: `install(logger)` wires both
+  `sys.excepthook` and `threading.excepthook` to route any uncaught
+  exception (main thread or background thread) through
+  `logger.critical(..., exc_info=True)` before the process/thread dies —
+  so it lands in the persistent RotatingFileHandler, not just stderr.
+  KeyboardInterrupt passes through to the real default hook unchanged (a
+  manual Ctrl+C shouldn't log as a crash). Kept as its own module,
+  deliberately with zero import-time side effects, so it's cleanly
+  unit-testable without pulling in all of `main.py`'s OANDA/scheduler
+  setup. 5 new tests (`tests/test_crash_logging.py`).
+- **`main.py`**: calls `crash_logging.install(logger)` right after the
+  logger is configured (before anything else can run). Also added
+  `except Exception:` alongside the existing
+  `except (KeyboardInterrupt, SystemExit):` around `scheduler.start()` —
+  logs a scoped critical message and `sys.exit(1)` (nonzero, so a
+  supervisor knows to restart — a clean Ctrl+C still exits 0).
+  **Dashboard binding changed `0.0.0.0` → `127.0.0.1`** (user's explicit
+  choice via AskUserQuestion, given the tradeoff — loses LAN/phone access
+  to the dashboard, closes the network exposure and the most likely source
+  of the MemoryErrors).
+- **New `bot_service.py`**: a real, testable process supervisor —
+  `supervise(python_exe, script, ...)` launches the target repeatedly,
+  restarting on any nonzero exit (15s backoff, 50-attempt cap by default),
+  stopping only on a clean exit (code 0). Logs every
+  start/restart/give-up to `logs/bot_service.log` persistently — unlike
+  `run.ps1`'s console-only messages. `popen` is injectable for testing.
+  4 new tests (`tests/test_bot_service.py`) using a fake Popen, plus a real
+  (non-mocked) smoke test against a genuinely flaky throwaway script,
+  confirmed working end-to-end (2 crashes → 2 restarts w/ 15s backoff →
+  clean exit → stop), output verified in `logs/bot_service.log`.
+- **Windows Task Scheduler**: `TradingBot_v2`'s action fixed to actually
+  point at `bot_service.py main.py` instead of the nonexistent file.
+  **Had to change its trigger from `AtStartup` (boot) to `AtLogOn`** — this
+  session's PowerShell access can register a plain task or a logon-trigger
+  task, but a boot trigger requires elevation this session doesn't have
+  (`Register-ScheduledTask`/`schtasks.exe` both returned "Access is denied"
+  specifically and only when a boot trigger was included; isolated via a
+  disposable test task before touching the real one). AtLogOn is a
+  functionally equivalent fix for a desktop machine — the bot now
+  auto-starts, under real supervision, whenever the user logs into
+  Windows. Also removed the task's `ExecutionTimeLimit` (was capped at 72
+  hours — Task Scheduler would have force-killed a long-running supervisor
+  after 3 days regardless of any code fix) and added Task-Scheduler-level
+  `RestartCount=3`/`RestartInterval=5min` as defense in depth alongside
+  `bot_service.py`'s own restart loop. `ApexBotWatchdog` (the alerting
+  task) was not touched — confirmed still `Ready`/healthy.
+  **Mistake made and corrected in the same session**: the first attempt
+  used `Set-ScheduledTask` to modify the existing (broken) task in place,
+  which failed; the follow-up `Unregister-ScheduledTask` succeeded but the
+  next `Register-ScheduledTask` (with `RunLevel Highest`) then failed with
+  "Access is denied" — briefly leaving **no** TradingBot_v2 task registered
+  at all, worse than the broken-but-present state beforehand. Diagnosed via
+  a disposable `ZZZ_PermTest*` task (confirmed: registration itself works;
+  specifically a boot trigger needs elevation) and fixed within the same
+  session before finishing.
+
+## Verification
+- Full suite: **270/270 pass** (261 prior + 9 new: 5 crash_logging + 4
+  bot_service).
+- `bot_service.py` proven against a real (non-mocked) subprocess, not just
+  mocked `Popen` — see above.
+- Stopped the actual live (unsupervised, pre-fix) bot process and confirmed
+  something already running in the user's VS Code terminal session
+  auto-restarted it within seconds — the fresh process picked up all of
+  today's changes (confirmed via `netstat`: dashboard now listening on
+  `127.0.0.1:8050` only, was previously reachable on all interfaces).
+  Heartbeat fresh, scheduler jobs registered, no startup errors.
+- `Get-ScheduledTask -TaskName "ApexBotWatchdog","TradingBot_v2"` — both
+  `Ready`. `TradingBot_v2`'s action now correctly resolves to
+  `bot_service.py main.py`.
+
+## Explicitly NOT verified / honest limits
+- **Could not determine the exact cause of the 19:51:46 EDT death itself**
+  — that traceback, if there was one, is permanently gone; this fix
+  guarantees the *next* one gets captured, it can't retroactively recover
+  this one. Per [[feedback_dont_overclaim_fixes]]: this is a real,
+  structural fix to the observability and recovery gaps, not a confirmed
+  "found and eliminated the exact bug."
+- Did not verify the `AtLogOn` task actually fires end-to-end (would
+  require logging off/on, or `Start-ScheduledTask`, both of which risk
+  colliding with the live-trading process currently running under the
+  VS Code terminal's own supervision) — the *registration* is confirmed
+  correct and `bot_service.py` itself is proven against real subprocesses;
+  the remaining gap is Task-Scheduler-triggering it specifically, untested
+  live.
+- The unexplained pattern from the WFO-fix session (every `python main.py`
+  launch showing as two nested `python.exe` processes with identical
+  command lines) recurred again tonight under a third different parent
+  (the VS Code PowerShell extension host) — most likely a benign artifact
+  of how this venv's `python.exe` launches, not investigated further; did
+  not affect anything in this fix.
+
+---
+
 # Fix: WFO live parameter tuner had zero out-of-sample validation — overfit params were live on GBP_CAD (2026-08-11) — DONE
 
 ## Why
