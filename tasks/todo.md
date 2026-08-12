@@ -1,3 +1,157 @@
+# Fix: duplicate/max-open/cooldown gate was paper-mode-only — silently no-op in demo/live, explains "missed trades" (2026-08-12) — DONE
+
+## Why
+User shared a chart screenshot of NZD_USD, reading 3 consecutive setups as
+"20 EMA crosses above 50 EMA" confluence with a higher-high, asking why no
+long trade triggered on the 3rd one despite what looked like clean EMA
+alignment. Also asked: is the current NZD_USD trade genuinely live, and to
+audit every trade-blocking gate for overlap/wrongful blocking, "trace it
+until it is fixed" rather than a one-off patch — plus fix a UI bug (Text
+drawing tool can't be resized or recolored after placement) and use web
+research to validate findings/fixes against documented sources before
+implementing anything.
+
+## Investigation
+
+**NZD_USD live trade**: confirmed live — `data/live_state_forex.json`
+trade id 77, entry 0.58833/SL 0.58583/TP1 0.59208, opened
+2026-08-05T15:00:04 UTC, matches the dashboard exactly. `config.MODE =
+"demo"` means this is a real order on the OANDA practice account.
+
+**The chart's premise vs the real strategy**: read
+`engine/strategy_ema_cci_macd.py::check_buy_signal` in full — NZD_USD runs
+this (no `STRATEGY_OVERRIDE` entry). It does **not** trigger on a 20/50 EMA
+crossover at all; a crossover is never checked anywhere in the code. The
+real entry needs price to *touch back down* to the short EMA (a pullback,
+condition c3) with CCI oversold at that touch (c4) then recovering (c5),
+plus MACD confirmation (c6/c7) — and the whole check is gated off entirely
+when `ADX(14) > ADX_THRESHOLD` (28), i.e. during a strong trend. The
+chart's 3 marked setups show consecutive higher-highs — a strong-trend
+signature — which is architecturally the *opposite* condition this
+mean-reversion strategy is designed to fire in. Web-validated (see
+Sources below): ADX above ~25-28 is a standard, widely-documented cutoff
+for "too trending for mean-reversion," and "crossovers work best as
+alerts, not entry signals — pullbacks to the moving average are the
+classic entry technique," both matching how this strategy is actually
+built, not a naive reading of the chart.
+
+**But the specific "3rd missed trade" had a real, different cause — found
+by reconstructing exact real OANDA M30 data + indicators around the
+chart's crossover dates (2026-08-04 to 08-06) and cross-referencing
+`data/signal_audit.csv`:**
+
+| Time (UTC) | Score | Result | Reason |
+|---|---|---|---|
+| 2026-08-05 15:00:02 | 56 | **TRIGGERED** | (trade #77 opened) |
+| 2026-08-06 11:00:01 | 60 | TRIGGERED → BLOCKED | ML gate: P(win)=0.49 |
+| 2026-08-06 11:30:00 | 66 | **TRIGGERED** | **— nothing. No BLOCKED row, no trade.** |
+
+The 08-06 11:30 signal (score 66, a strong signal) triggered and then
+vanished with zero audit trail. Cross-referenced `logs/main.log.3`'s
+identical pattern from a different date ("Trade rejected for NZD_USD:
+NZD_USD already has an open trade") to find the mechanism: `main.py`'s
+duplicate/max-open-trades/cooldown gate — the block explicitly commented
+"PRIMARY duplicate-prevention layer" — only ran
+`if config.MODE == "paper" and _paper_trader:`. Since `config.MODE =
+"demo"`, **that whole gate never executes for the mode actually running**.
+Execution falls straight to `TradeManager.open_trade()`, which does still
+independently call `validate_pre_trade()` (so the *decision* to reject was
+safe — no genuine duplicate position — see `risk/risk_manager.py:123-136`)
+but only logs a plain `logger.warning(...)` line, never
+`_audit_blocked()`/`signal_audit.csv`, never stamps
+`trade_blocked_reason` for the dashboard, never calls `record_skip()` for
+shadow-outcome training data, and (separately) `TradeManager` has **no
+cooldown check at all** — `TRADE_COOLDOWN_HOURS` was only ever enforced
+inside this same paper-mode-only block.
+
+**Quantified the real scope — not a one-off**: compared TRIGGERED count
+(`signal_audit.csv`) vs actual trades opened (`live_state_forex.json`) vs
+audited-BLOCKED count, per pair, since 2026-08-05:
+
+| pair | triggered | opened | audited-blocked | unaccounted |
+|---|---|---|---|---|
+| EUR_AUD | 3 | 1 | 0 | 2 |
+| EUR_JPY | 5 | 3 | 1 | 1 |
+| GBP_CAD | 1 | 1 | 0 | 0 |
+| GBP_USD | 2 | 0 | 0 | 2 |
+| NZD_USD | 6 | 1 | 5 (net) | 0 (net; the 08-06 11:30 gap confirmed directly via log cross-reference above) |
+| USD_CAD | 2 | 1 | 0 | 1 |
+
+Roughly a third of all triggered signals across the roster in this window
+have no trace of what happened to them — this bug, not any one pair's
+edge, plausibly explains a meaningful share of "why did I get an alert
+with no trade" confusion generally, not just this one chart.
+
+## Fix applied
+`main.py::_process_pair`: the duplicate/max-open/cooldown block now
+resolves `_open_trade_source = _paper_trader if config.MODE == "paper"
+else _trade_manager_fx` and runs the same three checks — with the same
+`_audit_blocked()`/`_block()` calls — for **either** mode.
+`PaperTrader.open_trades` (list) vs `TradeManager.open_trades` (dict) are
+normalized to a list before use. Cooldown enforcement in demo/live mode is
+a genuine new behavior (previously: none at all). Also fixed the
+post-open-attempt log line (previously `elif config.MODE == "paper":` only)
+to log for every mode. `tests/test_trade_gate_parity.py` (5 new tests,
+using a fake TradeManager): reproduces the exact NZD_USD scenario and
+proves it's now blocked+audited; proves max-open and cooldown blocking
+also now work in demo mode; proves a clean signal still opens normally
+(regression guard); proves paper-mode behavior is byte-identical to before
+(regression guard). Full suite: 275/275 pass (270 + 5 new).
+
+## Fix applied — Text drawing tool (dashboard/assets/chart.js)
+Traced the "can't resize, can't change color" complaint to a real gap:
+every other drawing tool (trend/box/fib/h-line/v-line/circle) is wired
+into a shared style-panel system (`_showDrawingSettings`,
+`_getDrawingObj`, `_updateDrawingAndSave`, `_deleteDrawingByTypeIdx`,
+opened via double-click) that offers color swatches + a custom color
+picker + relevant size controls. The Text tool was **never wired into
+this at all** — none of those 4 dispatcher functions had a `'text'` case,
+and text's double-click was already claimed by inline content-editing
+(`_startTextEdit`), so there was no route to the panel whatsoever. Also
+found and fixed along the way: `updateText()` was missing the
+per-timeframe visibility check every other drawing type has (a saved
+text would show on every timeframe regardless of its configured
+visibility), and `saveTexts()`/`loadTexts()` didn't persist
+`visibility`/`customLabel` at all.
+
+Fix: added `'text'` to all 4 dispatcher functions; added a dedicated
+settings (⚙) button next to the existing delete (×) button on a selected
+text (double-click still opens content-editing, unchanged); added a Font
+Size button row (10/12/14/16/20/24/32) + Bold toggle to the Style tab
+specifically for text (excluded from the Width/line-style controls that
+don't apply to it); added Time+Price to the Coordinates tab for text;
+skipped the redundant "Label" field in the Text tab for text (its content
+already is its label); added the missing visibility check to `updateText`
+and the missing fields to `saveTexts`/`loadTexts`.
+
+**Verified with real browser automation (Playwright), not just code
+reading** — headless Chromium against the live dashboard (read-only
+w.r.t. trading, only touched chart drawing tools which are pure
+client-side localStorage): placed a text label, opened its new settings
+panel, clicked the "32" size button → confirmed via `getComputedStyle`
+the label's rendered font-size changed 14px → 32px; used the custom color
+picker → confirmed rendered color changed gold → red. Both halves of the
+complaint confirmed fixed end-to-end, not just plausible from the code.
+No JS test framework exists in this repo (Python/pytest only) — this
+Playwright check is the closest available to automated coverage; noted
+as a real limitation rather than claiming full regression-test coverage.
+
+## Web research (per explicit request — verify before implementing)
+- [ADX | CrossTrade](https://crosstrade.io/learn/technical-indicators/adx), [ADX Trend Strength: Filter Trades & Avoid Range Whipsaws](https://hoclamtrader.com/en/adx-trend-strength-filter-trades/), [ADX 25+: The One Filter That Kills Bad Trades](https://fxnx.com/en/blog/adx-strategy-efficiency-filter-measure-trend-strength-like) — confirms ADX >25-28 as a standard, widely-used cutoff for "too trending for mean-reversion," validating `config.ADX_THRESHOLD = 28`'s design, not just this codebase's own say-so.
+- [EMA-Assisted Extreme Point Reversal Trading Strategy](https://medium.com/@redsword_23261/ema-assisted-extreme-point-reversal-trading-strategy-c704cfe2cc45), [CCI Trend Pullback Bounce Forex Trading Strategy](https://forexmt4indicators.com/cci-trend-pullback-bounce-forex-trading-strategy-for-mt5/) — confirms EMA-touch + CCI-extreme confluence is a real, documented pattern family, not a naive invention. Notable nuance: the most common documented variant trades pullbacks *in the direction of* an established longer-term trend (uses a slow EMA for trend direction, then CCI dips to time entries within it) — a genuinely different variant from this bot's EMA-bounce, which instead avoids trending conditions entirely via the ADX gate. Both are legitimate documented approaches; **not implementing the trend-continuation variant now** — flagging as a real, sourced idea for a future research pass, not a fix, since [[project_trend_follow_experiment]] already tested and shelved a related-but-not-identical ADX-inverted variant.
+- [Moving Average Crossovers for Entry and Exit — LuxAlgo](https://www.luxalgo.com/blog/moving-average-crossovers-for-entry-and-exit/), [EMA 20/50/200 — Forex For Starters](https://forexforstarters.com/indicators/moving-averages/ema-20-50-200/) — confirms "crossovers work best as alerts rather than instant entry signals" and "pullbacks to the 50 EMA are the classic entry technique" is standard trading education, directly validating why this bot's real entry logic (touch/pullback) differs from — and is more disciplined than — treating the crossover itself as an entry trigger, which is what the chart's visual reading assumed.
+
+## Explicitly NOT done
+- Did not implement the trend-continuation pullback variant found via web
+  research — flagged only, no backtest run, no code written. Would need
+  its own dedicated investigation given [[project_trend_follow_experiment]]
+  already covers similar-but-not-identical ground.
+- Did not re-litigate the WFO/gate work from earlier today
+  ([[bugs_wfo_no_oos_validation]]) — unrelated bug, already fixed and
+  pushed.
+
+---
+
 # Fix: silent process death, no auto-recovery, and a broken/nonexistent boot supervisor (2026-08-12) — DONE
 
 ## Why

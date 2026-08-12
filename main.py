@@ -468,11 +468,32 @@ def _process_pair(pair: str, market: str, engine) -> None:
             return
 
     # ── Duplicate / pre-trade guard ──────────────────────────────────────────
-    # This is the PRIMARY duplicate-prevention layer. PaperTrader.open_trade()
-    # has a secondary guard as a last resort.
-    if config.MODE == "paper" and _paper_trader:
+    # This is the PRIMARY duplicate-prevention layer. PaperTrader/TradeManager
+    # each also have their own secondary guard (validate_pre_trade, called
+    # again inside open_trade()) as a last resort.
+    #
+    # Fixed 2026-08-12: this whole block used to run only `if config.MODE ==
+    # "paper"` — meaning in "demo"/"live" mode (what's actually running day
+    # to day, see config.MODE), none of these three checks ever executed
+    # HERE, so a duplicate/max-open/halt rejection in real trading produced
+    # no structured audit row (signal_audit.csv), no dashboard
+    # trade_blocked_reason stamp, and no shadow-outcome training data — and
+    # TRADE_COOLDOWN_HOURS was never enforced at all outside paper mode
+    # (TradeManager.open_trade() has no cooldown check of its own; only
+    # PaperTrader's caller — this block — ever checked it). The underlying
+    # duplicate/max-open behavior was NOT unsafe even before this fix —
+    # TradeManager.open_trade() independently calls the same
+    # validate_pre_trade() before placing a real order — but the missing
+    # audit trail is exactly what made a real, correctly-blocked signal
+    # (NZD_USD 2026-08-06 11:30 UTC, score 66, TRIGGERED, silently rejected
+    # — confirmed via logs/main.log.3's "Trade rejected for NZD_USD: NZD_USD
+    # already has an open trade") look like an unexplained missed trade with
+    # nothing in the audit log to explain it. Cooldown enforcement in
+    # demo/live mode is a genuine behavior change (previously: none at all).
+    _open_trade_source = _paper_trader if config.MODE == "paper" else _trade_manager_fx
+    if _open_trade_source:
         # 1. Check for existing open trade on this pair
-        existing = _paper_trader.get_open_trade(pair)
+        existing = _open_trade_source.get_open_trade(pair)
         if existing and not config.ALLOW_MULTIPLE_PER_PAIR:
             logger.info(
                 "DUPLICATE BLOCKED: %s already has open %s trade (id=%s entry=%.5f)",
@@ -491,9 +512,16 @@ def _process_pair(pair: str, market: str, engine) -> None:
             _block(f"Duplicate: already open ({existing['direction']})")
             return
 
-        # 2. Check max-open-trades and halt flag via validate_pre_trade
-        open_pairs = [t.get("pair") for t in _paper_trader.open_trades]
-        ok, reason = validate_pre_trade(score, len(_paper_trader.open_trades), pair, open_pairs)
+        # 2. Check max-open-trades and halt flag via validate_pre_trade.
+        # open_trades is a list on PaperTrader, a dict (keyed by trade_id) on
+        # TradeManager — normalize to a list of trade dicts either way.
+        _open_trades_raw = _open_trade_source.open_trades
+        open_trades_list = (
+            list(_open_trades_raw.values()) if isinstance(_open_trades_raw, dict)
+            else list(_open_trades_raw)
+        )
+        open_pairs = [t.get("pair") for t in open_trades_list]
+        ok, reason = validate_pre_trade(score, len(open_trades_list), pair, open_pairs)
         if not ok:
             logger.info("PRE-TRADE BLOCKED: %s — %s", pair, reason)
             _audit_blocked(
@@ -599,9 +627,17 @@ def _process_pair(pair: str, market: str, engine) -> None:
 
     if actual_id:
         logger.info("Trade opened: %s", actual_id)
-    elif config.MODE == "paper":
-        # open_trade returned None — PaperTrader's secondary duplicate guard fired
-        logger.warning("PAPER TRADER rejected trade for %s (secondary duplicate guard)", pair)
+    elif config.MODE in ("paper", "demo", "live"):
+        # open_trade() returned None — the PRIMARY guard above already
+        # cleared this signal, so reaching None here means the secondary,
+        # in-open_trade() validate_pre_trade() re-check caught something
+        # that changed between the two checks (e.g. another pair's fill
+        # pushed open_trade_count to MAX_OPEN_TRADES in the interim), or
+        # (demo/live only) the broker order placement itself failed —
+        # trade_manager.py logs that specific failure separately. Was
+        # paper-mode-only before 2026-08-12; now logs for every mode so a
+        # demo/live rejection at this stage isn't silent either.
+        logger.warning("Trade open returned no id for %s (secondary guard or broker rejection)", pair)
 
 
 def _weekend_close_check() -> None:

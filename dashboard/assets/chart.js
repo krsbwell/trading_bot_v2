@@ -2081,7 +2081,8 @@
             localStorage.setItem(_textKey(), JSON.stringify(
                 textDrawings.map(function(t) {
                     return { time:t.time, price:t.price, content:t.content,
-                             color:t.color, fontSize:t.fontSize, bold:t.bold, locked:t.locked||false };
+                             color:t.color, fontSize:t.fontSize, bold:t.bold, locked:t.locked||false,
+                             visibility:t.visibility||[] };
                 })
             ));
         } catch(e) {}
@@ -2094,7 +2095,8 @@
                 try {
                     var obj = { id:textIdCtr++, time:d.time, price:d.price,
                                 content:d.content||'', color:d.color||'#ffffff',
-                                fontSize:d.fontSize||14, bold:d.bold||false, locked:d.locked||false };
+                                fontSize:d.fontSize||14, bold:d.bold||false, locked:d.locked||false,
+                                visibility:d.visibility||[] };
                     textDrawings.push(obj);
                     buildTextEl(obj);
                 } catch(e) {}
@@ -2161,14 +2163,40 @@
             if (idx >= 0) delText(idx);
         });
 
-        wrap.appendChild(textEl); wrap.appendChild(delBtn);
+        // Settings (color / font size / bold) — added 2026-08-12. Every other
+        // drawing tool (trend/box/fib/h-line/v-line/circle) opens its style
+        // panel on dblclick; text's dblclick was already taken by inline
+        // content editing (_startTextEdit), so this is a dedicated button
+        // instead, matching the delBtn pattern right next to it. Before this,
+        // there was no way to change a placed text's color or size at all —
+        // addText() set them once at creation from whatever drawColor/14px
+        // defaults were active and nothing ever revisited them.
+        var settingsBtn = document.createElement('div');
+        settingsBtn.textContent = '⚙';
+        settingsBtn.title = 'Text style';
+        settingsBtn.style.cssText =
+            'position:absolute;top:-8px;right:12px;z-index:22;color:#ccc;font-size:11px;' +
+            'cursor:pointer;pointer-events:auto;background:rgba(13,17,23,0.88);' +
+            'width:16px;height:16px;line-height:16px;text-align:center;' +
+            'border-radius:50%;border:1px solid #555;display:none;';
+        settingsBtn.addEventListener('mousedown', function(e) { e.stopImmediatePropagation(); e.preventDefault(); });
+        settingsBtn.addEventListener('mouseup', function(e) {
+            e.stopImmediatePropagation(); e.preventDefault();
+            var idx = textDrawings.indexOf(t);
+            if (idx >= 0) _showDrawingSettings(e.clientX, e.clientY, 'text', idx);
+        });
+
+        wrap.appendChild(textEl); wrap.appendChild(delBtn); wrap.appendChild(settingsBtn);
         ov.appendChild(wrap);
-        t.el = wrap; t.textEl = textEl; t.delBtn = delBtn;
+        t.el = wrap; t.textEl = textEl; t.delBtn = delBtn; t.settingsBtn = settingsBtn;
         updateText(t);
     }
 
     function updateText(t) {
         if (!t.el || !chart || !S.candle) return;
+        if (t.visibility && t.visibility.length > 0 && t.visibility.indexOf(_currentTf) < 0) {
+            t.el.style.display = 'none'; return;
+        }
         var x = _timeToXExtrap(t.time);
         var y = _priceToY(t.price);
         if (x == null || y == null) { t.el.style.display = 'none'; return; }
@@ -2187,6 +2215,7 @@
         t.textEl.style.outline    = isSel ? '1px dashed ' + (t.color || '#ffffff') : 'none';
         t.textEl.style.background = isSel ? 'rgba(255,255,255,0.07)' : 'none';
         if (t.delBtn) t.delBtn.style.display = (isSel && !t.locked) ? '' : 'none';
+        if (t.settingsBtn) t.settingsBtn.style.display = isSel ? '' : 'none';
     }
 
     function updateAllTexts() { textDrawings.forEach(updateText); }
@@ -2859,7 +2888,7 @@
 
     /* ── Settings helper functions ────────────────────────────────────────── */
     function _drawingTypeName(type) {
-        return {'trend':'Trendline','h-line':'H-Line','v-line':'V-Line','box':'Box','fib':'Fibonacci','circle':'Circle'}[type] || type;
+        return {'trend':'Trendline','h-line':'H-Line','v-line':'V-Line','box':'Box','fib':'Fibonacci','circle':'Circle','text':'Text'}[type] || type;
     }
     function _getDrawingObj(type, idx) {
         if (type==='trend')  return trendlines[idx];
@@ -2868,6 +2897,7 @@
         if (type==='box')    return boxes[idx];
         if (type==='fib')    return fibs[idx];
         if (type==='circle') return circles[idx];
+        if (type==='text')   return textDrawings[idx];
         return null;
     }
     function _updateDrawingAndSave(type, obj) {
@@ -2877,6 +2907,7 @@
         if (type==='box')    { updateBox(obj);        saveBoxes();      }
         if (type==='fib')    { updateFib(obj);        saveFibs();       }
         if (type==='circle') { updateCircle(obj);     saveCircles();    }
+        if (type==='text')   { updateText(obj);       saveTexts();      }
     }
     function _deleteDrawingByTypeIdx(type, idx) {
         if (type==='trend')  { delTrendline(idx); return; }
@@ -2899,6 +2930,7 @@
             if (cc2.el && cc2.el.parentNode) cc2.el.parentNode.removeChild(cc2.el);
             circles.splice(idx, 1); saveCircles();
         }
+        if (type==='text') { delText(idx); return; }
     }
     function _dsRow(labelText, content) {
         var row = document.createElement('div');
@@ -3025,7 +3057,7 @@
         sp.appendChild(_dsRow('Color', swWrap));
 
         /* Width (not for fib) */
-        if (drawingType !== 'fib') {
+        if (drawingType !== 'fib' && drawingType !== 'text') {
             var wWrap = document.createElement('div'); wWrap.style.cssText = 'display:flex;gap:4px;';
             var widthField = (drawingType==='box') ? 'borderWidth' : 'width';
             [1,2,3].forEach(function(w) {
@@ -3039,6 +3071,36 @@
                 wWrap.appendChild(wb);
             });
             sp.appendChild(_dsRow('Width', wWrap));
+        }
+
+        /* Font size + bold (text only) — added 2026-08-12, the fix for
+           "can't resize the text box": there was previously no UI at all
+           to revisit a placed text's size after creation. */
+        if (drawingType === 'text') {
+            var fsWrap = document.createElement('div'); fsWrap.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;';
+            [10, 12, 14, 16, 20, 24, 32].forEach(function(fs) {
+                var fb = document.createElement('button');
+                fb.style.cssText = _dsBtnStyle((obj.fontSize||14)===fs);
+                fb.textContent = fs;
+                fb.addEventListener('click', function() {
+                    obj.fontSize = fs; _updateDrawingAndSave(drawingType, obj);
+                    fsWrap.querySelectorAll('button').forEach(function(b2,i){
+                        b2.style.cssText = _dsBtnStyle([10,12,14,16,20,24,32][i]===fs);
+                    });
+                });
+                fsWrap.appendChild(fb);
+            });
+            sp.appendChild(_dsRow('Size', fsWrap));
+
+            var boldBtn = document.createElement('button');
+            boldBtn.style.cssText = _dsBtnStyle(!!obj.bold) + 'font-weight:700;';
+            boldBtn.textContent = 'B';
+            boldBtn.title = 'Bold';
+            boldBtn.addEventListener('click', function() {
+                obj.bold = !obj.bold; _updateDrawingAndSave(drawingType, obj);
+                boldBtn.style.cssText = _dsBtnStyle(!!obj.bold) + 'font-weight:700;';
+            });
+            sp.appendChild(_dsRow('Bold', boldBtn));
         }
 
         /* Line style (trend / h-line / circle) */
@@ -3090,15 +3152,20 @@
         sp.appendChild(lockBtn);
 
         /* ── TEXT TAB ── */
-        var tp = tabPanels['Text'];
-        var labelInp = document.createElement('input');
-        labelInp.type = 'text'; labelInp.placeholder = 'Custom label…';
-        labelInp.value = obj.customLabel || '';
-        labelInp.style.cssText =
-            'width:100%;box-sizing:border-box;background:#0f0f0f;border:1px solid #30363d;' +
-            'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
-        labelInp.addEventListener('input', function() { obj.customLabel = labelInp.value; _updateDrawingAndSave(drawingType, obj); });
-        tp.appendChild(_dsRow('Label', labelInp));
+        // Skipped for drawingType==='text' — a text annotation's own content
+        // (edited via double-click, see _startTextEdit) already IS its
+        // label; a second "custom label" field here would be redundant.
+        if (drawingType !== 'text') {
+            var tp = tabPanels['Text'];
+            var labelInp = document.createElement('input');
+            labelInp.type = 'text'; labelInp.placeholder = 'Custom label…';
+            labelInp.value = obj.customLabel || '';
+            labelInp.style.cssText =
+                'width:100%;box-sizing:border-box;background:#0f0f0f;border:1px solid #30363d;' +
+                'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
+            labelInp.addEventListener('input', function() { obj.customLabel = labelInp.value; _updateDrawingAndSave(drawingType, obj); });
+            tp.appendChild(_dsRow('Label', labelInp));
+        }
 
         /* ── COORDINATES TAB ── */
         var coordP = tabPanels['Coordinates'];
@@ -3132,6 +3199,19 @@
         } else if (drawingType==='circle') {
             _pInp('Center', function(){return obj.cy_price;}, function(v){obj.cy_price=v;});
             _pInp('Radius', function(){return obj.r_price;},  function(v){obj.r_price=v;});
+        } else if (drawingType==='text') {
+            var ttInp = document.createElement('input');
+            ttInp.type = 'datetime-local'; ttInp.step = '60';
+            ttInp.value = new Date(obj.time * 1000).toISOString().slice(0, 16);
+            ttInp.style.cssText =
+                'width:100%;box-sizing:border-box;background:#0f0f0f;border:1px solid #30363d;' +
+                'border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;outline:none;';
+            ttInp.addEventListener('change', function() {
+                var parsed = new Date(ttInp.value + 'Z').getTime();
+                if (!isNaN(parsed)) { obj.time = Math.round(parsed / 1000); _updateDrawingAndSave(drawingType, obj); }
+            });
+            coordP.appendChild(_dsRow('Time (UTC)', ttInp));
+            _pInp('Price', function(){return obj.price;}, function(v){obj.price=v;});
         }
 
         /* ── VISIBILITY TAB ── */
