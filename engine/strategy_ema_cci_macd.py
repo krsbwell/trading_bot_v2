@@ -193,7 +193,7 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     if np.isnan(adx_val) or adx_val > adx_threshold:
         return 0.0   # trending market — EMA bounce unreliable
 
-    short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
+    short, mid, long_ = get_best_emas(pair, config.primary_tf_for(pair), df_h1)
     short_h4, _, _   = get_best_emas(pair, config.confirm_tf_for(pair),   df_h4)
 
     short_ema_h1  = ema(df_h1["close"], short)
@@ -305,7 +305,7 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     if np.isnan(adx_val) or adx_val > adx_threshold:
         return 0.0   # trending market — EMA bounce unreliable
 
-    short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
+    short, mid, long_ = get_best_emas(pair, config.primary_tf_for(pair), df_h1)
     short_h4, _, _   = get_best_emas(pair, config.confirm_tf_for(pair),   df_h4)
 
     short_ema_h1  = ema(df_h1["close"], short)
@@ -386,7 +386,7 @@ def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
          If the mid EMA is on the wrong side (inverted), fall back to 1.5×ATR14.
       3. Minimum distance: config.MIN_SL_PIPS from entry to filter noise stop-outs.
     """
-    _, mid, _ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
+    _, mid, _ = get_best_emas(pair, config.primary_tf_for(pair), df_h1)
     mid_val   = float(ema(df_h1["close"], mid).iloc[-1])
     entry     = float(df_h1["close"].iloc[-1])
     pip       = _get_pip(pair)

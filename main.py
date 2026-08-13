@@ -331,7 +331,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
         state.update_signal(pair, 0, "—")
         return
 
-    tf = signal.get("timeframe", config.TIMEFRAMES["primary"])
+    tf = signal.get("timeframe", config.primary_tf_for(pair))
 
     # Diagnostic signals (no_signal=True) keep dashboard diagnostics up to date
     if signal.get("no_signal"):
@@ -348,7 +348,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
     _effective_threshold = max(_pair_min_score, _slider_min, 40)
     state.update_signal(pair, score, signal["direction"], timeframe=tf, threshold=_effective_threshold)
     state.update_signal_detail(pair, signal)           # store full signal for chart overlay
-    state.cache_candles(pair, config.TIMEFRAMES["primary"], None)  # invalidate H1 cache
+    state.cache_candles(pair, config.primary_tf_for(pair), None)  # invalidate H1 cache
 
     logger.info(
         "  %-12s %5s  score=%-3d  EMA=%.0f  Structure=%.0f  PA=%.0f  ML=%s",
@@ -685,7 +685,7 @@ def _weekend_close_check() -> None:
             if not t:
                 continue
             try:
-                df = connector.get_candles(pair, config.TIMEFRAMES["primary"], 1)
+                df = connector.get_candles(pair, config.primary_tf_for(pair), 1)
                 if df is None or len(df) < 1:
                     continue
                 price = float(df.iloc[-1]["close"])
@@ -707,7 +707,7 @@ def _weekend_close_check() -> None:
             try:
                 price = None
                 try:
-                    df = connector.get_candles(pair, config.TIMEFRAMES["primary"], 1)
+                    df = connector.get_candles(pair, config.primary_tf_for(pair), 1)
                     if df is not None and len(df) >= 1:
                         price = float(df.iloc[-1]["close"])
                 except Exception:
@@ -733,7 +733,7 @@ def _tick_paper_trades() -> None:
         if connector is None:
             continue
         try:
-            gran = config.TIMEFRAMES["primary"]
+            gran = config.primary_tf_for(pair)
             # Only fetch the extra candle history ATR needs when the feature is
             # actually on — keeps today's API-call volume unchanged otherwise.
             count   = config.ATR_TRAILING_PERIOD + 10 if config.ATR_TRAILING_ENABLED else 2
@@ -803,7 +803,7 @@ def _tick_live_trades() -> None:
             if connector is None:
                 continue
             try:
-                gran = config.TIMEFRAMES["primary"]
+                gran = config.primary_tf_for(pair)
                 count = config.ATR_TRAILING_PERIOD + 10 if config.ATR_TRAILING_ENABLED else 2
                 df    = connector.get_candles(pair, gran, count)
                 if df is None or len(df) < 1:
@@ -979,7 +979,7 @@ def _diagnostic_scan() -> None:
             sig = _forex_engine.run(pair, "forex", no_audit=True)
             if sig is None:
                 continue
-            tf = sig.get("timeframe", config.TIMEFRAMES["primary"])
+            tf = sig.get("timeframe", config.primary_tf_for(pair))
             if sig.get("no_signal"):
                 state.update_signal(pair, 0, "—", timeframe=tf)
                 state.update_signal_detail(pair, sig)
@@ -1006,7 +1006,7 @@ def _live_diagnostic_scan() -> None:
         try:
             # 251 candles: last row is the in-progress bar with live OHLC
             df_live = _oanda_connector.get_live_candles(
-                pair, config.TIMEFRAMES["primary"], 251
+                pair, config.primary_tf_for(pair), 251
             )
             if df_live is None or len(df_live) < 50:
                 continue
@@ -1022,7 +1022,7 @@ def _live_diagnostic_scan() -> None:
             )
             if sig is None:
                 continue
-            tf = sig.get("timeframe", config.TIMEFRAMES["primary"])
+            tf = sig.get("timeframe", config.primary_tf_for(pair))
             sig["live_bar"] = True   # flag so dashboard can show "LIVE" label
             if sig.get("no_signal"):
                 state.update_signal(pair, 0, "—", timeframe=tf)

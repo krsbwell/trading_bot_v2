@@ -3181,7 +3181,7 @@ def run_backtest_callback(n, pair, bars, mode, wf_train, wf_test, wf_step):
         return "Error: connector not available.", no_update
 
     market   = "forex"
-    gran_h1  = config.TIMEFRAMES["primary"]
+    gran_h1  = config.primary_tf_for(pair)
     gran_h4  = config.confirm_tf_for(pair)
     from backtest.runner import confirm_tf_ratio
     confirm_ratio = confirm_tf_ratio(pair)

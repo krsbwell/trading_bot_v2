@@ -76,7 +76,7 @@ class SignalEngine:
             df_h1, df_h4 = candles_override
         else:
             try:
-                df_h1 = self._get_candles(pair, config.TIMEFRAMES["primary"], 250)
+                df_h1 = self._get_candles(pair, config.primary_tf_for(pair), 250)
                 df_h4 = self._get_candles(pair, config.confirm_tf_for(pair),   250)
             except Exception as exc:
                 logger.error("Candle fetch failed for %s: %s", pair, exc)
@@ -91,7 +91,7 @@ class SignalEngine:
         h4_gate_info = {"passed": None, "close": None, "ema": None}
         try:
             from engine.indicators import ema as _ema_fn
-            short_p, _, _ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
+            short_p, _, _ = get_best_emas(pair, config.primary_tf_for(pair), df_h1)
             h4_ema_val = float(_ema_fn(df_h4["close"], short_p).iloc[-1])
             h4_close   = float(df_h4["close"].iloc[-1])
             h4_bull    = h4_close > h4_ema_val
@@ -130,7 +130,7 @@ class SignalEngine:
                 _reject = "NO_TOUCH" if not _sell_d.get("c3") else "CONDITIONS_WEAK"
             else:
                 _reject = "H4_NEUTRAL"
-            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+            _do_audit(pair=pair, timeframe=config.primary_tf_for(pair),
                    direction="—", ema_score=0, structure_score=0,
                    pa_score=0, confluence_score=0,
                    h4_trend=h4_trend, d_trend=d_trend,
@@ -143,7 +143,7 @@ class SignalEngine:
                 "ema_score":     0,
                 "structure_score": 0,
                 "pa_score":      0,
-                "timeframe":     config.TIMEFRAMES["primary"],
+                "timeframe":     config.primary_tf_for(pair),
                 "h4_gate":       h4_gate_info,
                 "h4_trend":      h4_trend,
                 "d_trend":       d_trend,
@@ -229,7 +229,7 @@ class SignalEngine:
         )
 
         if final_score < 40:
-            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+            _do_audit(pair=pair, timeframe=config.primary_tf_for(pair),
                    direction=direction,
                    ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
                    confluence_score=final_score,
@@ -257,7 +257,7 @@ class SignalEngine:
         if final_score < _min_score:
             status = "WATCHING" if final_score >= 50 else "SCANNING"
             logger.info("Signal %s scored %d — %s (no trade)", pair, final_score, status)
-            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+            _do_audit(pair=pair, timeframe=config.primary_tf_for(pair),
                    direction=direction,
                    ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
                    confluence_score=final_score,
@@ -275,7 +275,7 @@ class SignalEngine:
                 "pair":             pair,
                 "market":           market,
                 "direction":        direction,
-                "timeframe":        config.TIMEFRAMES["primary"],
+                "timeframe":        config.primary_tf_for(pair),
                 "score":            final_score,
                 "ema_score":        ema_score,
                 "structure_score":  struct_score,
@@ -298,7 +298,7 @@ class SignalEngine:
         if _atr_pips < _atr_min_pips:
             reason = f"ATR_TOO_LOW: {_atr_pips:.1f} pips < min {_atr_min_pips}"
             logger.info("ATR gate blocked %s %s — %s", pair, direction, reason)
-            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+            _do_audit(pair=pair, timeframe=config.primary_tf_for(pair),
                    direction=direction,
                    ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
                    confluence_score=final_score,
@@ -306,7 +306,7 @@ class SignalEngine:
                    result="BLOCKED", reject_reason=reason)
             return {
                 "pair": pair, "market": market, "direction": direction,
-                "timeframe": config.TIMEFRAMES["primary"],
+                "timeframe": config.primary_tf_for(pair),
                 "score": final_score, "ema_score": ema_score,
                 "structure_score": struct_score, "pa_score": pa_score,
                 "entry": float(df_h1["close"].iloc[-1]),
@@ -318,7 +318,7 @@ class SignalEngine:
         if _atr_pips > _atr_max_pips:
             reason = f"ATR_TOO_HIGH: {_atr_pips:.1f} pips > max {_atr_max_pips}"
             logger.info("ATR gate blocked %s %s — %s", pair, direction, reason)
-            _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+            _do_audit(pair=pair, timeframe=config.primary_tf_for(pair),
                    direction=direction,
                    ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
                    confluence_score=final_score,
@@ -326,7 +326,7 @@ class SignalEngine:
                    result="BLOCKED", reject_reason=reason)
             return {
                 "pair": pair, "market": market, "direction": direction,
-                "timeframe": config.TIMEFRAMES["primary"],
+                "timeframe": config.primary_tf_for(pair),
                 "score": final_score, "ema_score": ema_score,
                 "structure_score": struct_score, "pa_score": pa_score,
                 "entry": float(df_h1["close"].iloc[-1]),
@@ -336,7 +336,7 @@ class SignalEngine:
             }
 
         # ── Audit: triggered signal ───────────────────────────────────────────
-        _do_audit(pair=pair, timeframe=config.TIMEFRAMES["primary"],
+        _do_audit(pair=pair, timeframe=config.primary_tf_for(pair),
                direction=direction,
                ema_score=ema_score, structure_score=struct_score, pa_score=pa_score,
                confluence_score=final_score,
@@ -360,14 +360,14 @@ class SignalEngine:
         c        = df_h1.iloc[-1]
         cr       = c["high"] - c["low"]
 
-        short, mid, long_ = get_best_emas(pair, config.TIMEFRAMES["primary"], df_h1)
+        short, mid, long_ = get_best_emas(pair, config.primary_tf_for(pair), df_h1)
         at_sr = any(z["lower"] <= entry <= z["upper"] for z in sr_zones if z["tested"])
 
         return {
             "pair":                pair,
             "market":              market,
             "direction":           direction,
-            "timeframe":           config.TIMEFRAMES["primary"],
+            "timeframe":           config.primary_tf_for(pair),
             "h4_gate":             h4_gate_info,
             "h4_trend":            h4_trend,
             "d_trend":             d_trend,

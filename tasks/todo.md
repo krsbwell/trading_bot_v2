@@ -43,6 +43,71 @@ before(7.22)/after comparison.
 
 ---
 
+# Strategy overhaul: EMA-bounce -> breakout_retest, 3 pairs to H4, EUR_JPY paused (2026-08-13) — DONE, LIVE
+
+## Decision
+After the full multi-day investigation below (Tests #1-3, holdout
+validation, fair tuning pass for trend_retest, WFO averaging-bug fix, and
+today's exhaustive real per-pair optimize finding NO validated params for
+ANY of the 5 active pairs on EMA-bounce/M30) — user: "Just continue what
+you're doing" on the recommendation. Implemented:
+
+| Pair | Change |
+|---|---|
+| GBP_USD | Unchanged — breakout_retest/M30, already proven live |
+| NZD_USD | -> breakout_retest, H4 primary / Daily confirm |
+| GBP_CAD | -> breakout_retest, H4 primary / Daily confirm |
+| CHF_JPY | -> breakout_retest, H4 primary / Daily confirm |
+| EUR_JPY | Paused: FOREX_PAIRS -> FOREX_WATCH — no strategy/TF tested showed any edge |
+
+trend_retest (the strategy built from user reference material) was
+explicitly NOT adopted anywhere — never decisively beat breakout_retest
+after a fair tuning pass, and its best-looking result (USD_CAD @ H1)
+proved to be pure overfitting once holdout-checked. Stays backtest-only,
+same treatment as trend_follow/gold_trend (documented, tested, not live).
+
+## Implementation
+- `config.py`: new `PRIMARY_TF_PER_PAIR` dict + `primary_tf_for(pair)`
+  resolver, exact mirror of the existing `CONFIRM_TF_PER_PAIR`/
+  `confirm_tf_for()` pattern. `CONFIRM_TF_PER_PAIR` extended — the 3
+  switched pairs get Daily confirm (H4 can't confirm itself).
+  `STRATEGY_OVERRIDE` extended with the 3 pairs. `FOREX_PAIRS` down to 4,
+  `FOREX_WATCH` gains EUR_JPY.
+- **Audited every `config.TIMEFRAMES["primary"]` usage in the codebase**
+  (not just the obvious ones) and wired `config.primary_tf_for(pair)` into
+  each functionally-live one: `engine/signal_engine.py` (14 call sites —
+  the core live decision path), `main.py` (9 — live scan loop, weekend-
+  close checks, trade-tick candle fetches, diagnostic scans),
+  `engine/wfo_optimizer.py` (the weekly live tuner's own candle fetch),
+  `backtest/runner.py` (`confirm_tf_ratio()` — previously divided by the
+  *global* primary TF regardless of pair, would have silently misaligned
+  every WFO window for the 3 switched pairs; also the CLI's default primary
+  TF), `engine/strategy_ema_cci_macd.py` + `strategy_trend_follow.py` (EMA
+  auto-fit cache-key — currently inert since `EMA_AUTOFIT_ENABLED=False`,
+  but a latent mismatch otherwise), `dashboard/app.py`'s Backtest/Walk-
+  Forward callback (the tool the user has been running all session — now
+  correctly defaults to each pair's real live TF).
+  Left alone deliberately: `dashboard/state.py`'s `chart_tf` initial value
+  (a UI display default, independent from trading TF by design — viewing
+  a chart at a different TF than the bot trades on is a feature).
+- 13 new tests (`tests/test_pair_tf_routing.py`): `primary_tf_for()`
+  resolution for switched/unswitched pairs, `confirm_tf_ratio()` computing
+  the right bar ratio for H4-primary pairs (would have been wrong before
+  this fix), strategy routing confirms the 3 pairs hit breakout_retest and
+  EUR_JPY still falls back to ema_bounce (pausing didn't accidentally
+  reassign its strategy), pair-list membership.
+- Full suite: 319/319 pass (306 + 13 new).
+- Smoke-tested end-to-end against real OANDA data post-fix: NZD_USD/
+  GBP_CAD/CHF_JPY correctly report `timeframe: H4` from a live
+  `SignalEngine.run()` call; GBP_USD correctly still reports `M30`.
+
+## Deploy
+Committed, pushed, live process restarted (same kill-PID/supervisor-
+relaunch pattern used earlier this session) — confirmed clean startup,
+fresh heartbeat, no errors.
+
+---
+
 # Investigate: is EMA-bounce the wrong strategy? Build + backtest a trend-retest alternative (2026-08-12) — RESULTS IN, DECISION PENDING
 
 ## Why

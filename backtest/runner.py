@@ -96,8 +96,9 @@ def confirm_tf_ratio(pair: str | None = None) -> int:
     2026-07-23 switch to a real H4 confirm, which would have silently
     misaligned WFO's train/test windows had it not been caught.
     """
-    confirm_tf = config.confirm_tf_for(pair) if pair else config.TIMEFRAMES["confirm"]
-    primary_min = _TF_MINUTES.get(config.TIMEFRAMES["primary"], 30)
+    confirm_tf  = config.confirm_tf_for(pair)  if pair else config.TIMEFRAMES["confirm"]
+    primary_tf  = config.primary_tf_for(pair)  if pair else config.TIMEFRAMES["primary"]
+    primary_min = _TF_MINUTES.get(primary_tf, 30)
     confirm_min = _TF_MINUTES.get(confirm_tf, 240)
     return max(1, confirm_min // primary_min)
 
@@ -726,7 +727,7 @@ if __name__ == "__main__":
     from connectors.oanda_connector import OandaConnector
     conn = OandaConnector()
 
-    primary   = args.primary_tf or config.TIMEFRAMES["primary"]
+    primary   = args.primary_tf or config.primary_tf_for(args.pair)
     confirm   = args.confirm_tf or config.confirm_tf_for(args.pair)
     _ratio    = max(1, _TF_MINUTES.get(confirm, 240) // _TF_MINUTES.get(primary, 30))
     _cf_bars  = max(50, args.bars // _ratio)

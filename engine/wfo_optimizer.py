@@ -274,7 +274,7 @@ class WFOOptimizer:
                 logger.info("WFO %s: params still fresh — skipping", pair)
                 continue
             try:
-                df_h1 = get_candles_fn(pair, config.TIMEFRAMES["primary"], train_bars + 60)
+                df_h1 = get_candles_fn(pair, config.primary_tf_for(pair), train_bars + 60)
                 df_h4 = get_candles_fn(pair, config.confirm_tf_for(pair),
                                         train_bars // confirm_tf_ratio(pair) + 20)
                 if df_h1 is None or len(df_h1) < 120:
