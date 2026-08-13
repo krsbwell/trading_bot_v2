@@ -223,6 +223,14 @@ def _pair_options():
     all_pairs = config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", [])
     return [{"label": _fmt_pair(p), "value": p} for p in all_pairs]
 
+def _traded_pair_options():
+    """Backtest/Walk-Forward pair dropdown, scoped to config.FOREX_PAIRS only
+    — the pairs actually placing real orders. FOREX_WATCH pairs (signals
+    shown, no trades) stay selectable on the main chart via _pair_options()
+    but were dropped from here 2026-08-13 at user request, to stop testing/
+    reporting on pairs not actually in play for a live decision."""
+    return [{"label": _fmt_pair(p), "value": p} for p in config.FOREX_PAIRS]
+
 def _sep():
     return html.Div(style={"width": "1px", "height": "22px",
                             "background": "#30363d", "alignSelf": "center"})
@@ -821,7 +829,7 @@ app.layout = html.Div(
                     html.Span("Pair:", style={"color": "#8b949e", "fontSize": "0.8rem",
                                               "alignSelf": "center"}),
                     dcc.Dropdown(id="bt-pair-select",
-                                 options=_pair_options(),
+                                 options=_traded_pair_options(),
                                  value=config.FOREX_PAIRS[0], clearable=False,
                                  maxHeight=480,
                                  style={"width": "220px", "fontSize": "0.85rem"}),
