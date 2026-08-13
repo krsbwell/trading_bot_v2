@@ -219,16 +219,17 @@ def _fmt_pair(p: str) -> str:
     return p.replace("_", "/")
 
 
-def _pair_options():
-    all_pairs = config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", [])
-    return [{"label": _fmt_pair(p), "value": p} for p in all_pairs]
-
 def _traded_pair_options():
-    """Backtest/Walk-Forward pair dropdown, scoped to config.FOREX_PAIRS only
-    — the pairs actually placing real orders. FOREX_WATCH pairs (signals
-    shown, no trades) stay selectable on the main chart via _pair_options()
-    but were dropped from here 2026-08-13 at user request, to stop testing/
-    reporting on pairs not actually in play for a live decision."""
+    """Both the main chart's pair-select and the Backtest/Walk-Forward
+    dropdown, scoped to config.FOREX_PAIRS only — the pairs actually placing
+    real orders. FOREX_WATCH pairs (signals shown, no trades) are no longer
+    selectable in either dropdown as of 2026-08-13, at user request — audited
+    both dcc.Dropdown instances in this file (only these two exist) rather
+    than fixing one and leaving the other stale. Watch pairs still surface
+    on their own in the Signal Monitor panel (state["signals"], populated by
+    main.py's own pair loop, not this list) and in the bulk WFO-refit job
+    (dashboard/app.py's ml-wfo-btn handler) — both intentionally still cover
+    the full roster, unrelated to pair-selection UI."""
     return [{"label": _fmt_pair(p), "value": p} for p in config.FOREX_PAIRS]
 
 def _sep():
@@ -406,7 +407,7 @@ app.layout = html.Div(
                 # to the button, not spanning the full chart width.
                 html.Div([
                     dcc.Dropdown(
-                        id="pair-select", options=_pair_options(),
+                        id="pair-select", options=_traded_pair_options(),
                         value=config.FOREX_PAIRS[0], clearable=False,
                         style={"width": "170px", "fontSize": "0.85rem"},
                     ),
