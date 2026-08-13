@@ -159,3 +159,71 @@
 2026-08-12 07:51:01,423  CRITICAL  Max restarts (3) reached without a clean exit — giving up. Manual intervention required.
 2026-08-12 07:51:01,425  INFO      Starting C:/venv/python.exe main.py — attempt 1/50
 2026-08-12 07:51:01,425  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-12 09:21:11,751  INFO      Starting python.exe main.py — attempt 1/5
+2026-08-12 09:21:11,751  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-12 09:21:11,754  INFO      Starting python.exe main.py — attempt 1/10
+2026-08-12 09:21:11,754  WARNING   main.py exited with code 1 — restarting in 15s (attempt 1/10)
+2026-08-12 09:21:11,754  INFO      Starting python.exe main.py — attempt 2/10
+2026-08-12 09:21:11,754  WARNING   main.py exited with code 1 — restarting in 15s (attempt 2/10)
+2026-08-12 09:21:11,754  INFO      Starting python.exe main.py — attempt 3/10
+2026-08-12 09:21:11,754  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-12 09:21:11,757  INFO      Starting python.exe main.py — attempt 1/3
+2026-08-12 09:21:11,757  WARNING   main.py exited with code 1 — restarting in 0s (attempt 1/3)
+2026-08-12 09:21:11,757  INFO      Starting python.exe main.py — attempt 2/3
+2026-08-12 09:21:11,757  WARNING   main.py exited with code 1 — restarting in 0s (attempt 2/3)
+2026-08-12 09:21:11,757  INFO      Starting python.exe main.py — attempt 3/3
+2026-08-12 09:21:11,757  WARNING   main.py exited with code 1 — restarting in 0s (attempt 3/3)
+2026-08-12 09:21:11,757  CRITICAL  Max restarts (3) reached without a clean exit — giving up. Manual intervention required.
+2026-08-12 09:21:11,760  INFO      Starting C:/venv/python.exe main.py — attempt 1/50
+2026-08-12 09:21:11,760  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-12 17:25:55,619  INFO      Starting python.exe main.py — attempt 1/5
+2026-08-12 17:25:55,619  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-12 17:25:55,622  INFO      Starting python.exe main.py — attempt 1/10
+2026-08-12 17:25:55,622  WARNING   main.py exited with code 1 — restarting in 15s (attempt 1/10)
+2026-08-12 17:25:55,622  INFO      Starting python.exe main.py — attempt 2/10
+2026-08-12 17:25:55,622  WARNING   main.py exited with code 1 — restarting in 15s (attempt 2/10)
+2026-08-12 17:25:55,622  INFO      Starting python.exe main.py — attempt 3/10
+2026-08-12 17:25:55,622  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-12 17:25:55,625  INFO      Starting python.exe main.py — attempt 1/3
+2026-08-12 17:25:55,625  WARNING   main.py exited with code 1 — restarting in 0s (attempt 1/3)
+2026-08-12 17:25:55,625  INFO      Starting python.exe main.py — attempt 2/3
+2026-08-12 17:25:55,625  WARNING   main.py exited with code 1 — restarting in 0s (attempt 2/3)
+2026-08-12 17:25:55,625  INFO      Starting python.exe main.py — attempt 3/3
+2026-08-12 17:25:55,625  WARNING   main.py exited with code 1 — restarting in 0s (attempt 3/3)
+2026-08-12 17:25:55,625  CRITICAL  Max restarts (3) reached without a clean exit — giving up. Manual intervention required.
+2026-08-12 17:25:55,628  INFO      Starting C:/venv/python.exe main.py — attempt 1/50
+2026-08-12 17:25:55,628  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-13 06:47:37,260  INFO      Starting python.exe main.py — attempt 1/5
+2026-08-13 06:47:37,260  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-13 06:47:37,263  INFO      Starting python.exe main.py — attempt 1/10
+2026-08-13 06:47:37,263  WARNING   main.py exited with code 1 — restarting in 15s (attempt 1/10)
+2026-08-13 06:47:37,263  INFO      Starting python.exe main.py — attempt 2/10
+2026-08-13 06:47:37,263  WARNING   main.py exited with code 1 — restarting in 15s (attempt 2/10)
+2026-08-13 06:47:37,263  INFO      Starting python.exe main.py — attempt 3/10
+2026-08-13 06:47:37,263  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-13 06:47:37,266  INFO      Starting python.exe main.py — attempt 1/3
+2026-08-13 06:47:37,266  WARNING   main.py exited with code 1 — restarting in 0s (attempt 1/3)
+2026-08-13 06:47:37,266  INFO      Starting python.exe main.py — attempt 2/3
+2026-08-13 06:47:37,266  WARNING   main.py exited with code 1 — restarting in 0s (attempt 2/3)
+2026-08-13 06:47:37,266  INFO      Starting python.exe main.py — attempt 3/3
+2026-08-13 06:47:37,266  WARNING   main.py exited with code 1 — restarting in 0s (attempt 3/3)
+2026-08-13 06:47:37,266  CRITICAL  Max restarts (3) reached without a clean exit — giving up. Manual intervention required.
+2026-08-13 06:47:37,269  INFO      Starting C:/venv/python.exe main.py — attempt 1/50
+2026-08-13 06:47:37,269  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-13 06:59:36,136  INFO      Starting python.exe main.py — attempt 1/5
+2026-08-13 06:59:36,137  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-13 06:59:36,141  INFO      Starting python.exe main.py — attempt 1/10
+2026-08-13 06:59:36,141  WARNING   main.py exited with code 1 — restarting in 15s (attempt 1/10)
+2026-08-13 06:59:36,142  INFO      Starting python.exe main.py — attempt 2/10
+2026-08-13 06:59:36,142  WARNING   main.py exited with code 1 — restarting in 15s (attempt 2/10)
+2026-08-13 06:59:36,142  INFO      Starting python.exe main.py — attempt 3/10
+2026-08-13 06:59:36,142  INFO      main.py exited cleanly (code 0) — not restarting.
+2026-08-13 06:59:36,145  INFO      Starting python.exe main.py — attempt 1/3
+2026-08-13 06:59:36,145  WARNING   main.py exited with code 1 — restarting in 0s (attempt 1/3)
+2026-08-13 06:59:36,146  INFO      Starting python.exe main.py — attempt 2/3
+2026-08-13 06:59:36,146  WARNING   main.py exited with code 1 — restarting in 0s (attempt 2/3)
+2026-08-13 06:59:36,146  INFO      Starting python.exe main.py — attempt 3/3
+2026-08-13 06:59:36,146  WARNING   main.py exited with code 1 — restarting in 0s (attempt 3/3)
+2026-08-13 06:59:36,146  CRITICAL  Max restarts (3) reached without a clean exit — giving up. Manual intervention required.
+2026-08-13 06:59:36,150  INFO      Starting C:/venv/python.exe main.py — attempt 1/50
+2026-08-13 06:59:36,151  INFO      main.py exited cleanly (code 0) — not restarting.

@@ -14,6 +14,7 @@ import argparse
 import csv
 import logging
 import os
+import random as _random
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,6 +28,10 @@ from engine.strategy_ema_cci_macd import (
 from engine.strategy_breakout_retest import clear_cache as _clear_breakout_cache
 from engine.strategy_trend_follow import clear_cache as _clear_trend_cache
 from engine.strategy_gold_trend import clear_cache as _clear_gold_cache
+from engine.strategy_trend_retest import (
+    clear_cache as _clear_trend_retest_cache,
+    get_tp_levels_structure as _tp_levels_structure,
+)
 from engine.strategy_market_structure import (
     detect_pivots, classify_structure, detect_bos_choch, get_sr_zones, score_structure,
 )
@@ -40,6 +45,44 @@ from trade.paper_trader import PaperTrader
 _STRUCT_MAP = {"bullish": "uptrend", "bearish": "downtrend", "ranging": "ranging"}
 
 _TF_MINUTES = {"M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D": 1440, "W": 10080}
+
+
+def random_signal_fns(fire_rate: float, min_score: "int | float" = 60, seed: int = 42):
+    """
+    Control strategy for A/B testing a real strategy's entry logic: random
+    direction, random timing, no signal logic at all. Same session gate /
+    stop-loss / take-profit mechanics apply via run_backtest as any other
+    strategy (pass the real strategy's own stop_loss_fn/tp_fn alongside
+    this) — only entry *timing and direction* are randomized. Answers one
+    question honestly: does this strategy's entry logic carry real
+    information, or would the same risk/exit rules do just as well picking
+    trades at random? Added 2026-08-12 — see tasks/todo.md.
+
+    fire_rate: per-bar probability of firing a signal at all. Calibrate to
+    another strategy's real trade frequency over the same window (e.g.
+    trend_retest's total_trades / bars) for a fair, apples-to-apples
+    comparison — an uncalibrated rate just tests "some rate of random
+    trades," not "as many opportunities as the real strategy got."
+    Deterministic given `seed`, so the same window always produces the same
+    random trades (reproducible, not re-rolled every run).
+    """
+    rng = _random.Random(seed)
+    _pending: dict = {}
+
+    def _buy(pair, df_h1, df_h4, adaptive=None):
+        key  = (pair, df_h1.index[-1])
+        roll = rng.random()
+        if roll < fire_rate / 2:
+            _pending[key] = "long"
+            return float(min_score)
+        _pending[key] = "short" if roll < fire_rate else None
+        return 0.0
+
+    def _sell(pair, df_h1, df_h4, adaptive=None):
+        key = (pair, df_h1.index[-1])
+        return float(min_score) if _pending.pop(key, None) == "short" else 0.0
+
+    return _buy, _sell
 
 
 def confirm_tf_ratio(pair: str | None = None) -> int:
@@ -196,6 +239,7 @@ def run_backtest(
     buy_fn=None,
     sell_fn=None,
     stop_loss_fn=None,
+    tp_fn=None,
     df_d: "pd.DataFrame | None" = None,
     require_d_trend_alignment: bool = False,
 ) -> dict:
@@ -215,6 +259,14 @@ def run_backtest(
     EMA-bounce instead of the breakout_retest strategy it actually runs
     live, making its WFO-tuned params meaningless (breakout_retest doesn't
     even read the same adaptive keys WFO searches over).
+
+    tp_fn: optional take-profit function, signature (entry, stop_loss,
+    direction, pair, df_h1) -> {"tp1", "tp2", "tp3"}. Defaults to None, which
+    uses risk_manager.get_tp_levels (the live fixed-R:R behavior, unchanged)
+    — pass engine.strategy_trend_retest.get_tp_levels_structure (or any
+    matching function) to backtest a structure-based-target variant instead.
+    Added 2026-08-12 alongside strategy_trend_retest.py specifically so its
+    TP approach could be tested, not assumed. See tasks/todo.md.
 
     df_d: optional Daily-granularity candles for the same pair/period. When
     omitted, d_trend in the recorded signal features stays "neutral" for
@@ -261,6 +313,7 @@ def run_backtest(
     _clear_breakout_cache()
     _clear_trend_cache()
     _clear_gold_cache()
+    _clear_trend_retest_cache()
 
     if len(df_h1) < _WARMUP + 50 or len(df_h4) < 50:
         logger.warning("Backtest %s: insufficient data (%d primary, %d confirm)", pair, len(df_h1), len(df_h4))
@@ -370,7 +423,10 @@ def run_backtest(
 
         # Place simulated trade
         stop_loss = stop_loss_fn(pair, slice_h1, direction)
-        tp_levels = get_tp_levels(entry, stop_loss, direction, pair)
+        if tp_fn is None:
+            tp_levels = get_tp_levels(entry, stop_loss, direction, pair)
+        else:
+            tp_levels = tp_fn(entry, stop_loss, direction, pair, slice_h1)
         size      = calculate_position_size(pt.balance, entry, stop_loss, pair)
         if size <= 0:
             continue
@@ -475,8 +531,9 @@ def run_walk_forward(
               "stability": 0.78,       # oos/is — closer to 1.0 = less overfit
             }, ...
           ],
-          "avg_pf_oos":   ...,
-          "avg_stability": ...,
+          "avg_pf_oos":   ...,   # weighted by trade_count_oos, not a flat
+                                 # mean across windows — see 2026-08-13 fix
+          "avg_stability": ...,  # same weighting
           "best_global_params": {"min_score": ...},
         }
     """
@@ -560,8 +617,24 @@ def run_walk_forward(
                 if test_bars // _ratio < 50 else "")
         return {"pair": pair, "windows": [], "error": "No valid windows produced" + hint}
 
-    avg_pf_oos  = round(sum(w["pf_oos"]    for w in windows_out) / len(windows_out), 2)
-    avg_stab    = round(sum(w["stability"]  for w in windows_out) / len(windows_out), 3)
+    # Weighted by each window's OOS trade count, not a flat mean across
+    # windows — found 2026-08-06 (tasks/todo.md, "WFO headline metrics vs
+    # real live performance", Finding 1): a flat mean gives a 2-trade window
+    # that got lucky (PF 15-19) equal weight to an 8-trade window sitting at
+    # PF ~1, so the headline "Avg OOS PF" can read as a strong edge when
+    # most of the real evidence says otherwise. A window with 0 OOS trades
+    # contributes nothing (weight 0) rather than being scored as a PF-0.00
+    # data point, which was also wrong — no trades isn't evidence of a bad
+    # edge, it's no evidence at all.
+    total_oos_trades = sum(w["trade_count_oos"] for w in windows_out)
+    if total_oos_trades > 0:
+        avg_pf_oos = round(
+            sum(w["pf_oos"] * w["trade_count_oos"] for w in windows_out) / total_oos_trades, 2)
+        avg_stab = round(
+            sum(w["stability"] * w["trade_count_oos"] for w in windows_out) / total_oos_trades, 3)
+    else:
+        avg_pf_oos = 0.0
+        avg_stab   = 0.0
     # Best global params = most frequently selected min_score across windows
     from collections import Counter
     score_counts = Counter(w["best_params"]["min_score"] for w in windows_out)
@@ -598,11 +671,21 @@ if __name__ == "__main__":
     parser.add_argument("--balance", type=float, default=500.0)
     parser.add_argument("--output",  default="data/backtest_results.csv")
     parser.add_argument("--strategy", default="ema_bounce",
-                        choices=["ema_bounce", "trend_follow", "breakout_retest", "gold_trend"],
+                        choices=["ema_bounce", "trend_follow", "breakout_retest", "gold_trend",
+                                 "trend_retest", "random"],
                         help="ema_bounce (default, ranging-market mean-reversion), "
                              "trend_follow (fires only when ADX > threshold), "
-                             "breakout_retest (break of structure + retest confirmation), or "
-                             "gold_trend (XAU_USD 200/50 EMA + RSI pullback)")
+                             "breakout_retest (break of structure + retest confirmation), "
+                             "gold_trend (XAU_USD 200/50 EMA + RSI pullback), "
+                             "trend_retest (H4-trend-gated break+retest+price-action, "
+                             "2026-08-12 — see tasks/todo.md), or "
+                             "random (control: random direction/timing at trend_retest's own "
+                             "signal frequency, same SL/TP — isolates whether entry timing "
+                             "itself has any edge)")
+    parser.add_argument("--tp-mode", default="fixed_rr", choices=["fixed_rr", "structure"],
+                        help="fixed_rr (default, config.TP_RR_PER_PAIR) or structure "
+                             "(next opposing pivot level, strategy_trend_retest.get_tp_levels_structure "
+                             "— falls back to fixed_rr per-level when no pivot qualifies)")
     parser.add_argument("--primary-tf", default=None,
                         help="Override config.TIMEFRAMES['primary'] (e.g. 'D' for Daily). "
                              "Needed to A/B a gold_trend backtest at Daily vs the bot's "
@@ -610,6 +693,11 @@ if __name__ == "__main__":
     parser.add_argument("--confirm-tf", default=None,
                         help="Override config.confirm_tf_for(pair) (e.g. 'W' for Weekly, "
                              "pairing with --primary-tf D).")
+    parser.add_argument("--fire-rate", type=float, default=0.02,
+                        help="--strategy random only: per-bar probability of firing a "
+                             "signal. Default is an arbitrary placeholder — pass a rate "
+                             "calibrated to a real strategy's trades/bars over the same "
+                             "window for a fair comparison, not the default.")
     args = parser.parse_args()
 
     if args.strategy == "trend_follow":
@@ -623,8 +711,17 @@ if __name__ == "__main__":
         from engine.strategy_gold_trend import (
             check_buy_signal as _buy_fn, check_sell_signal as _sell_fn, get_stop_loss as _sl_fn,
         )
+    elif args.strategy == "trend_retest":
+        from engine.strategy_trend_retest import (
+            check_buy_signal as _buy_fn, check_sell_signal as _sell_fn, get_stop_loss as _sl_fn,
+        )
+    elif args.strategy == "random":
+        from engine.strategy_trend_retest import get_stop_loss as _sl_fn
+        _buy_fn, _sell_fn = random_signal_fns(args.fire_rate)
     else:
         _buy_fn, _sell_fn, _sl_fn = check_buy_signal, check_sell_signal, get_stop_loss
+
+    _tp_fn = _tp_levels_structure if args.tp_mode == "structure" else None
 
     from connectors.oanda_connector import OandaConnector
     conn = OandaConnector()
@@ -651,7 +748,7 @@ if __name__ == "__main__":
     res = run_backtest(args.pair, df_h1, df_h4,
                        starting_balance=args.balance,
                        market="forex",
-                       buy_fn=_buy_fn, sell_fn=_sell_fn, stop_loss_fn=_sl_fn,
+                       buy_fn=_buy_fn, sell_fn=_sell_fn, stop_loss_fn=_sl_fn, tp_fn=_tp_fn,
                        df_d=df_d)
 
     if "error" in res:

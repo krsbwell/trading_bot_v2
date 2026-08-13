@@ -21,6 +21,10 @@ from engine.strategy_gold_trend import (
     check_buy_signal as _gt_buy, check_sell_signal as _gt_sell,
     get_stop_loss as _gt_sl, get_last_diag as _gt_diag,
 )
+from engine.strategy_trend_retest import (
+    check_buy_signal as _tr_buy, check_sell_signal as _tr_sell,
+    get_stop_loss as _tr_sl, get_last_diag as _tr_diag,
+)
 
 # All 4 (buy, sell, stop-loss, diagnostics) must route together, since a
 # pair's diagnostics only exist in whichever module's check_buy/sell_signal
@@ -29,6 +33,9 @@ STRATEGY_FNS = {
     "ema_bounce":      (_ema_buy, _ema_sell, _ema_sl, _ema_diag),
     "breakout_retest": (_br_buy, _br_sell, _br_sl, _br_diag),
     "gold_trend":      (_gt_buy, _gt_sell, _gt_sl, _gt_diag),
+    # Backtest-only as of 2026-08-12 — no config.STRATEGY_OVERRIDE entry yet.
+    # See tasks/todo.md for the design + validation this was built from.
+    "trend_retest":    (_tr_buy, _tr_sell, _tr_sl, _tr_diag),
 }
 
 

@@ -1,3 +1,436 @@
+# Fix: WFO avg_pf_oos/avg_stability was a flat mean, not weighted by trade count (2026-08-13) — DONE
+
+## Why
+Flagged as "Finding 1" back on 2026-08-06 ([[bugs_wfo_no_oos_validation]]'s
+sibling finding, never fixed) and left as an open todo item ever since. User
+shared real dashboard Walk-Forward screenshots today for EUR/JPY, CHF/JPY,
+GBP/CAD, NZD/USD, GBP/USD — NZD/USD's headline "Avg OOS PF 7.22" turned out
+to be almost entirely driven by 2 windows with 2-3 lucky trades each (OOS PF
+15.62, 19.34) sitting right next to 2 total-wipeout windows (OOS PF 0.00),
+which the flat average completely hid. Same pattern, smaller, in CHF/JPY
+(Avg 2.65 propped up by a single 1-trade window at PF 9.11). Confirmed the
+bug is real and currently misleading, not just theoretical.
+
+## Fix
+`backtest/runner.py::run_walk_forward()`: `avg_pf_oos`/`avg_stability` are
+now weighted by each window's `trade_count_oos` instead of a flat mean
+across windows — `sum(pf_oos * trades) / sum(trades)`, same for stability.
+A window with 0 OOS trades now contributes nothing (weight 0) rather than
+being scored as a misleading PF-0.00 data point — no trades isn't evidence
+of a bad edge, it's no evidence at all. No dashboard code change needed —
+`dashboard/app.py` just renders whatever `avg_pf_oos`/`avg_stability` the
+backend returns.
+
+## Tests
+3 new (`tests/test_walk_forward_averaging.py`), `run_backtest()` monkeypatched
+at the module boundary so each window's exact PF/trade-count is controlled
+(testing real strategy output through synthetic price data can't guarantee
+specific PF/trade-count combinations — the averaging math is what's under
+test, not the strategies):
+- 2 windows (2 trades @ PF 19.0, 8 trades @ PF 1.0) — old flat mean gives
+  10.0, fix gives the trade-weighted 4.6, confirmed exactly.
+- A 0-trade window contributes nothing — average matches the other window's
+  own PF exactly, not a PF-0.00-penalized blend.
+- All-zero-trade edge case — no crash (division-by-zero avoided), reports
+  0.0 rather than a misleading number.
+
+Full suite: 306/306 pass (303 + 3 new).
+
+## Verification against the real case that surfaced this
+Re-ran NZD_USD (same train=1500/test=750/step=500/4500 bars as the user's
+dashboard screenshot) through the fixed code — see chat for the concrete
+before(7.22)/after comparison.
+
+---
+
+# Investigate: is EMA-bounce the wrong strategy? Build + backtest a trend-retest alternative (2026-08-12) — RESULTS IN, DECISION PENDING
+
+## Why
+Live EMA-bounce performance reviewed honestly: 16 real closed trades since
+07-31, 18.8% WR, net -$34.60, 12/13 losses hitting a clean stop (not
+managed) — worse than a week earlier, not better, despite this week's
+infra fixes (gate/reconcile/WFO). User: "I didn't create the bot to win
+losing trades," frustrated with patch-after-patch on a strategy that may be
+fundamentally wrong, not buggy. User supplied 3 reference documents (a
+break-and-retest SOP checklist, a simple 3-confluence forex strategy, an
+explainer on why retests work) and corrected the direction directly: trade
+**with** the trend, pull back to **support/resistance**, not to a moving
+average — the opposite premise from EMA-bounce (which hard-disables itself
+during real trends via its ADX gate).
+
+## What the reference material actually said (analyzed, not rubber-stamped)
+Trend bias first (higher-TF direction) → wait for a break of a real S/R
+level (not an EMA) → wait for a retest of that broken level → confirm with
+a price-action rejection candle → treat other indicators (MACD/EMA
+confluence) as optional bonus, not mandatory gates ("if even one of trend/
+location/confirmation is missing, skip the trade" — everything else is
+optional). Realization: this isn't a new build — `engine/strategy_
+breakout_retest.py` (already live for GBP_USD, the one strategy experiment
+in this project's history with a confirmed real live edge) already does
+break+retest+price-action-confirmation. It's just missing an explicit
+trend-direction gate and treats MACD as an equal-weight condition instead
+of a bonus. Confirmed via the [[project_trend_follow_experiment]] memory
+that this is NOT the same idea as the already-shelved "trend-follow"
+experiment (that was an EMA-touch entry with the ADX gate inverted — a
+different mechanic entirely; no wasted-effort concern re-testing this).
+
+## Web validation (done before building, per explicit user instruction not
+to "just throw one up")
+- [Break and Retest Strategy — fxopen/Market Pulse](https://fxopen.com/blog/en/how-can-you-use-a-break-and-retest-strategy-in-trading/), [EBC Financial Group](https://www.ebc.com/forex/break-and-retest-in-trading-step-by-step-strategy), [XS](https://www.xs.com/en/blog/break-retest-trading/) — confirms break-and-retest with rejection-candle confirmation is a well-documented, widely-taught FX strategy family, not invented from the 3 reference docs alone.
+- [Mastering Multiple Time-Frame Analysis in Forex](https://www.markets4you.com/en/blog/product-features/mastering-multiple-time-frame-analysis-in-forex-from-trend-to-entry/), [ShopForexEA multi-timeframe analysis](https://shopforexea.com/multi-timeframe-analysis/) — confirms H4-for-bias/M30-for-entry is the documented best practice ("H4 serves as the market bias & trend context timeframe, while M30 handles structure & momentum alignment... if higher-timeframe conditions are not aligned, no trade is allowed") — directly validates making H4 alignment a **hard** gate, unlike EMA-bounce's soft-scored equivalent.
+- [FXGlory break-and-retest](https://fxglory.com/learn/forex-strategies/break-and-retest-strategy-forex/) — confirms rejection-candle-at-retest as the standard confirmation method, matching what's already built (`detect_patterns`).
+- [For Traders — false breakouts](https://fortraders.com/blog/false-breakouts-why-they-happen-how-to-trade), [FXGlory breakout strategy](https://fxglory.com/learn/forex-strategies/forex-breakout-strategy/) — honest counter-signal surfaced, not hidden: breakout failure rates are timeframe-dependent (68-72% on 1-min, 40-45% on daily; EUR/USD ~58% intraday) — M30 sits on the higher-fakeout-risk side, not the daily side. No real OANDA volume data available to use the one real-time fakeout tell these sources flag, so it isn't used.
+
+## Design decisions (talked through with user before building — see chat, not
+duplicated here in full)
+- H4 trend bias reused as the hard gate (not a new M30 50-EMA — one already
+  exists system-wide via `config.EMA_FIXED_PERIODS`/`get_best_emas`, user
+  caught that this would have been redundant new code).
+- S/R levels: kept pivot/structure-based (what already produced GBP_USD's
+  real edge), not day-trading concepts (PMH/PML/ORB) that don't map to
+  24-hour forex.
+- MACD demoted from an equal-weight condition to a pure bonus — trend +
+  retest-location + price-action-confirmation are the 3 required
+  conditions, matching the reference material's philosophy exactly.
+- New module (`strategy_trend_retest.py`), not an in-place edit to
+  `strategy_breakout_retest.py` — GBP_USD is live on that exact behavior
+  today.
+- User's follow-up ask: also test the TP approach in the backtest, not just
+  assume the existing fixed R:R — added a structure-based-target option
+  and compared both.
+
+## Build — DONE 2026-08-12
+- `engine/strategy_trend_retest.py` (new module): H4 hard gate (`_h4_bias`,
+  reuses `config.EMA_FIXED_PERIODS` mid-period EMA, no new indicator) + BOS
+  hard gate (reuses `strategy_market_structure`) + 3 required scored
+  conditions (retest, not-invalidated, price-action confirmation, 21 of 25
+  pts) + MACD demoted to a 4-pt bonus, never a gate.
+- `engine/strategy_trend_retest.get_tp_levels_structure()`: structure-based
+  TP (next opposing pivot beyond a 1R floor), falls back to
+  `risk_manager.get_tp_levels`'s fixed R:R per-level when no pivot qualifies.
+- Wired into `engine/strategy_dispatch.py` (`STRATEGY_FNS["trend_retest"]`,
+  backtest-only — no `config.STRATEGY_OVERRIDE` entry) and
+  `backtest/runner.py` (`--strategy trend_retest`, `--strategy random`,
+  `--tp-mode {fixed_rr,structure}`, new `tp_fn` param on `run_backtest()`).
+- `backtest/runner.random_signal_fns()`: seeded random-direction/timing
+  control, same SL/TP mechanics as whatever it's compared against — isolates
+  whether entry timing itself carries information.
+- 21 new tests (`tests/test_strategy_trend_retest.py`,
+  `tests/test_backtest_tp_and_random.py`). Full suite: 302/302 pass.
+
+## Comparison results — full active+watch roster, 4500 M30 bars, real OANDA data
+
+4 variants per pair: current live strategy (baseline), trend_retest+fixed
+R:R, trend_retest+structure TP, random control (seeded, fire-rate calibrated
+to trend_retest's own trade count for that pair/window). Full table saved to
+scratchpad (`trend_retest_comparison.csv`); summary:
+
+| Pair | current_live PF/PnL | trend_retest PF/PnL (fixedRR) | vs random PF |
+|---|---|---|---|
+| NZD_USD | 1.18 / +$14.92 | 1.02 / +$0.75 | beats random (0.65) |
+| GBP_CAD | 2.49 / +$130.03 | 1.99 / +$20.47 | beats random (0.97) |
+| **GBP_USD** | 2.45 / +$71.03 | **3.12 / +$45.38** | beats random (2.02) |
+| CHF_JPY | 1.54 / +$39.82 | 0.96 / -$1.22 | **loses to random (1.83)** |
+| EUR_JPY | 1.03 / +$3.29 | 1.27 / +$8.20 | beats random (0.62) |
+| EUR_CHF | 1.00 / +$0.17 | 0.84 / -$3.16 | beats random (0.09) |
+| AUD_JPY | 1.60 / +$57.37 | 0.95 / -$2.10 | beats random (0.78) |
+| EUR_CAD | 1.26 / +$30.06 | 0.41 / -$14.48 | beats random (0.31), both bad |
+| EUR_GBP | 1.52 / +$15.57 | 1.48 / +$4.79 | beats random (0.18) |
+| CAD_CHF | 0.76 / -$10.86 | 0.67 / -$4.85 | **loses to random (1.46)** |
+| NZD_CHF | 1.00 / -$0.05 | 0.00 / -$33.88 | **loses to random (0.39)**, worst result |
+| USD_CAD | 2.04 / +$67.03 | 1.36 / +$7.32 | ~tied (1.43) |
+| EUR_AUD | 1.81 / +$86.60 | 0.57 / -$15.06 | ~tied (0.56), both bad |
+
+Structure TP vs fixed R:R: functionally identical on 9/13 pairs (the 1R-floor
+fallback to fixed R:R triggered on effectively every trade); where it did
+differ (GBP_CAD, EUR_CAD, EUR_AUD) it was slightly *worse*, never better. No
+evidence structure-based targeting helps over the existing fixed R:R here.
+
+## Honest read — not a clean win, one real positive signal
+- **trend_retest beats random on 8/13 pairs, loses on 3/13 (CHF_JPY,
+  CAD_CHF, NZD_CHF), roughly ties on 2/13.** Entry timing carries *some*
+  information on average, not overwhelming, and not universal.
+- **trend_retest underperforms the current live strategy on 12 of 13
+  pairs**, often badly (flips profitable pairs like AUD_JPY, EUR_CAD,
+  EUR_AUD, NZD_CHF to net losers) — mostly driven by trade count collapsing
+  to roughly 1/3-1/2 of baseline once both hard gates (H4 + BOS) stack.
+- **The one clear exception is GBP_USD** — trend_retest's PF (3.12) beats
+  the currently-live breakout_retest's PF (2.45) on the same window. This
+  is the pair trend_retest is structurally closest to (breakout_retest +
+  the added H4 gate), so this is a real, explainable result, not a fluke
+  read — it confirms the specific design hypothesis on the one pair where
+  it was most directly testable. It didn't generalize to pairs currently
+  running EMA-bounce.
+
+## Explicitly NOT done yet — flagging before any decision
+- **No fit/holdout split was run** — every number above is one aggregate
+  4500-bar backtest, not out-of-sample validated the way the WFO fix
+  requires for parameter tuning. Trade counts here (5-13 per pair) are
+  thinner than even the baseline (10-43), under this project's own
+  ~30-trade trust threshold. Directional evidence only — GBP_USD's positive
+  result in particular deserves a holdout check before anyone trusts it.
+- No live config change made — `STRATEGY_OVERRIDE` untouched, `trend_retest`
+  is backtest-only.
+
+## Test #2 (2026-08-12) — same comparison at H1 and M15, ALL strategies x ALL pairs
+User: "run the same test on 1H and on the 15M chart to test all the strategies."
+Widened scope: ema_bounce, breakout_retest, trend_retest (both TP modes),
+random control — all 5, on all 13 pairs, at both timeframes (not just
+whichever strategy is currently live per pair). Confirm TF held at H4
+throughout (ignored `CONFIRM_TF_PER_PAIR`'s EUR_AUD->H1 override for this
+run specifically — H1 primary + H1 confirm would collide). Same 4500-bar
+convention as Test #1 — methodology note: this covers a **different real
+time span per timeframe** (~187 days at H1, ~94 at M30, ~47 at M15), same
+convention this project already used comparing M30/H4 vs Daily/Weekly for
+gold — not matched-date-range, flagging plainly rather than letting it pass
+silently. Full 130-row table: `timeframe_comparison.csv` (scratchpad).
+
+### Finding independent of trend_retest — EMA-bounce itself looks stronger at H1
+Tested unchanged on every pair regardless of current live TF: USD_CAD
+PF 2.61/+$204 (vs its live M30 PF 2.04/+$67), GBP_USD PF 1.43/+$90 (vs
+M30's own breakout_retest PF 2.45/+$71 — mixed, PnL up but PF down), EUR_JPY
+PF 1.33/+$60 (vs M30 PF 1.03/+$3), NZD_USD PF 1.52/+$71 (vs M30 PF
+1.18/+$15). Not universal (CHF_JPY did better at M30: +$40 vs +$19 at H1)
+but leans toward H1 being at least competitive, often better, for the
+**existing, unchanged** strategy — on 2-3x the trade count too (more
+statistical weight). This is a real, separate, lower-risk lever from the
+whole trend_retest question — a timeframe change needs zero new strategy
+code, `config.TIMEFRAMES`/`CONFIRM_TF_PER_PAIR` already support it.
+
+### trend_retest at H1 — a clearer signal than M30, with real standouts
+Beats random on 9/13 pairs (vs 8/13 at M30), loses on 4 (NZD_USD, GBP_CAD,
+EUR_CHF, CAD_CHF — GBP_CAD badly, PF 0.14 vs random's 1.97).
+Standouts: **USD_CAD PF 4.03 (fixed R:R) / 5.65 (structure TP)** — the best
+number in either test, on 17 trades, real edge over both ema_bounce (PF
+2.61) and breakout_retest (PF 1.86) at the same H1/pair. EUR_JPY PF
+2.03-2.13. EUR_GBP PF 1.58-1.62. EUR_CAD PF 1.12-1.21. Weak/negative spots:
+GBP_CAD, NZD_USD, CHF_JPY, CAD_CHF, EUR_AUD.
+
+### Structure TP vs fixed R:R at H1 — first real evidence it can help
+Mostly still identical (fallback dominates), but **USD_CAD H1 is a genuine,
+clear win for structure TP** (PF 5.65 vs 4.03, PnL +$78 vs +$66) — the
+first pair/TF combo in either test where the structure-based target beat
+fixed R:R by a real margin, not noise-level.
+
+### M15 — sample sizes too thin to trust
+Trade counts collapse to single digits almost everywhere (2-25, most
+strategies landing 3-13 over the ~47-day window) — well below even the
+already-thin H1/M30 baselines. Some headline numbers look dramatic (EUR_JPY
+trend_retest PF 3.38 on 10 trades, GBP_CAD trend_retest PF 0.00 — total
+wipeout — on 7 trades) but at this sample size that's as likely to be noise
+as signal. Not treating any M15 number as evidence either way without a
+much longer window or more pairs' worth of confirmation.
+
+### Still not holdout-validated
+Same caveat as Test #1, now more pronounced given some H1/M15 standout
+results (USD_CAD H1 especially) ride on 13-17 trades. Worth a holdout check
+specifically on USD_CAD H1 trend_retest before anyone treats that number as
+real, given how far outside the pack it sits.
+
+## Test #3 (2026-08-12) — H4 primary, Daily as confirm/bias TF
+User: "what about H4?" H4 can't confirm itself, so Daily was used as the
+higher-TF bias/confirm (next step up — matches "Daily bias, H4 structure,
+lower TF entry" from Test #1's sources). Same 4500-bar convention — real
+span here is ~750 days (~2 years), the largest of the 4 timeframes tested.
+Full table: `h4_comparison.csv` (scratchpad).
+
+### Big independent finding — breakout_retest looks strong at H4 across MANY
+### pairs currently running EMA-bounce, not just its one live pair (GBP_USD)
+breakout_retest beats ema_bounce head-to-head at H4 on 8 of 13 pairs: NZD_USD
+(PF 2.90 vs 1.25), GBP_CAD (2.07 vs 1.11), CHF_JPY (2.21 vs 1.11), AUD_JPY
+(2.09 vs 0.77), EUR_GBP (2.63 vs 0.98), EUR_CHF (2.00 vs 1.51), USD_CAD
+(1.76 vs 1.30), CAD_CHF (1.24 vs 0.73). This is a bigger, more credible
+signal than anything trend_retest produced — breakout_retest has a real
+live track record (GBP_USD, M30) unlike trend_retest which has never traded
+a real dollar. Losing pairs: GBP_USD, EUR_CAD, NZD_CHF, EUR_AUD.
+
+### trend_retest at H4
+Beats random on 9/13. Standout: **CHF_JPY — structure TP (PF 2.71) beats
+both fixed R:R (2.26) and breakout_retest itself (2.21)**, on a real 19-trade
+sample — the strongest structure-TP result seen across all 3 tests. Bad
+spots: **EUR_CAD collapses (PF 0.35-0.41) while its random control posts
+PF 4.01** — one of the largest strategy-vs-random inversions in this whole
+investigation, almost certainly small-sample noise (15 trades) rather than
+"random beats a real strategy," but exactly the kind of number that proves
+why none of this gets trusted without a holdout check. EUR_AUD similarly
+loses to random.
+
+### GBP_USD is oddly bad at H4/Daily — every variant loses except random
+Notable specifically because GBP_USD is the *strongest* pair at every other
+timeframe tested (M30 live PF 2.45, H1 ema_bounce PF 1.43, M15 breakout_retest
+PF 2.87). H4/Daily looks like the one timeframe that doesn't suit this pair,
+for any strategy tried.
+
+### Cross-timeframe pattern (trend_retest's best PF per pair, all 4 TFs)
+| Pair | M30 | H1 | M15 | H4 | Best TF |
+|---|---|---|---|---|---|
+| NZD_USD | 1.02 | 0.56 | 1.20 | **2.06** | H4 |
+| GBP_CAD | **1.99** | 0.14 | 0.00 | 1.75 | M30 |
+| GBP_USD | **3.12** | 0.75 | 1.48 | 0.59 | M30 (H4 worst) |
+| CHF_JPY | 0.96 | 0.71 | 0.42 | **2.71** | H4 |
+| EUR_JPY | 1.27 | 2.13 | **3.38** | 1.92 | M15 (thin sample) |
+| USD_CAD | 1.36 | **5.65** | 0.64 | 1.53 | H1 |
+| EUR_GBP | 1.48 | 1.62 | 1.91 | **1.98** | H4 (all 4 decent) |
+| EUR_AUD | 0.57 | 0.89 | 0.85 | 0.91 | none — weak everywhere |
+
+**No single timeframe wins across the board — different pairs favor
+different timeframes, and there's no way to tell a real pattern from
+cherry-picking the best cell out of 52 (13 pairs x 4 TFs) without holdout
+validation.** Flagging this explicitly: picking "USD_CAD's best is H1,
+CHF_JPY's best is H4" straight off this table would be a textbook multiple-
+comparisons trap — with 52 cells, some will look great by chance alone,
+the same failure mode the WFO optimizer fix ([[bugs_wfo_no_oos_validation]])
+exists to catch. None of this should drive a live decision without that
+check first.
+
+## Holdout validation (2026-08-12) — the piece flagged missing 3 times, finally run
+User: "I don't see any calibrations because the losses are adding up now
+that we have history to compare, continue." Split each standout candidate's
+window into an early 70% (fit) / final unseen 30% (holdout), same bar
+range, no parameter tuning involved — a real edge should hold up in the
+unseen slice, not just the one it was found in. Full data:
+`holdout_results.csv` (scratchpad).
+
+### A) breakout_retest vs ema_bounce @ H4/Daily — 8 pairs, both windows
+| Pair | ema_bounce fit→hold PF | breakout_retest fit→hold PF |
+|---|---|---|
+| NZD_USD | 1.29→0.91 (flips to losing) | 3.93→1.93 (stays profitable) |
+| GBP_CAD | 1.17→0.90 (flips to losing) | 1.59→**3.59** (improves) |
+| CHF_JPY | 0.88→1.92 (inconsistent) | 2.65→1.36 (degrades, stays >1) |
+| AUD_JPY | 0.88→0.53 (bad both) | 1.79→**2.81** (improves) |
+| EUR_GBP | 1.24→0.62 (flips to losing) | 3.57→1.49 (degrades, stays >1) |
+| EUR_CHF | 1.28→**2.09** (improves) | 1.66→**2.58** (improves) |
+| USD_CAD | 1.32→1.03 (degrades to flat) | 2.23→0.95 (degrades, flips slightly negative) |
+| CAD_CHF | 0.75→0.66 (bad both) | 1.56→0.99 (degrades to flat) |
+
+**breakout_retest stays profitable (PF>1) in BOTH windows on 6 of 8 pairs**
+(NZD_USD, GBP_CAD, CHF_JPY, AUD_JPY, EUR_GBP, EUR_CHF). **ema_bounce — the
+strategy actually live today — only does that on 1 of 8** (EUR_CHF); it
+flips from profitable to losing out-of-sample on 3 pairs (NZD_USD, GBP_CAD,
+EUR_GBP) and is bad in both windows on 2 more (AUD_JPY, CAD_CHF). This is
+the one finding from the whole investigation that survives actually being
+checked — breakout_retest at H4 is more robust than the incumbent, not
+just luckier in one aggregate window.
+
+### B) trend_retest, USD_CAD @ H1 — the PF 5.65 headline number
+Fit: PF 6.05 (fixedRR) / 11.41 (structTP) on 13 trades — looked spectacular.
+**Holdout: PF 1.15 on just 4 trades, both TP modes identical.** This does
+**not** survive out-of-sample — it was the early stretch of the window,
+not a real edge. Exactly the overfitting trap this check exists to catch;
+good that it got caught before anyone acted on it.
+
+### C) trend_retest, CHF_JPY @ H4
+fixedRR 2.31→1.91, structTP 2.86→1.82 — both stay above PF 1 in holdout
+(directionally real, doesn't collapse like USD_CAD did) but holdout n=3 is
+too thin to call this confirmed either way — suggestive, not proof.
+
+### D) EUR_CAD @ H4 anomaly (random posted PF 4.01 in the aggregate view)
+Random: fit PF 0.80 → holdout PF **0.00**. Confirmed noise, not a real
+random-beats-strategy signal — the aggregate number was an artifact of
+that specific full window, not a reproducible effect.
+
+## Where this leaves the decision
+**breakout_retest @ H4, broadened beyond its current one live pair
+(GBP_USD/M30), is the only candidate in this entire investigation that
+survived actual holdout testing** — 6 of 8 pairs profitable in both windows,
+and more consistent than what's live today at the same timeframe.
+trend_retest's most exciting number didn't hold up; its only holdout-
+positive result (CHF_JPY) is too thin to lean on alone. Recommending this
+to the user as the concrete, validated next step rather than trend_retest.
+
+## Fair-shot tuning pass for trend_retest (2026-08-12)
+User, correctly: comparing an untuned strategy against ones with months of
+WFO/adaptive-params calibration isn't a fair test. Made `h4_bias_period`
+tunable via the `adaptive` dict (was hardcoded to `config.EMA_FIXED_PERIODS`
+mid) alongside the already-tunable `retest_band_mult`. New test
+(`TestH4BiasPeriodTunable`), full suite 303/303. Grid search (4 periods x 4
+band widths = 16 combos) run on the FIT window only, same discipline as the
+real WFO fix — the holdout window never influences which combo gets picked.
+8 pairs, H4/Daily. Full data: `tuning_results.csv` (scratchpad).
+
+| Pair | ema_bounce hold | breakout_retest hold | trend_retest untuned hold | trend_retest **tuned** hold |
+|---|---|---|---|---|
+| NZD_USD | 0.91 | 1.93 | 1.95 (4tr) | 2.06 (2tr — too thin) |
+| GBP_CAD | 0.90 | **3.59** | 1.15 (3tr) | 0.77 (5tr) — **tuning made it worse** |
+| CHF_JPY | 1.92 | 1.36 | 1.91 (3tr) | **2.03** (5tr) |
+| AUD_JPY | 0.53 | **2.81** | 0.56 (6tr) | 1.11 (3tr — too thin) |
+| EUR_GBP | 0.62 | **1.49** | 1.30 (5tr) | 1.30 (5tr) — tuning changed nothing |
+| EUR_CHF | 2.09 | 2.58 | 1.25 (5tr) | **2.93** (5tr) |
+| USD_CAD | 1.03 | 0.95 | 1.00 (3tr) | **1.68** (9tr) |
+| CAD_CHF | 0.66 | 0.99 | 0.00 (4tr) | 0.00 (3tr) — nothing helps here |
+
+### Honest read — genuinely mixed, not a clean answer either direction
+- **Tuning helped, sometimes decisively: CHF_JPY, EUR_CHF, USD_CAD** — on
+  these 3, tuned trend_retest now beats both ema_bounce and breakout_retest
+  on the same holdout data. EUR_CHF and USD_CAD are the most credible (5
+  and 9 holdout trades, the least-thin of this whole tuning pass).
+- **breakout_retest remains clearly best on 4 of 8: GBP_CAD, AUD_JPY,
+  EUR_GBP, CAD_CHF** — tuning trend_retest didn't close the gap on any of
+  these, and on GBP_CAD it made things actively worse (fit PF 4.38 looked
+  great in-sample, collapsed to holdout PF 0.77, below the untuned 1.15) —
+  a real, caught-in-the-act overfitting example, not a hypothetical one.
+- **No universal winner even after a fair tuning pass.** This now looks
+  like a genuine per-pair choice between breakout_retest and tuned
+  trend_retest, not a case for blanket-adopting either one everywhere.
+- **Every number above still rides on 2-9 holdout trades** — thinner than
+  even this project's already-thin usual bar. The tuning pass answered
+  "does trend_retest deserve a fair shot" (yes, and on 3 pairs it earned
+  one) — it does not answer "is this ready for real money" on any single
+  pair yet. That needs either a longer/different backtest window or real
+  forward paper-trading data, not another round of the same historical
+  window.
+
+## Completing the picture — remaining 5 pairs (2026-08-12)
+The first tuning pass only covered the 8 pairs where breakout_retest had
+already won at H4 in Test #3 — a biased sample by construction (picked
+because it was already winning). Ran the identical fair methodology on the
+5 leftover pairs: EUR_JPY, GBP_USD, EUR_CAD, NZD_CHF, EUR_AUD. Data:
+`tuning_results_remaining5.csv`.
+
+| Pair | ema_bounce hold | breakout_retest hold | trend_retest tuned hold |
+|---|---|---|---|
+| EUR_JPY | **1.62** (22tr) | 0.54 (6tr) | 0.30 (9tr) — tuning backfired again |
+| GBP_USD | 0.66 (27tr) | **2.92** (6tr) | 2.53 (7tr) — both good, but see caveat below |
+| EUR_CAD | 0.81 (21tr) | 1.15 (3tr, thin) | 0.75 (11tr) — nothing works well |
+| NZD_CHF | **1.37** (12tr) | 0.71 (7tr) | 0.00 (2-3tr) — trend_retest doesn't work here at all |
+| EUR_AUD | 1.43 (15tr) | 0.80 (9tr) | **1.61** (11tr) — best sample size of this batch |
+
+Two more real overfit catches, same pattern as GBP_CAD: **EUR_JPY's grid
+search found a fit-window combo scoring PF 6.30 — it collapsed to 0.30 on
+holdout.** Tuning is genuinely a coin flip here, not free money: across all
+13 pairs tuned so far, it clearly helped on 4 (CHF_JPY, EUR_CHF, USD_CAD,
+EUR_AUD) and clearly hurt or did nothing on the rest — a believable,
+non-suspicious hit rate for real tuning, which is itself a point in favor
+of trusting the discipline (if it "worked" everywhere it would smell like
+leakage).
+
+**GBP_USD needs its own flag**: holdout-only PF looks strong for both
+breakout_retest (2.92) and tuned trend_retest (2.53) — but Test #3's full-
+window aggregate showed GBP_USD losing on *every* variant at H4 (ema 0.87,
+breakout_retest 0.89). That means the fit (first 70%) portion must have
+been bad enough to drag the whole-window number negative while the last
+30% alone looks good — i.e. this pair's H4 behavior isn't stable within its
+own test window, fit and holdout tell opposite stories. Not trustworthy
+either direction; flagging the instability itself as the finding.
+
+## Final tally — all 13 pairs, fair-tuned, holdout PF
+| Best strategy | Pairs |
+|---|---|
+| **breakout_retest** | GBP_CAD (3.59), AUD_JPY (2.81), EUR_GBP (1.49), CAD_CHF (0.99, least-bad) |
+| **trend_retest (tuned)** | EUR_CHF (2.93), USD_CAD (1.68), CHF_JPY (2.03), EUR_AUD (1.61) |
+| **ema_bounce (current live)** | EUR_JPY (1.62), NZD_CHF (1.37) |
+| Unresolved / nothing works | NZD_USD (3-way tie), GBP_USD (fit/holdout contradict), EUR_CAD (everything weak) |
+
+Roughly an even split between breakout_retest and tuned trend_retest across
+the roster, ema_bounce (what's actually live on 4 of 5 active pairs today)
+wins outright on only 2 of 13. No blanket answer — this is a per-pair
+picture, and every cell is still built on single-digit-to-low-double-digit
+holdout trade counts. The historical-backtest side of this investigation is
+about as far as it can honestly go; next real evidence has to come from
+forward data, not another cut of the same 4500 bars.
+
+---
+
 # Fix: reconcile_open_trades() mislabels/mis-prices closes when TradeDetails 404s on a closed trade (2026-08-12) — DONE
 
 ## Why
