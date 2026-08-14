@@ -378,8 +378,11 @@ TP_RR_PER_PAIR = {
     "EUR_AUD": (1.0, 3.0, 4.5),
 }
 
-# ── News event filter (Finnhub free API) ─────────────────────────────────────
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")   # Leave blank to disable
+# Finnhub news-event filter removed 2026-08-14 — the configured key's plan
+# didn't include the economic-calendar endpoint (403, confirmed live), so
+# it never contributed a real check. ForexFactory (connectors/
+# forexfactory_connector.py, free, no key) already covers the real
+# blackout window. See tasks/todo.md.
 
 EMA_TEST_PERIODS          = [20, 34, 50, 60, 75, 100, 110, 125, 150, 200, 250]
 EMA_REFIT_EVERY_N_CANDLES = 100  # was 50 on H1; 100 M30 bars ≈ same 50-hour wall-clock refit cadence

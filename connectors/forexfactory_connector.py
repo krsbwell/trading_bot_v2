@@ -1,12 +1,21 @@
 """
-ForexFactory economic calendar connector.
+ForexFactory economic calendar connector — the sole news-blackout source
+as of 2026-08-14 (the Finnhub supplement, connectors/news_connector.py,
+was removed: its configured key's plan didn't include the economic-
+calendar endpoint, confirmed via a direct 403 test, so it never
+contributed a real check — see tasks/todo.md).
 
 Uses FF's public XML feeds — no login required:
-  https://nfs.faireconomy.media/ff_calendar_thisweek.xml
-  https://nfs.faireconomy.media/ff_calendar_nextweek.xml
+  https://nfs.faireconomy.media/ff_calendar_thisweek.xml   (confirmed live)
+  https://nfs.faireconomy.media/ff_calendar_nextweek.xml   (404s as of
+    2026-08-14 — confirmed via a direct test, not just log noise; left in
+    place since it's a harmless once-an-hour failed request and may be a
+    temporary rename on ForexFactory's end, not necessarily permanent.
+    thisweek.xml alone already covers the real blackout window this feeds
+    — a 30-min-before/15-min-after check never needs more than ~7 days
+    of lookahead anyway.)
 
-Events are returned in the same dict format as news_connector.py so the
-dashboard can use either source transparently:
+Events are returned as:
   {event, country, currency, impact, time (UTC datetime), pairs}
 
 Times in the FF feed are Eastern Time (ET). We convert to UTC by assuming
@@ -25,7 +34,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# ── Currency → pair mapping (mirrors news_connector) ─────────────────────────
+# ── Currency → pair mapping ────────────────────────────────────────────────
 _CURRENCY_PAIRS: dict[str, list[str]] = {
     "USD": ["EUR_USD", "GBP_USD", "AUD_USD", "USD_CAD"],
     "GBP": ["GBP_USD", "GBP_JPY"],
@@ -157,7 +166,6 @@ def get_upcoming_events(hours: int = 24) -> list[dict]:
 def is_news_blackout(pair: str, before_min: int = 30, after_min: int = 15) -> tuple[bool, str]:
     """
     Return (True, event_name) if a high-impact FF event is within the blackout window.
-    Mirrors news_connector.is_news_blackout() interface.
     """
     _refresh_if_needed()
     now = datetime.now(timezone.utc)

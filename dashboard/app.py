@@ -3862,32 +3862,30 @@ def _render_news_panel(events: list):
     prevent_initial_call=False,
 )
 def update_news_panel(_5min, _60s):
+    """
+    ForexFactory's free thisweek.xml feed only — the only source that ever
+    worked. A Finnhub fallback used to sit here for whenever ForexFactory
+    genuinely had nothing in the next 24h, but the configured key's plan
+    doesn't include the economic-calendar endpoint (confirmed via a direct
+    test: 403 "You don't have access to this resource."), and the fallback
+    bypassed news_connector's own 30-min cache — hitting that 403'd
+    endpoint raw on every 60s dashboard tick. Removed 2026-08-14, not
+    fixed in place — see tasks/todo.md.
+    """
     _empty_store = []
-    # Primary: ForexFactory public XML feed (no API key needed)
     try:
         from connectors.forexfactory_connector import get_upcoming_events as ff_events
         events = ff_events(hours=24)
         if events:
             panel, store = _render_news_panel(events)
             return panel, store
+        message = "No high/medium/low-impact events in the next 24h"
     except Exception as exc:
         logger.warning("ForexFactory news fetch failed: %s", exc)
-
-    # Fallback: Finnhub (requires paid plan — will show error if free tier)
-    if config.FINNHUB_API_KEY:
-        try:
-            from connectors.news_connector import _fetch_events
-            raw = _fetch_events()
-            if raw:
-                traded = set(config.FOREX_PAIRS + getattr(config, "FOREX_WATCH", []))
-                events = [e for e in raw if any(p in traded for p in e.get("pairs", []))]
-                panel, store = _render_news_panel(events)
-                return panel, store
-        except Exception:
-            pass
+        message = "No upcoming events — ForexFactory calendar unavailable"
 
     return html.Div(
-        "No upcoming events — ForexFactory calendar unavailable",
+        message,
         style={"color": "#8b949e", "fontSize": "0.72rem",
                "padding": "0.4rem 0.6rem", "background": "#161b22",
                "borderRadius": "4px", "border": "1px solid #30363d",

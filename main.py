@@ -24,7 +24,6 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 import config
 from connectors.oanda_connector import OandaConnector
-from connectors.news_connector import is_news_blackout
 from connectors.forexfactory_connector import is_news_blackout as ff_is_news_blackout
 from engine.signal_engine import SignalEngine
 from engine.indicators import atr as _calc_atr
@@ -449,23 +448,14 @@ def _process_pair(pair: str, market: str, engine) -> None:
         )
         _block(_ff_reason)
         return
-    # Finnhub: supplement if API key is configured
-    if config.FINNHUB_API_KEY:
-        _news_blocked, _event_name = is_news_blackout(pair)
-        if _news_blocked:
-            _fh_reason = f"News: {_event_name}"
-            logger.info("NEWS BLOCKED (Finnhub): %s — '%s'", pair, _event_name)
-            _audit_blocked(
-                pair=pair, timeframe=signal.get("timeframe", "H1"),
-                direction=signal["direction"],
-                ema_score=signal.get("ema_score", 0),
-                structure_score=signal.get("structure_score", 0),
-                pa_score=signal.get("pa_score", 0),
-                confluence_score=score,
-                result="BLOCKED", reject_reason=_fh_reason,
-            )
-            _block(_fh_reason)
-            return
+    # Finnhub supplement removed 2026-08-14 — the configured key's plan
+    # doesn't include the economic-calendar endpoint (confirmed via a
+    # direct test: 403 "You don't have access to this resource."), so this
+    # branch never actually contributed a real check, only log noise and a
+    # cache-bypassing API hit from the dashboard's news panel fallback. See
+    # tasks/todo.md. ForexFactory (above) already covers the real blackout
+    # window via its thisweek.xml feed — confirmed live, 12 real events
+    # pulled for the next 24h at the time this was investigated.
 
     # ── Duplicate / pre-trade guard ──────────────────────────────────────────
     # This is the PRIMARY duplicate-prevention layer. PaperTrader/TradeManager
