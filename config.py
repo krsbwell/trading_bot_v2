@@ -51,15 +51,25 @@ MODE = "demo"   # "paper" (pure simulation, no OANDA orders) / "demo" (real
 # (see PRIMARY_TF_PER_PAIR/CONFIRM_TF_PER_PAIR). GBP_USD unchanged — already
 # proven, don't fix what isn't broken. EUR_JPY paused (see FOREX_WATCH) —
 # no strategy/timeframe tested showed any validated edge for it.
-FOREX_PAIRS  = ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY"]
+#
+# 2026-08-16 — completed the holdout treatment the 08-13 decision left
+# unfinished (see tasks/todo.md): AUD_JPY promoted off watch onto
+# breakout_retest@H4 (holdout PF 2.81, an exact match run 4 days apart —
+# the cleanest result of that pass). EUR_AUD promoted off watch (was
+# paused 2026-08-05) onto trend_retest@H4 (holdout PF 1.98 on the best
+# trend_retest sample size of the batch, improved since 08-12's 1.61).
+FOREX_PAIRS  = ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY", "AUD_JPY", "EUR_AUD"]
 
 # Per-pair strategy override — a pair not listed here uses the default
 # (strategy_ema_cci_macd / "EMA-bounce"). breakout_retest and trend_retest
 # are also wired into signal_engine.py (see engine/strategy_trend_follow.py
 # — shelved, backtest-only, never wired live; see
-# project_trend_follow_experiment memory for why. trend_retest — backtest-
-# only as of 2026-08-13, never validated well enough to go live, see
-# tasks/todo.md).
+# project_trend_follow_experiment memory for why).
+#
+# trend_retest went live for the first time ever 2026-08-16 (CHF_JPY,
+# EUR_AUD) — see TREND_RETEST_PARAMS_PER_PAIR below for its per-pair tuned
+# knobs and tasks/todo.md for the two independent holdout runs (08-12 and
+# 08-16, 4 days apart) that agreed on both pairs before this switch.
 STRATEGY_OVERRIDE = {
     "GBP_USD":  "breakout_retest",   # promoted 2026-07-02 — see FOREX_PAIRS comment above.
     "NZD_USD":  "breakout_retest",   # 2026-08-13 — holdout-validated at H4, see FOREX_PAIRS comment.
@@ -68,10 +78,40 @@ STRATEGY_OVERRIDE = {
                                       # in 2026-07 and showed a persistent conflict there (PF 0.44) —
                                       # that finding was M30-specific, not a blanket rejection of the
                                       # strategy for this pair; H4 is a genuinely different result.
-    "CHF_JPY":  "breakout_retest",   # 2026-08-13 — holdout-validated at H4 (stayed >1 both windows).
+    "AUD_JPY":  "breakout_retest",   # 2026-08-16 — holdout PF 2.81, exact match across two runs
+                                      # 4 days apart (08-12 and 08-16). Promoted off FOREX_WATCH.
+    "CHF_JPY":  "trend_retest",      # 2026-08-16 — changed from breakout_retest (which had been
+                                      # live since 08-13). Its own holdout numbers favored tuned
+                                      # trend_retest over breakout_retest in BOTH the 08-12 and
+                                      # 08-16 runs (PF 2.03 vs 1.36, exact match both times) — a
+                                      # real, confirmed discrepancy, not a one-off window. See
+                                      # tasks/todo.md 2026-08-16.
+    "EUR_AUD":  "trend_retest",      # 2026-08-16 — promoted off FOREX_WATCH straight onto tuned
+                                      # trend_retest (holdout PF 1.98, 10 trades — the best sample
+                                      # size of the whole 08-16 batch). Was paused from FOREX_PAIRS
+                                      # 2026-08-05 running EMA-bounce/M30/H1-confirm; this is a
+                                      # different strategy+timeframe entirely, not un-pausing the
+                                      # old setup.
     # XAU_USD/"gold_trend" removed 2026-08-01 — shelved, see tasks/todo.md.
     # engine/strategy_gold_trend.py and its STRATEGY_FNS entry are left in
     # place (unused, harmless) in case gold is revisited later.
+}
+
+# Per-pair tuned knobs for strategy_trend_retest.py (h4_bias_period,
+# retest_band_mult — see engine/strategy_trend_retest.py's adaptive.get()
+# calls). Not WFO-tunable — WFO only searches ema_bounce's params and
+# already skips any STRATEGY_OVERRIDE pair. These combos came from the
+# 08-12 fair-tuning pass (16-combo grid search on a FIT window only,
+# holdout never influenced the pick) and were re-confirmed identical on
+# 2026-08-16's independent re-run. Merged into the live `adaptive` dict in
+# engine/signal_engine.py and into backtest.runner.run_backtest()'s
+# default-resolution path (so the dashboard's Backtest/Walk-Forward
+# buttons reflect these too, not trend_retest's untuned defaults) — same
+# "audit every call site" discipline as the 08-13 PRIMARY_TF_PER_PAIR
+# rollout. See tasks/todo.md 2026-08-16.
+TREND_RETEST_PARAMS_PER_PAIR: dict = {
+    "CHF_JPY": {"h4_bias_period": 20, "retest_band_mult": 0.30},
+    "EUR_AUD": {"h4_bias_period": 20, "retest_band_mult": 0.45},
 }
 
 # Stop-loss method for strategy_gold_trend.py — "dynamic" (behind the 50 EMA
@@ -91,15 +131,18 @@ GOLD_STOP_METHOD = "dynamic"
 # CAD_CHF: 33% WR  $+13.69  3.1% DD (9 trades)  PF=1.96 — added 2026-07-02; good ratio, too few trades to trust yet
 # NZD_CHF: 36% WR  $+6.92   5.1% DD (11 trades) PF=1.30 — added 2026-07-02; modest, too few trades to trust yet
 # CHF_JPY: promoted to FOREX_PAIRS 2026-07-29 — see above.
-# USD_CAD, EUR_AUD: paused from FOREX_PAIRS 2026-08-05 — see comment above
+# USD_CAD: paused from FOREX_PAIRS 2026-08-05 — see comment above
 # FOREX_PAIRS. Not a rejection, a hold pending fresh WFO validation.
+# Re-checked again 2026-08-16 (trend_retest-tuned holdout PF 2.02, but on
+# only 4 holdout trades — too thin to act on yet, stays watch).
 # EUR_JPY: paused from FOREX_PAIRS 2026-08-13 — see comment above FOREX_PAIRS.
-# No strategy (EMA-bounce, breakout_retest) or timeframe (M30/H1/H4/M15)
-# tested that day showed any validated edge for this pair specifically;
-# signals still shown, no trades open, pending real evidence one way or
-# the other.
-FOREX_WATCH  = ["EUR_CHF", "AUD_JPY", "EUR_CAD", "EUR_GBP", "CAD_CHF", "NZD_CHF",
-                "USD_CAD", "EUR_AUD", "EUR_JPY"]
+# No strategy (EMA-bounce, breakout_retest, trend_retest as of 08-16) or
+# timeframe (M30/H1/H4/M15) tested has shown any validated edge for this
+# pair specifically; signals still shown, no trades open.
+# AUD_JPY, EUR_AUD: promoted to FOREX_PAIRS 2026-08-16 — see FOREX_PAIRS
+# comment above.
+FOREX_WATCH  = ["EUR_CHF", "EUR_CAD", "EUR_GBP", "CAD_CHF", "NZD_CHF",
+                "USD_CAD", "EUR_JPY"]
 
 # Rejected / removed — losing money, not watched (re-test only if the strategy or gates change)
 # EUR_USD: 23% WR  $-16.51  9.7% DD (30 trades) PF=0.80 — removed from watch 2026-07-02; unsuited to EMA mean-reversion regardless of filters
@@ -130,20 +173,22 @@ TIMEFRAMES = {
 # the global confirm TF above. Same pattern as STRATEGY_OVERRIDE /
 # BREAKEVEN_PER_PAIR / TP_RR_PER_PAIR.
 #
-# EUR_AUD kept on H1 (2026-07-23): declined under the global H1->H4 switch
-# (PF 2.42->1.63, PnL $75.32->$33.87). Backtest-confirmed real H4 vs real H1
-# confirm for EUR_AUD specifically, both fetched through this same per-pair
-# resolver: H1 clearly better (higher WR/PF/PnL, trades held up), H4 only
-# had a slightly lower MaxDD. See tasks/todo.md 2026-07-23.
+# EUR_AUD's old H1 override (2026-07-23, EMA-bounce/M30-era finding) was
+# replaced 2026-08-16 by "D" below — EUR_AUD moved to H4 primary running
+# trend_retest, a completely different strategy+timeframe, so the old
+# M30-primary/H1-confirm comparison no longer applies. See FOREX_PAIRS
+# comment above.
 CONFIRM_TF_PER_PAIR: dict = {
-    "EUR_AUD": "H1",
-    # NZD_USD/GBP_CAD/CHF_JPY moved to H4 primary 2026-08-13 (see
-    # PRIMARY_TF_PER_PAIR below) — H4 can't confirm itself, so these get
-    # Daily as their confirm/bias TF instead, matching the "Daily sets bias,
-    # H4 structure, lower TF entry" pattern from that session's web research.
+    # NZD_USD/GBP_CAD/CHF_JPY moved to H4 primary 2026-08-13, AUD_JPY/
+    # EUR_AUD 2026-08-16 (see PRIMARY_TF_PER_PAIR below) — H4 can't confirm
+    # itself, so these get Daily as their confirm/bias TF instead, matching
+    # the "Daily sets bias, H4 structure, lower TF entry" pattern from that
+    # session's web research.
     "NZD_USD": "D",
     "GBP_CAD": "D",
     "CHF_JPY": "D",
+    "AUD_JPY": "D",
+    "EUR_AUD": "D",
 }
 
 
@@ -165,10 +210,15 @@ def confirm_tf_for(pair: str) -> str:
 # consistent than EMA-bounce was at the same timeframe. See tasks/todo.md
 # for the full multi-day investigation (Tests #1-3, holdout validation,
 # fair tuning pass, WFO averaging-bug fix, exhaustive per-pair optimize).
+# AUD_JPY/EUR_AUD added 2026-08-16 — same H4 treatment, see tasks/todo.md
+# 2026-08-16 (fresh fit/holdout re-run of the pairs the 08-13 decision
+# never acted on).
 PRIMARY_TF_PER_PAIR: dict = {
     "NZD_USD": "H4",
     "GBP_CAD": "H4",
     "CHF_JPY": "H4",
+    "AUD_JPY": "H4",
+    "EUR_AUD": "H4",
 }
 
 

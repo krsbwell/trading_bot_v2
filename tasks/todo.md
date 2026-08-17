@@ -1,3 +1,203 @@
+# Plan: finish H4/Daily holdout treatment for the remaining pairs, revisit tuned trend_retest for the 4 candidate pairs (2026-08-16) — DONE, LIVE
+
+## Implementation (2026-08-16/17) — all 3 recommendations approved and shipped
+User: "take care of all of them." Implemented all 3:
+
+1. **AUD_JPY promoted off watch → `breakout_retest`@H4/Daily.**
+2. **EUR_AUD promoted off watch (was paused 2026-08-05) → `trend_retest`@H4/Daily**, tuned `{h4_bias_period: 20, retest_band_mult: 0.45}`. First real-money pair for this strategy.
+3. **CHF_JPY switched `breakout_retest` → `trend_retest`@H4/Daily**, tuned `{h4_bias_period: 20, retest_band_mult: 0.30}` — resolving the discrepancy where its own holdout numbers (confirmed on two independent runs) favored trend_retest over what was actually live.
+
+### config.py
+- `FOREX_PAIRS`: 4 → 6 (`+AUD_JPY, +EUR_AUD`).
+- `FOREX_WATCH`: `AUD_JPY`/`EUR_AUD` removed.
+- `STRATEGY_OVERRIDE`: `AUD_JPY: breakout_retest`, `CHF_JPY: breakout_retest → trend_retest`, `EUR_AUD: trend_retest` (new).
+- `PRIMARY_TF_PER_PAIR` / `CONFIRM_TF_PER_PAIR`: `AUD_JPY`/`EUR_AUD` added (H4/D), matching the pattern from 08-13. EUR_AUD's old M30-era `H1` confirm override (07-23) removed — no longer applicable once it's on H4 primary.
+- New `TREND_RETEST_PARAMS_PER_PAIR` dict — trend_retest's tuned per-pair knobs (`h4_bias_period`, `retest_band_mult`). Not WFO-tunable (WFO only searches ema_bounce params and already skips STRATEGY_OVERRIDE pairs).
+
+### engine/signal_engine.py
+Live signal path's `adaptive` dict merge extended: `{**_wfo, **_ap, **_tr_params}` where `_tr_params` only populates for a pair whose `STRATEGY_OVERRIDE` is literally `"trend_retest"`. Deliberately isolated from `_wfo`/`_ap`'s own keys (no overlap) — same clobber-risk class as the 2026-07-20 WFO/adaptive-params merge-override bug, avoided by construction this time rather than fixed after the fact.
+
+### backtest/runner.py
+`run_backtest()`'s auto-resolve path (used by the dashboard's Backtest/Walk-Forward buttons and any caller that doesn't pass its own `buy_fn`/`adaptive`) now also applies `TREND_RETEST_PARAMS_PER_PAIR` when the pair resolves to trend_retest — otherwise a dashboard-triggered backtest for CHF_JPY/EUR_AUD would silently test trend_retest's *untuned* defaults instead of what's actually live. Explicit callers (CLI `--strategy`, this session's own grid-search script) are unaffected — they already control `adaptive` directly.
+
+### Tests
+9 new / 3 rewritten in `tests/test_pair_tf_routing.py` (existing file from the 08-13 overhaul, updated in place — its old assertions, e.g. `len(FOREX_PAIRS) == 4` and "CHF_JPY routes to breakout_retest", were now wrong by design): pair-list/routing/TF coverage for AUD_JPY/EUR_AUD/CHF_JPY, plus a dedicated `TestTrendRetestParamsPerPair` class proving the tuned params reach `run_backtest()`'s auto-resolve path, don't clobber an explicitly-passed `adaptive` dict, and don't leak onto a breakout_retest pair. Full suite: **325/325 pass** (319 prior + 6 net new).
+
+**Known gap, flagged not hidden**: no direct test exercises `signal_engine.py`'s live merge line itself (`SignalEngine.run()` needs heavy OANDA/candle mocking with no existing test precedent in this repo) — coverage rests on the identical, independently-tested logic in `backtest.runner.run_backtest()`'s auto-resolve path plus the config-level assertions. Not the same as a direct test; noted rather than claimed as full coverage.
+
+### Deploy
+Killed the running `main.py` process tree (PID 13184 + child 16420); `bot_service.py` supervisor (confirmed still healthy, PID 10336/10264 unchanged) detected the exit and relaunched within 15s. Verified clean: `logs/main.log` shows `Forex pairs : NZD_USD, GBP_CAD, GBP_USD, CHF_JPY, AUD_JPY, EUR_AUD`, scheduler started, CHF_JPY/AUD_JPY/EUR_AUD candles being fetched, no tracebacks/errors in the fresh startup window.
+
+### Trading week confirmed open
+Queried OANDA's live pricing endpoint directly (not just calendar-day inference): `EUR_USD`/`GBP_USD`/`USD_JPY` all returned `tradeable=true` with bid/ask timestamps matching the query second. `main.log` independently confirms the bot's own scan loop is live and executing on schedule. Sunday 2026-08-16 ~23:13 UTC — past the standard Sunday-evening forex reopen.
+
+### Explicitly not done
+- No un-pausing of `USD_CAD` (trend_retest hold PF 2.02 but only 4 holdout trades — too thin, stays watch) or any other flagged-but-not-recommended pair (EUR_GBP, EUR_CHF, CAD_CHF, EUR_CAD) — matches the original recommendation, nothing beyond the 3 approved changes was touched.
+- No change to `MAX_OPEN_TRADES` (still 3) despite 6 active pairs now sharing that cap — unrelated to this investigation, already ran fine at 5 pairs.
+
+---
+
+
+## Results — fresh fit(70%)/holdout(30%) pass, H4/Daily, 4500 bars, all 10 pairs
+Script + raw output kept in this session's scratchpad only (research pass,
+not committed — same as 08-12). ema_bounce/breakout_retest run as-is;
+trend_retest fair-tuned via the same 16-combo grid (4 `h4_bias_period` x
+4 `retest_band_mult`, chosen on fit only, min 3 fit trades to qualify).
+
+| Pair | ema hold PF (n) | breakout_retest hold PF (n) | trend_retest tuned hold PF (n) [combo] | Fresh winner | vs 08-12 |
+|---|---|---|---|---|---|
+| AUD_JPY | 0.57 (19) | **2.81 (7)** | 0.74 (5) | breakout_retest | **exact match** (2.81 then too) |
+| EUR_GBP | 0.62 (17) | **1.49 (7)** | 1.94 (4, thinner) | breakout_retest | **exact match** (1.49 then too) |
+| CAD_CHF | 0.67 (12) | 0.99 (6, still <1) | 0.00 (2) | breakout_retest, weak | **exact match** (0.99 then too) — not a real edge either run |
+| EUR_CHF | 1.99 (17) | **4.28 (6)** | 3.24 (5) | breakout_retest | **flipped** — 08-12 favored trend_retest (2.93); now breakout_retest wins. Both runs ride on 5-6 holdout trades. |
+| USD_CAD | 1.03 (15) | 1.46 (7) | **2.02 (4, thinner)** | trend_retest tuned | same direction (was 1.68) |
+| EUR_AUD | 1.39 (15) | 0.80 (9) | **1.98 (10)** | trend_retest tuned | same direction, improved (was 1.61), best-sample trend_retest result of the batch |
+| CHF_JPY | 1.17 (7) | 1.36 (6) — **currently live** | **2.03 (5)** | trend_retest tuned beats what's actually live | **exact match** (2.03 then too) — discrepancy confirmed real, not a one-off window |
+| EUR_JPY | **1.70 (23)** | 0.54 (6) | 0.72 (5) | ema_bounce (current watch default) | consistent (was 1.62) — stays paused, no strategy fixes this |
+| NZD_CHF | **1.51 (12)** | 0.71 (7) | 0.00 (2) | ema_bounce (current watch default) | consistent (was 1.37) |
+| EUR_CAD | 0.81 (21) | 1.15 (3, thin) | 0.00 (2) | nothing real | consistent — everything weak, as before |
+
+## Honest read
+- **3 results are exact PF matches to the 4-day-old numbers** (AUD_JPY,
+  EUR_GBP, CAD_CHF breakout_retest; CHF_JPY trend_retest) — a 4-day shift
+  out of a 750-day window barely moves the bar count, so this is a
+  legitimate stability check passing, not a coincidence to be suspicious
+  of.
+- **EUR_CHF flipped direction between the two runs** — flagging as
+  unstable, not switching anything on this pair. Small-sample PF (5-6
+  trades) is volatile by nature; this is exactly why the project doesn't
+  trust single-window numbers.
+- **CHF_JPY discrepancy is now confirmed, not a fluke**: the pair
+  currently live on breakout_retest (PF 1.36 hold) would have scored
+  better on tuned trend_retest (PF 2.03 hold) in both the 08-12 run and
+  today's independent re-run. Real finding, real live pair.
+- **Every trend_retest grid search still picks non-default combos**
+  (period 20 or 100 instead of the default 50) from a 4-option grid on
+  fit samples as thin as 4-14 trades — same overfitting risk flagged
+  repeatedly in 08-12 (GBP_CAD, EUR_JPY tuning "backfired" there). Treat
+  the *direction* of these results as more trustworthy than the exact
+  PF number.
+- **Nothing here clears this project's own ~30-trade trust bar on its
+  own** — even fit+holdout combined tops out around 20 trades (AUD_JPY,
+  EUR_AUD). Directionally consistent across two independent runs is
+  better evidence than a single backtest, but still short of "proven."
+
+## Recommendation (no action taken — awaiting sign-off)
+- **Worth considering for a live switch**, ranked by evidence quality:
+  1. **CHF_JPY: breakout_retest -> trend_retest (tuned)** — the only one
+     of these touching real capital today, and the only trend_retest
+     result confirmed on two independent runs 4 days apart with the
+     identical PF.
+  2. **AUD_JPY -> breakout_retest@H4** (promote off watch) — cleanest,
+     most consistent result in the whole batch.
+  3. **EUR_AUD -> trend_retest (tuned)** (promote off watch) — best
+     trend_retest sample size (10 holdout trades), improved since 08-12.
+- **Not recommending yet, flagging only**: EUR_GBP and USD_CAD (right
+  direction, too thin), EUR_CHF (unstable between runs), CAD_CHF (best
+  option still isn't really profitable).
+- **No change**: EUR_JPY, NZD_CHF stay on ema_bounce/watch as-is; EUR_CAD
+  stays watch, nothing tested shows a real edge.
+- Wiring `trend_retest` into `STRATEGY_OVERRIDE` for the first time ever
+  (CHF_JPY and/or EUR_AUD) is a bigger step than promoting a pair that
+  already has a live-tested strategy (AUD_JPY/breakout_retest) —
+  flagging that distinction for the sign-off decision, not deciding it
+  here.
+
+---
+
+
+
+## Context — what's actually already done vs not
+The 2026-08-12 investigation (see "Investigate: is EMA-bounce the wrong
+strategy?" below) ran a fit/holdout split (70% fit / 30% holdout, no
+parameter tuning influenced by holdout) at H4 primary / Daily confirm for
+**all 13 roster pairs**, comparing ema_bounce vs breakout_retest, plus a
+fair-tuned trend_retest pass (grid search on FIT window only: 4
+`h4_bias_period` values x 4 `retest_band_mult` values = 16 combos, best
+combo picked on fit, then evaluated on holdout). The 2026-08-13 decision
+only acted on part of that data — switched NZD_USD/GBP_CAD/CHF_JPY to
+breakout_retest@H4 (GBP_USD stayed on its existing breakout_retest/M30),
+paused EUR_JPY. It did **not** act on:
+
+- 3 pairs where breakout_retest was the fair-tuned holdout winner but
+  never got switched: **AUD_JPY** (hold PF 2.81), **EUR_GBP** (1.49),
+  **CAD_CHF** (0.99, least-bad of the bunch, not a strong result)
+- 4 pairs where **tuned trend_retest** was the fair-tuned holdout winner —
+  a strategy that has never wired live anywhere: **EUR_CHF** (2.93),
+  **USD_CAD** (1.68), **CHF_JPY** (2.03), **EUR_AUD** (1.61)
+- **A real discrepancy**: CHF_JPY's own 08-12 numbers favored tuned
+  trend_retest (hold PF 2.03) over breakout_retest (hold PF 1.36) — but
+  the 08-13 decision put CHF_JPY live on breakout_retest anyway (likely
+  because breakout_retest has a real live track record and trend_retest
+  has never traded a dollar — a reasonable tie-breaker, but never stated
+  explicitly against this specific number). Worth resolving with fresh
+  data rather than leaving unaddressed.
+- EUR_JPY and NZD_CHF: ema_bounce was already the holdout winner for both
+  (1.62, 1.37) — no live change indicated, will re-confirm rather than
+  re-litigate.
+- EUR_CAD: everything tested weak (best hold PF 1.15 on a thin 3-trade
+  sample) — no live change indicated, will re-confirm.
+
+All of the above numbers are now **4 days old**. This project's own
+established rule (see [[project_pair_config]] "How to apply") is to
+re-run fresh before proposing any pair/strategy change, not trust cached
+numbers — results have been observed to drift day-to-day as the rolling
+backtest window moves. So "finish the holdout treatment" here means a
+fresh re-run of the same methodology on the pairs not yet resolved, not
+just reading the old table.
+
+## Scope
+10 pairs get a fresh fit/holdout pass at H4 primary / Daily confirm,
+4500 bars (~750 days), same convention as Test #3/the 08-12 holdout work:
+- The 9 `FOREX_WATCH` pairs: EUR_CHF, AUD_JPY, EUR_CAD, EUR_GBP, CAD_CHF,
+  NZD_CHF, USD_CAD, EUR_AUD, EUR_JPY
+- CHF_JPY (already live on breakout_retest@H4) — included specifically to
+  resolve the discrepancy above with fresh numbers, comparing its current
+  live strategy against tuned trend_retest head-to-head.
+
+Each pair gets all 3 strategies run fit+holdout in one pass (one data
+fetch, avoids re-pulling candles 3x): ema_bounce, breakout_retest, and
+trend_retest with the same fair-tuning discipline as 08-12 (grid search
+on fit only, holdout never influences which combo is picked).
+
+## Plan
+- [ ] Write a scratch script (not committed — this is a research pass,
+      same as 08-12's, no new production code) that: fetches H4 (4500
+      bars) + Daily candles per pair via `OandaConnector`, splits
+      fit(70%)/holdout(30%), runs `run_backtest()` for ema_bounce and
+      breakout_retest on both windows, runs the 16-combo grid search for
+      trend_retest on fit only, evaluates the winning combo on holdout.
+- [ ] Run it for all 10 pairs, save full results to a CSV in scratchpad
+      (mirrors `tuning_results.csv`/`holdout_results.csv` naming from
+      08-12).
+- [ ] Summarize: for each pair, which strategy wins on holdout, and
+      whether it beats what's currently live/watched for that pair.
+      Explicitly flag any pair where fit and holdout disagree (the
+      GBP_USD instability pattern from 08-12) rather than picking the
+      better-looking number silently.
+- [ ] Resolve the CHF_JPY discrepancy explicitly with fresh numbers —
+      does tuned trend_retest still beat its live breakout_retest at
+      holdout, or was that an artifact of the specific 08-12 window?
+- [ ] Present a decision table (same shape as 08-12's "Final tally") and
+      a recommendation. **No config.py / STRATEGY_OVERRIDE / FOREX_PAIRS /
+      FOREX_WATCH changes made without explicit sign-off** — every
+      pair/strategy live change in this project's history has gone
+      through an explicit user decision first, and trend_retest in
+      particular has never touched real money.
+- [ ] No new pytest tests expected (this is backtest research using
+      existing, already-tested `run_backtest()`/`strategy_trend_retest.py`
+      code paths, same as 08-12 which added no tests either) — will flag
+      if that assumption changes once the script is written.
+
+## Explicitly out of scope for this pass
+- Not re-running the 4 already-switched pairs (NZD_USD, GBP_CAD, GBP_USD)
+  — already validated and live.
+- Not deciding whether to wire `trend_retest` into `STRATEGY_OVERRIDE` for
+  any pair yet — that's a live-affecting decision for after results are
+  in, same as every prior strategy change here.
+
+---
+
 # Fix: WFO avg_pf_oos/avg_stability was a flat mean, not weighted by trade count (2026-08-13) — DONE
 
 ## Why

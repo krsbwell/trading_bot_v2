@@ -116,7 +116,15 @@ class SignalEngine:
         # Adaptive keys win on any overlap, WFO provides CCI_PERIOD / MACD_* / min_score.
         _wfo       = wfo_optimizer.get_params(pair)
         _ap        = adaptive_params.get(pair)
-        _combined  = {**_wfo, **_ap}
+        # trend_retest's own tuned knobs (h4_bias_period, retest_band_mult) —
+        # not WFO/adaptive-params keys, so no clobber risk with the two above
+        # (see the 2026-07-20 WFO/adaptive merge-override bug this pattern is
+        # deliberately avoiding repeating). Only applies to pairs actually
+        # routed to trend_retest; harmless no-op dict for every other pair.
+        # Added 2026-08-16 — see tasks/todo.md.
+        _tr_params = (config.TREND_RETEST_PARAMS_PER_PAIR.get(pair, {})
+                      if config.STRATEGY_OVERRIDE.get(pair) == "trend_retest" else {})
+        _combined  = {**_wfo, **_ap, **_tr_params}
         buy_score  = _buy_fn(pair, df_h1, df_h4, adaptive=_combined)
         sell_score = _sell_fn(pair, df_h1, df_h4, adaptive=_combined)
 

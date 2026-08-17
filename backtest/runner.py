@@ -300,6 +300,17 @@ def run_backtest(
         buy_fn        = buy_fn        or _resolved_buy
         sell_fn       = sell_fn       or _resolved_sell
         stop_loss_fn  = stop_loss_fn  or _resolved_sl
+        # If the pair auto-resolves to trend_retest and the caller didn't
+        # supply their own adaptive dict, apply its live-tuned per-pair
+        # params (config.TREND_RETEST_PARAMS_PER_PAIR) instead of silently
+        # falling back to trend_retest's untuned defaults — otherwise a
+        # dashboard-triggered Backtest/Walk-Forward run for CHF_JPY/EUR_AUD
+        # would test different params than what's actually live. Scoped to
+        # the auto-resolve path only — explicit callers (CLI --strategy,
+        # grid-search research code) keep full control of `adaptive`.
+        # Added 2026-08-16 — see tasks/todo.md.
+        if adaptive is None and config.STRATEGY_OVERRIDE.get(pair) == "trend_retest":
+            adaptive = dict(config.TREND_RETEST_PARAMS_PER_PAIR.get(pair, {}))
 
     # Strategy modules keep module-level state across calls (EMA auto-fit
     # cache in particular) that otherwise leaks between repeated backtests
