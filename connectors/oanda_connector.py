@@ -113,45 +113,90 @@ class OandaConnector:
 
     # ── Candles ───────────────────────────────────────────────────────────────
 
+    # OANDA hard-caps a single InstrumentsCandles request at 5000 candles —
+    # documented in this codebase's own comments since at least 2026-07-20
+    # ("4999 is the practical max --bars in one request... going higher
+    # needs pagination... not done") but never actually implemented until
+    # 2026-08-17. This silently capped every M15/M30 backtest in this
+    # project's history to whatever calendar window 5000 bars covers (~74
+    # days at M15, ~146 at M30) — nowhere near enough to build a trustworthy
+    # trade sample even for a strategy that fires often, which is why past
+    # M15/M30 investigations kept coming back "too thin to trust" even when
+    # the underlying signal frequency itself was fine. See tasks/todo.md.
+    _MAX_CANDLES_PER_REQUEST = 4999
+
+    def _fetch_candle_chunk(self, instrument: str, granularity: str, count: int,
+                             to_time: "pd.Timestamp | None" = None) -> list:
+        """One InstrumentsCandles request, <= _MAX_CANDLES_PER_REQUEST candles,
+        optionally ending at/before `to_time`. Returns the raw completed-candle
+        dicts (newest-last), or [] if nothing more is available (reached the
+        start of this instrument's history)."""
+        params = {
+            "granularity": granularity,
+            "count": count + 1,   # +1 because the current in-progress candle can be included
+            "price": "M",
+        }
+        if to_time is not None:
+            params["to"] = to_time.strftime("%Y-%m-%dT%H:%M:%S.000000000Z")
+
+        req = instruments.InstrumentsCandles(instrument=instrument, params=params)
+        try:
+            resp = self.client.request(req)
+        except V20Error as exc:
+            logger.error(
+                "get_candles chunk failed — instrument=%s granularity=%s count=%d to=%s: %s",
+                instrument, granularity, count, to_time, exc,
+            )
+            raise
+        return [c for c in resp.get("candles", []) if c.get("complete", False)]
+
     def get_candles(self, instrument: str, granularity: str, count: int) -> pd.DataFrame:
         """
         Fetch completed OHLCV candles.
 
         instrument  : Oanda format, e.g. "EUR_USD"
         granularity : "H1" | "H4" | "D"  (also accepts "M15" etc.)
-        count       : number of completed candles to return
+        count       : number of completed candles to return. Transparently
+                      paginated in backward-walking chunks of <=4999 when
+                      count exceeds OANDA's single-request cap — callers
+                      don't need to know or care.
 
         Returns DataFrame indexed by UTC datetime (tz-naive) with columns:
             open, high, low, close, volume
         """
-        # Request slightly more than needed to guarantee `count` completed candles
-        params = {
-            "granularity": granularity,
-            "count": count + 1,   # +1 because the current in-progress candle is included
-            "price": "M",         # midpoint (bid/ask average)
-        }
-        req = instruments.InstrumentsCandles(instrument=instrument, params=params)
+        all_completed: list = []
+        to_time = None
+        remaining = count
 
-        try:
-            resp = self.client.request(req)
-        except V20Error as exc:
-            logger.error(
-                "get_candles failed — instrument=%s granularity=%s count=%d: %s",
-                instrument, granularity, count, exc,
-            )
-            raise
+        while remaining > 0:
+            chunk_count = min(remaining, self._MAX_CANDLES_PER_REQUEST)
+            chunk = self._fetch_candle_chunk(instrument, granularity, chunk_count, to_time)
+            if not chunk:
+                break  # reached the start of this instrument's available history
 
-        raw = resp.get("candles", [])
-        completed = [c for c in raw if c.get("complete", False)]
+            # Drop any overlap with what we already have (the `to` boundary
+            # candle can be returned again at the start of the next chunk).
+            if all_completed:
+                seen_times = {c["time"] for c in all_completed}
+                chunk = [c for c in chunk if c["time"] not in seen_times]
+                if not chunk:
+                    break
 
-        if not completed:
+            all_completed = chunk + all_completed  # chunk is older, goes in front
+            remaining = count - len(all_completed)
+            to_time = pd.to_datetime(chunk[0]["time"]) - pd.Timedelta(seconds=1)
+
+            if remaining > 0 and len(chunk) < chunk_count:
+                break  # this chunk came back short — no more history to page through
+
+        if not all_completed:
             logger.warning(
                 "No completed candles returned for %s %s", instrument, granularity
             )
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
         # Take the most-recent `count` completed candles
-        completed = completed[-count:]
+        completed = all_completed[-count:]
 
         rows = [
             {

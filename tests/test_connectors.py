@@ -133,6 +133,119 @@ class TestOandaConnectorTransactionFallback:
         assert connector.get_trade_close_from_transactions("77") is None
 
 
+class TestOandaConnectorPagination:
+    """2026-08-17 — get_candles() transparently pages past OANDA's 4999-
+    candle single-request cap. This silently limited every M15/M30 backtest
+    in this project's history to a short calendar window (~74-146 days) even
+    when the underlying strategy fired often — the real reason M15/M30
+    samples kept coming back "too thin to trust," not strategy rarity. See
+    tasks/todo.md 2026-08-17. Mocked here (not @oanda_required) so this is
+    fast and deterministic; TestOandaConnectorLive's real-API tests cover
+    the single-chunk path already."""
+
+    @pytest.fixture
+    def connector(self, monkeypatch):
+        import config as cfg
+        monkeypatch.setattr(cfg, "OANDA_API_KEY", "fake-key")
+        monkeypatch.setattr(cfg, "OANDA_ACCOUNT_ID", "fake-account")
+        from connectors.oanda_connector import OandaConnector
+        return OandaConnector()
+
+    @staticmethod
+    def _make_candles(n, step_minutes=15):
+        """n completed candles, newest-last, spaced step_minutes apart,
+        ending one step before "now"."""
+        import pandas as pd
+        times = pd.date_range(
+            end=pd.Timestamp.now('UTC').tz_localize(None) - pd.Timedelta(minutes=step_minutes),
+            periods=n, freq=f"{step_minutes}min",
+        )
+        return [
+            {"time": t.strftime("%Y-%m-%dT%H:%M:%S.000000000Z"), "complete": True,
+             "mid": {"o": "1.0", "h": "1.1", "l": "0.9", "c": "1.05"}, "volume": 100}
+            for t in times
+        ]
+
+    def test_single_chunk_request_unchanged(self, connector, monkeypatch):
+        """count <= 4999 must still be exactly one request (no behavior
+        change / no wasted extra round-trip for the common case)."""
+        calls = []
+
+        def _request(req):
+            calls.append(req)
+            return {"candles": self._make_candles(101)}
+
+        monkeypatch.setattr(connector.client, "request", _request)
+        df = connector.get_candles("EUR_USD", "M15", 100)
+        assert len(calls) == 1
+        assert len(df) == 100
+
+    def test_multi_chunk_request_pages_and_stitches_in_order(self, connector, monkeypatch):
+        """count > 4999 must issue multiple requests and return them
+        stitched into one chronological, gap-free (call-count-wise) frame."""
+        import pandas as pd
+        total_needed = 11000  # at the real 4999-per-request cap: 4999 + 4999 + 1002 = 3 chunks
+
+        calls = []
+
+        def _request(req):
+            calls.append(req)
+            to_param = req.params.get("to")
+            count_requested = req.params["count"] - 1
+            if to_param is None:
+                end = pd.Timestamp.now('UTC').tz_localize(None) - pd.Timedelta(minutes=15)
+            else:
+                end = pd.to_datetime(to_param.replace("Z", ""))
+            times = pd.date_range(end=end, periods=count_requested, freq="15min")
+            return {"candles": [
+                {"time": t.strftime("%Y-%m-%dT%H:%M:%S.000000000Z"), "complete": True,
+                 "mid": {"o": "1.0", "h": "1.1", "l": "0.9", "c": "1.05"}, "volume": 100}
+                for t in times
+            ]}
+
+        monkeypatch.setattr(connector.client, "request", _request)
+        df = connector.get_candles("EUR_USD", "M15", total_needed)
+
+        assert len(calls) == 3, "11000 candles at a 4999 cap should take exactly 3 requests"
+        assert len(df) == total_needed
+        assert df.index.is_monotonic_increasing
+        assert not df.index.duplicated().any()
+
+    def test_stops_cleanly_when_history_is_exhausted(self, connector, monkeypatch):
+        """A pair with less history than requested (e.g. a newly-listed
+        instrument) must return whatever's actually available instead of
+        looping forever or raising. A short chunk (fewer candles than asked
+        for) is itself the signal that history ran out — no wasted extra
+        request needed to confirm it."""
+        call_count = {"n": 0}
+
+        def _request(req):
+            call_count["n"] += 1
+            return {"candles": self._make_candles(500)}  # always short of the 4999 asked for
+
+        monkeypatch.setattr(connector.client, "request", _request)
+        df = connector.get_candles("EUR_USD", "M15", 10000)
+        assert len(df) == 500
+        assert call_count["n"] == 1
+
+    def test_empty_chunk_mid_pagination_stops_without_error(self, connector, monkeypatch):
+        """A full-sized first chunk followed by a genuinely empty second
+        chunk (history ran out right at a page boundary) must also stop
+        cleanly rather than raising or looping."""
+        call_count = {"n": 0}
+
+        def _request(req):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return {"candles": self._make_candles(4999)}
+            return {"candles": []}
+
+        monkeypatch.setattr(connector.client, "request", _request)
+        df = connector.get_candles("EUR_USD", "M15", 10000)
+        assert len(df) == 4999
+        assert call_count["n"] == 2
+
+
 class TestOandaConnectorLive:
     @pytest.fixture(scope="class")
     def connector(self):
