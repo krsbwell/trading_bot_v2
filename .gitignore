@@ -1,5 +1,10 @@
 # Secrets
 .env
+.env.bak*
+
+# Logs (rotated constantly by the live bot; tracking these causes
+# multi-machine branch divergence, not meaningful history)
+logs/
 
 # Data and trained models
 data/
