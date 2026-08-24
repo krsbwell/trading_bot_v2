@@ -1,0 +1,22 @@
+# Human-editable input for config.ADAPTIVE_STRATEGY — config.py remains the
+# single runtime source of truth (loaded and merged in, not a second
+# parallel config system). Requires pyyaml (see requirements.txt); if it
+# isn't installed, config.py logs a warning and falls back to the plain
+# defaults already defined there — nothing breaks either way.
+#
+# NOTE: this file's directory is named `configs/`, not `config/` — this
+# repo already has a top-level config.py module, and a `config/` package
+# directory next to it would collide with `import config` everywhere in
+# the codebase. See tasks/todo.md 2026-08-21 Phase 4.
+#
+# See tasks/todo.md "Adaptive AI/ML Strategy — Integration Plan" for the
+# rollout-safety rules this strategy is still bound by regardless of what's
+# set here: disabled by default, and even enabled, no pair trades on it
+# until manually added to config.STRATEGY_OVERRIDE and backtested.
+
+enabled: false
+atr_period: 14
+atr_sl_mult: 1.5
+atr_tp_mult: 3.0
+min_confidence: 0.55
+regime_min_confidence: 0.4

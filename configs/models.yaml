@@ -1,0 +1,14 @@
+# Human-editable input for config.MODEL_REGISTRY — see configs/strategy.yaml
+# for the loading mechanism.
+
+# AUC floor (learning.pattern_learner's cross-val score) a candidate must
+# clear before it can move past 'testing' — matches the scale
+# PatternLearner.train() already reports (see its summary string).
+min_accuracy_to_validate: 0.55
+
+# Never actually deletes a retired version's file or registry record
+# either way ("never overwrite model history" — see
+# learning/model_registry.py's set_stage()); this only controls whether a
+# future cleanup job is allowed to prune old candidate/.pkl files that
+# were never promoted.
+keep_retired_versions: true

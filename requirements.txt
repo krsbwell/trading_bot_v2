@@ -14,3 +14,6 @@ apscheduler
 pydub
 requests           # Telegram alerts HTTP client
 xgboost            # gradient-boosted ML classifier for PatternLearner
+pyyaml             # configs/*.yaml -> config.py overrides, adaptive-strategy path only
+                    # (config.py degrades gracefully if this isn't installed yet — see
+                    # config.py's _load_yaml_overrides())

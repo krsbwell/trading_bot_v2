@@ -25,6 +25,10 @@ from engine.strategy_trend_retest import (
     check_buy_signal as _tr_buy, check_sell_signal as _tr_sell,
     get_stop_loss as _tr_sl, get_last_diag as _tr_diag,
 )
+from engine.strategy_adaptive import (
+    check_buy_signal as _ad_buy, check_sell_signal as _ad_sell,
+    get_stop_loss as _ad_sl, get_last_diag as _ad_diag,
+)
 
 # All 4 (buy, sell, stop-loss, diagnostics) must route together, since a
 # pair's diagnostics only exist in whichever module's check_buy/sell_signal
@@ -36,6 +40,11 @@ STRATEGY_FNS = {
     # Backtest-only as of 2026-08-12 — no config.STRATEGY_OVERRIDE entry yet.
     # See tasks/todo.md for the design + validation this was built from.
     "trend_retest":    (_tr_buy, _tr_sell, _tr_sl, _tr_diag),
+    # Backtest-only as of 2026-08-21 — disabled by default
+    # (config.ADAPTIVE_STRATEGY["enabled"]=False) and no
+    # config.STRATEGY_OVERRIDE entry. See tasks/todo.md "Adaptive AI/ML
+    # Strategy — Integration Plan".
+    "adaptive":        (_ad_buy, _ad_sell, _ad_sl, _ad_diag),
 }
 
 

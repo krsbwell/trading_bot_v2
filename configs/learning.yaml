@@ -1,0 +1,21 @@
+# Human-editable input for config.LEARNING_ADAPTIVE — see configs/strategy.yaml
+# for the loading mechanism and why this lives in configs/ not config/.
+
+# Matches learning.pattern_learner.PatternLearner.MIN_SAMPLES' own
+# convention — a candidate model isn't trained below this many closed
+# trades either way; this is just the config-visible mirror of that floor
+# for the adaptive path specifically.
+min_samples_for_candidate: 50
+
+# learning/reinforcement_learning.py's train_step() stays an explicit
+# no-op ("INSUFFICIENT DATA") below this many logged (state, action,
+# reward) tuples — there are 19 closed trades total in this project's
+# history as of 2026-08-21, nowhere near enough for real RL training.
+min_samples_for_rl_train_step: 500
+
+# A candidate NEVER auto-promotes to production regardless of this flag —
+# promotion is always an explicit learning.model_registry.ModelRegistry
+# .set_stage() call. This only controls whether a periodic job is allowed
+# to auto-advance candidate -> testing -> validated on passing metrics;
+# even at true, production is always a separate manual step.
+auto_advance_candidate_stages: false

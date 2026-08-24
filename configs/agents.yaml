@@ -1,0 +1,18 @@
+# Human-editable input for config.AGENTS_CONFIG — see configs/strategy.yaml
+# for the loading mechanism.
+
+# agents/orchestrator_agent.py's log_adaptive_decision() never executes a
+# trade unless the CALLER passes also_execute=True explicitly — this
+# config value is read by that caller (main.py, once/if it's wired in),
+# it is not read inside orchestrator_agent.py itself, so a stray edit here
+# can't silently turn on execution from inside a module that currently
+# hard-defaults it off. Still false by default for the same rollout-safety
+# reason as everything else in this plan.
+orchestrator_also_execute: false
+
+# monitoring/drift_detector.py (Phase 5) — off by default; also gated
+# separately by whether a baseline actually exists yet
+# (memory.market_memory.has_baseline), so turning this on before there's
+# enough regime history still reports INSUFFICIENT BASELINE DATA rather
+# than a false alarm.
+drift_detector_enabled: false
