@@ -58,6 +58,20 @@ MODE = "demo"   # "paper" (pure simulation, no OANDA orders) / "demo" (real
 # the cleanest result of that pass). EUR_AUD promoted off watch (was
 # paused 2026-08-05) onto trend_retest@H4 (holdout PF 1.98 on the best
 # trend_retest sample size of the batch, improved since 08-12's 1.61).
+#
+# 2026-08-22 — EUR_AUD removed again (back to FOREX_WATCH). The H4-vs-M30
+# revert backtest (see PRIMARY_TF_PER_PAIR) found trend_retest isn't
+# profitable for this pair on either timeframe (H4: PF 1.01 on 4 trades,
+# essentially breakeven; M30: PF 0.70, -$13) — this isn't a timeframe
+# problem, it's a "no validated edge on this pair right now" result, same
+# conclusion type as EUR_JPY above.
+#
+# 2026-08-23 — EUR_AUD back in, running the new ML-driven adaptive
+# strategy (see ADAPTIVE_STRATEGY / STRATEGY_OVERRIDE below), not
+# trend_retest again. Deliberately picked because nothing else is
+# currently live on it — starting the adaptive strategy's real forward-
+# testing on a pair with no existing edge to disrupt. Still MODE="demo"
+# (virtual OANDA money), no real capital at risk. See tasks/todo.md.
 FOREX_PAIRS  = ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY", "AUD_JPY", "EUR_AUD"]
 
 # Per-pair strategy override — a pair not listed here uses the default
@@ -86,12 +100,16 @@ STRATEGY_OVERRIDE = {
                                       # 08-16 runs (PF 2.03 vs 1.36, exact match both times) — a
                                       # real, confirmed discrepancy, not a one-off window. See
                                       # tasks/todo.md 2026-08-16.
-    "EUR_AUD":  "trend_retest",      # 2026-08-16 — promoted off FOREX_WATCH straight onto tuned
-                                      # trend_retest (holdout PF 1.98, 10 trades — the best sample
-                                      # size of the whole 08-16 batch). Was paused from FOREX_PAIRS
-                                      # 2026-08-05 running EMA-bounce/M30/H1-confirm; this is a
-                                      # different strategy+timeframe entirely, not un-pausing the
-                                      # old setup.
+    "EUR_AUD":  "adaptive",          # 2026-08-23 — switched from trend_retest (no validated edge
+                                      # on this pair on either timeframe, see FOREX_PAIRS comment)
+                                      # to the new ML-driven adaptive strategy
+                                      # (engine/strategy_adaptive.py) — real forward-testing, not a
+                                      # backtest claim. MODE="demo" (virtual money). See
+                                      # tasks/todo.md 2026-08-22/23 for the full design + backtest
+                                      # history behind this strategy.
+                                      # Prior history: 2026-08-16 promoted off FOREX_WATCH onto
+                                      # trend_retest (holdout PF 1.98); paused 2026-08-22 (PF 1.01
+                                      # H4 / 0.70 M30, no edge either way).
     # XAU_USD/"gold_trend" removed 2026-08-01 — shelved, see tasks/todo.md.
     # engine/strategy_gold_trend.py and its STRATEGY_FNS entry are left in
     # place (unused, harmless) in case gold is revisited later.
@@ -139,8 +157,9 @@ GOLD_STOP_METHOD = "dynamic"
 # No strategy (EMA-bounce, breakout_retest, trend_retest as of 08-16) or
 # timeframe (M30/H1/H4/M15) tested has shown any validated edge for this
 # pair specifically; signals still shown, no trades open.
-# AUD_JPY, EUR_AUD: promoted to FOREX_PAIRS 2026-08-16 — see FOREX_PAIRS
-# comment above.
+# AUD_JPY: promoted to FOREX_PAIRS 2026-08-16 — see FOREX_PAIRS comment
+# above. EUR_AUD: promoted 2026-08-16, paused 2026-08-22, back in
+# 2026-08-23 on the adaptive strategy — see FOREX_PAIRS comment above.
 FOREX_WATCH  = ["EUR_CHF", "EUR_CAD", "EUR_GBP", "CAD_CHF", "NZD_CHF",
                 "USD_CAD", "EUR_JPY"]
 
@@ -179,16 +198,13 @@ TIMEFRAMES = {
 # M30-primary/H1-confirm comparison no longer applies. See FOREX_PAIRS
 # comment above.
 CONFIRM_TF_PER_PAIR: dict = {
-    # NZD_USD/GBP_CAD/CHF_JPY moved to H4 primary 2026-08-13, AUD_JPY/
-    # EUR_AUD 2026-08-16 (see PRIMARY_TF_PER_PAIR below) — H4 can't confirm
-    # itself, so these get Daily as their confirm/bias TF instead, matching
-    # the "Daily sets bias, H4 structure, lower TF entry" pattern from that
-    # session's web research.
-    "NZD_USD": "D",
+    # GBP_CAD is the only pair still on H4 primary (see PRIMARY_TF_PER_PAIR
+    # 2026-08-22 revert) — H4 can't confirm itself, so it keeps Daily as
+    # its confirm/bias TF. NZD_USD/CHF_JPY/AUD_JPY/EUR_AUD removed
+    # 2026-08-22 — back to M30 primary, so they fall back to the global
+    # H4 confirm TF below, same pairing the 2026-08-22 revert was
+    # backtested with.
     "GBP_CAD": "D",
-    "CHF_JPY": "D",
-    "AUD_JPY": "D",
-    "EUR_AUD": "D",
 }
 
 
@@ -200,25 +216,27 @@ def confirm_tf_for(pair: str) -> str:
 # Per-pair override of TIMEFRAMES["primary"] — a pair not listed here uses
 # the global primary TF above (M30). Same pattern as CONFIRM_TF_PER_PAIR.
 #
-# NZD_USD/GBP_CAD/CHF_JPY moved to H4 2026-08-13: an exhaustive, holdout-
-# validated 216-combo WFO search found NO parameter combination that held
-# up out-of-sample for any of the 5 pairs then live on EMA-bounce/M30 —
-# not a tuning gap, the strategy has no detectable edge on that data right
-# now. Separately, breakout_retest (previously only live on GBP_USD/M30)
-# was backtested at H4 across the wider roster and held up in a genuine
-# fit/holdout split on 6 of 8 tested pairs, including these 3 — more
-# consistent than EMA-bounce was at the same timeframe. See tasks/todo.md
-# for the full multi-day investigation (Tests #1-3, holdout validation,
-# fair tuning pass, WFO averaging-bug fix, exhaustive per-pair optimize).
-# AUD_JPY/EUR_AUD added 2026-08-16 — same H4 treatment, see tasks/todo.md
-# 2026-08-16 (fresh fit/holdout re-run of the pairs the 08-13 decision
-# never acted on).
+# NZD_USD/GBP_CAD/CHF_JPY moved to H4 2026-08-13, AUD_JPY/EUR_AUD 2026-08-16
+# (full history in tasks/todo.md) — that move was itself real and
+# backtest-driven (EMA-bounce/M30 had no holdout-validated edge on any of
+# these pairs), but H4 also means 8x fewer decision points than M30, and
+# after a week+ of live silence (partly OANDA API outage / crash-loop —
+# see tasks/todo.md 2026-08-21 — but not entirely) it was worth checking
+# whether that tradeoff was actually still worth it.
+#
+# 2026-08-22 — reverted per-pair based on a real backtest, each pair on
+# its ACTUAL live strategy (breakout_retest/trend_retest, not EMA-bounce),
+# matched ~180-day window comparing H4/D (then-current) vs M30/H4:
+#   NZD_USD  H4: 6 trades  PF 1.93  +$14  1%DD  |  M30: 29 trades  PF 1.76  +$53  5%DD  -> M30 wins (more edge AND more $)
+#   AUD_JPY  H4: 6 trades  PF 1.89  +$9   3%DD  |  M30: 39 trades  PF 1.28  +$30  5%DD  -> M30 wins
+#   CHF_JPY  H4: 2 trades  PF 1.91  +$5   1%DD  |  M30: 30 trades  PF 1.10  +$8   5%DD  -> H4 sample too thin (2 trades) to trust; M30 wins on real sample size
+#   GBP_CAD  H4: 5 trades  PF 1.45  +$7   2%DD  |  M30: 42 trades  PF 0.54  -$55  13%DD -> H4 wins clearly, stayed on H4
+#   EUR_AUD  H4: 4 trades  PF 1.01  +$0.06 2%DD |  M30: 17 trades  PF 0.70  -$13  6%DD  -> neither profitable, paused (see FOREX_WATCH) rather than forced onto either
+# NZD_USD/AUD_JPY/CHF_JPY reverted to M30 (removed below, falls back to
+# TIMEFRAMES["primary"]). GBP_CAD stays H4 — M30 is measurably worse for
+# it, not just less-tested. EUR_AUD removed from FOREX_PAIRS entirely.
 PRIMARY_TF_PER_PAIR: dict = {
-    "NZD_USD": "H4",
     "GBP_CAD": "H4",
-    "CHF_JPY": "H4",
-    "AUD_JPY": "H4",
-    "EUR_AUD": "H4",
 }
 
 
@@ -491,3 +509,117 @@ OANDA_ENV        = "live" if MODE == "live" else "practice"
 # Telegram notifications (leave blank to disable)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
+
+# ── Adaptive strategy (engine/strategy_adaptive.py) ─────────────────────────
+# Off by default — see tasks/todo.md 2026-08-21 "Adaptive AI/ML Strategy —
+# Integration Plan". Even when enabled=True, no pair actually routes to it
+# until "adaptive" is added to STRATEGY_OVERRIDE above, same rollout
+# pattern trend_retest used (backtest-only for a month before its first
+# live pair). regime_min_confidence/min_confidence gate the strategy's own
+# score, independent of the global MIN_CONFLUENCE_SCORE all strategies
+# still go through in engine/signal_engine.py.
+ADAPTIVE_STRATEGY = {
+    "enabled":               True,   # 2026-08-23 — turned on to start real forward-testing,
+                                      # see STRATEGY_OVERRIDE["EUR_AUD"] below and tasks/todo.md.
+                                      # Still MODE="demo" (virtual OANDA money), same as every
+                                      # other live pair — no real capital at risk.
+    "atr_period":             14,
+    "atr_sl_mult":            1.5,
+    "atr_tp_mult":            3.0,
+    "min_confidence":         0.55,   # engine.decision.Decision.confidence floor to score >0
+    "regime_min_confidence":  0.4,    # below this, regime is too uncertain to weight the score
+}
+
+# Per-pair override of ADAPTIVE_STRATEGY's knobs — same pattern as
+# TREND_RETEST_PARAMS_PER_PAIR. Empty until a pair has actually been
+# backtested/tuned on this strategy.
+ADAPTIVE_STRATEGY_PARAMS_PER_PAIR: dict = {}
+
+
+def adaptive_strategy_params_for(pair: str) -> dict:
+    """ADAPTIVE_STRATEGY merged with any per-pair override — same
+    resolution pattern as confirm_tf_for/primary_tf_for above."""
+    return {**ADAPTIVE_STRATEGY, **ADAPTIVE_STRATEGY_PARAMS_PER_PAIR.get(pair, {})}
+
+
+# ── Learning lifecycle / model registry / research / agents ────────────────
+# All off/conservative by default, same rollout-safety rule as
+# ADAPTIVE_STRATEGY above. See tasks/todo.md 2026-08-21 Phase 4.
+LEARNING_ADAPTIVE = {
+    "min_samples_for_candidate":       50,    # mirrors PatternLearner.MIN_SAMPLES
+    "min_samples_for_rl_train_step":   500,   # see learning/reinforcement_learning.py
+    "auto_advance_candidate_stages":   False,  # production promotion is always a manual call regardless
+}
+
+MODEL_REGISTRY = {
+    "min_accuracy_to_validate": 0.55,
+    "keep_retired_versions":    True,
+}
+
+# research/ package — reverses the Finnhub-removal decision from
+# e75b937 (this month), so it stays off unless deliberately turned on, and
+# news_source=None makes research/news_collector.py always return []
+# regardless of the enabled flag until a real source is configured.
+RESEARCH = {
+    "enabled":              False,
+    "news_source":           None,   # e.g. "finnhub" — see research/news_collector.py
+    "news_blackout_enabled": False,  # opt-in reuse of connectors.forexfactory_connector.is_news_blackout
+}
+
+AGENTS_CONFIG = {
+    "orchestrator_also_execute": False,  # read by callers of agents.orchestrator_agent, not by that module itself
+    "drift_detector_enabled":    False,
+}
+
+
+def _load_yaml_overrides() -> None:
+    """Merges configs/*.yaml into the dicts above, if present, as the
+    human-editable input the source design doc asked for — config.py
+    remains the single runtime source of truth either way (this only
+    overrides values already defined above, never adds new unknown keys
+    silently). Requires pyyaml (see requirements.txt); if it isn't
+    installed, this logs once and leaves every default above untouched —
+    never a hard failure, since none of this is required for the bot to
+    run. NOTE: the directory is configs/, not config/ — a config/ package
+    next to this config.py module would collide with `import config`
+    everywhere else in this codebase.
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    _configs_dir = os.path.join(os.path.dirname(__file__), "configs")
+
+    try:
+        import yaml as _yaml
+    except ImportError:
+        if os.path.isdir(_configs_dir):
+            _logger.warning(
+                "configs/*.yaml present but pyyaml isn't installed — "
+                "run `pip install -r requirements.txt`. Using code defaults."
+            )
+        return
+
+    _targets = {
+        "strategy.yaml": (ADAPTIVE_STRATEGY, {"enabled", "atr_period", "atr_sl_mult",
+                                               "atr_tp_mult", "min_confidence", "regime_min_confidence"}),
+        "learning.yaml": (LEARNING_ADAPTIVE, set(LEARNING_ADAPTIVE.keys())),
+        "models.yaml":   (MODEL_REGISTRY,    set(MODEL_REGISTRY.keys())),
+        "agents.yaml":   (AGENTS_CONFIG,     set(AGENTS_CONFIG.keys())),
+    }
+    for filename, (target_dict, allowed_keys) in _targets.items():
+        path = os.path.join(_configs_dir, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = _yaml.safe_load(f) or {}
+        except Exception as exc:
+            _logger.warning("Failed to load %s — keeping defaults: %s", path, exc)
+            continue
+        for key, value in loaded.items():
+            if key in allowed_keys:
+                target_dict[key] = value
+            else:
+                _logger.warning("configs/%s: unknown key %r ignored", filename, key)
+
+
+_load_yaml_overrides()

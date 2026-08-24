@@ -32,6 +32,7 @@ from engine.strategy_trend_retest import (
     clear_cache as _clear_trend_retest_cache,
     get_tp_levels_structure as _tp_levels_structure,
 )
+from engine.strategy_adaptive import clear_cache as _clear_adaptive_cache
 from engine.strategy_market_structure import (
     detect_pivots, classify_structure, detect_bos_choch, get_sr_zones, score_structure,
 )
@@ -326,6 +327,7 @@ def run_backtest(
     _clear_trend_cache()
     _clear_gold_cache()
     _clear_trend_retest_cache()
+    _clear_adaptive_cache()
 
     if len(df_h1) < _WARMUP + 50 or len(df_h4) < 50:
         logger.warning("Backtest %s: insufficient data (%d primary, %d confirm)", pair, len(df_h1), len(df_h4))
@@ -684,13 +686,16 @@ if __name__ == "__main__":
     parser.add_argument("--output",  default="data/backtest_results.csv")
     parser.add_argument("--strategy", default="ema_bounce",
                         choices=["ema_bounce", "trend_follow", "breakout_retest", "gold_trend",
-                                 "trend_retest", "random"],
+                                 "trend_retest", "adaptive", "random"],
                         help="ema_bounce (default, ranging-market mean-reversion), "
                              "trend_follow (fires only when ADX > threshold), "
                              "breakout_retest (break of structure + retest confirmation), "
                              "gold_trend (XAU_USD 200/50 EMA + RSI pullback), "
                              "trend_retest (H4-trend-gated break+retest+price-action, "
-                             "2026-08-12 — see tasks/todo.md), or "
+                             "2026-08-12 — see tasks/todo.md), "
+                             "adaptive (regime + momentum scoring, 2026-08-21 — see tasks/todo.md; "
+                             "this flag forces config.ADAPTIVE_STRATEGY['enabled']=True for the "
+                             "duration of the run regardless of the live config default), or "
                              "random (control: random direction/timing at trend_retest's own "
                              "signal frequency, same SL/TP — isolates whether entry timing "
                              "itself has any edge)")
@@ -725,6 +730,16 @@ if __name__ == "__main__":
         )
     elif args.strategy == "trend_retest":
         from engine.strategy_trend_retest import (
+            check_buy_signal as _buy_fn, check_sell_signal as _sell_fn, get_stop_loss as _sl_fn,
+        )
+    elif args.strategy == "adaptive":
+        # Off by default in the live config (config.ADAPTIVE_STRATEGY
+        # ["enabled"]=False) — force it on for this process only, exactly
+        # like passing explicit buy_fn/sell_fn already bypasses
+        # STRATEGY_OVERRIDE for every other --strategy choice here. Does
+        # not touch config.py on disk or any other process.
+        config.ADAPTIVE_STRATEGY["enabled"] = True
+        from engine.strategy_adaptive import (
             check_buy_signal as _buy_fn, check_sell_signal as _sell_fn, get_stop_loss as _sl_fn,
         )
     elif args.strategy == "random":

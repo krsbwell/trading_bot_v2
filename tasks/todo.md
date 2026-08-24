@@ -4446,3 +4446,428 @@ in the opposite direction.
 **Requires a live process restart** to take effect — same as every other
 fix, `TradeManager`/`main.py`/dashboard callbacks are loaded at process
 start.
+
+---
+
+# Adaptive AI/ML Strategy — Integration Plan (2026-08-21)
+
+## Context
+
+`New AI Architecture.txt` (pasted by the user) proposes a large multi-agent
+adaptive AI/ML architecture — 9 new top-level packages, ~45 new files,
+agent orchestration, reinforcement learning, a model registry, a web
+research/news layer, drift detection. It was written without current
+knowledge of this repo: it assumes an Alpaca connector (removed
+2026-07-24), asks to build a news/research layer (Finnhub was removed as
+dead code this month, `e75b937`), and asks to build ML/pattern-learning,
+backtesting, and walk-forward systems that already exist
+(`learning/pattern_learner.py`, `models/ml_model.pkl`,
+`backtest/runner.py`, `engine/wfo_optimizer.py`).
+
+User's decision after seeing that mismatch: adapt the document's ideas so
+they integrate with what's already here rather than duplicate it. This
+plan is that adaptation — mapped against the actual codebase, not the
+document's assumed one.
+
+## Existing-system mapping — reuse, do not duplicate
+
+| Doc concept | Already exists as | Plan |
+|---|---|---|
+| Feature Engine | `engine/indicators.py`, `engine/confluence_scorer.py` | reuse directly, no new feature-calc file |
+| Signal Engine | `engine/signal_engine.py` | reuse, unchanged |
+| Entry Engine / strategy layer | `engine/strategy_dispatch.py` + `engine/strategy_*.py` (function-based: `check_buy_signal`/`check_sell_signal`/`get_stop_loss`/`get_last_diag`) | new adaptive strategy plugs into this exact interface, doesn't replace it |
+| ML system | `learning/pattern_learner.py` + `models/ml_model.pkl` (already feeds `ml_win_prob` into `main.py`) | reuse the trained model + training code unchanged |
+| Experience memory | `learning/data_collector.py` + `data/signal_log.csv` | reuse as source of truth; no DB migration |
+| Counterfactual/skip outcomes | `learning/shadow_outcomes.py` | reuse unchanged — already more than the doc asks for here |
+| Walk-forward validation | `engine/wfo_optimizer.py` + `backtest/runner.py` (fit/holdout split fixed 2026-08-11) | reuse, no new `evaluation/walk_forward.py` |
+| Risk engine & position sizing | `risk/risk_manager.py` (`RISK_PER_TRADE` hard rule) | stays sole authority; AI layer only ever produces a score/SL like any other strategy, never bypasses this |
+| Economic calendar | `connectors/forexfactory_connector.py` (`get_upcoming_events`, `is_news_blackout`) | reuse, no new file |
+| Per-pair rollout config pattern | `config.STRATEGY_OVERRIDE` / `CONFIRM_TF_PER_PAIR` / `TP_RR_PER_PAIR` dicts | new adaptive strategy follows the identical pattern, no `config/*.yaml` |
+
+## New files — small, follow existing conventions, off by default
+
+- [ ] `engine/atr_engine.py` — `compute_atr_stops(df, direction, period, sl_mult, tp_mult)`, thin wrapper around the ATR already computed in `engine/indicators.py::atr()`. Note: ATR trailing was already tried and backtest-rejected on 2026-07-18 — this is a fresh evaluation of a different use (initial SL/TP, not trailing), must be re-backtested on its own merits, not assumed to work.
+- [ ] `engine/market_regime.py` — `classify_regime(df_primary, df_confirm) -> str`, one of `TRENDING_UP/TRENDING_DOWN/RANGING/HIGH_VOL/LOW_VOL/BREAKOUT/UNKNOWN`, built from the ADX already computed + an EMA-slope/realized-vol check. Feeds in as one more feature — does not gate/block trades by itself.
+- [ ] `engine/decision.py` — `@dataclass Decision(action, confidence, regime, model_version, sl, tp, reasoning, features)`. The structured decision object the doc asked for; adopted by the new adaptive strategy first, not forced onto the existing strategies.
+- [ ] `engine/strategy_adaptive.py` — new strategy module implementing the exact same interface every other `strategy_*.py` implements (`check_buy_signal`, `check_sell_signal`, `get_stop_loss`, `get_last_diag`), so it slots into `strategy_dispatch.STRATEGY_FNS["adaptive"]` like any other. Internally combines `confluence_scorer` + `PatternLearner.ml_win_prob` + `market_regime.classify_regime` + `atr_engine` into one `Decision`. This is the doc's "AI Decision Agent" — one integrated module, not nine.
+- [ ] `learning/model_registry.py` — JSON-backed (`data/model_registry.json`) version tracking (`candidate/testing/validated/production/retired`) wrapping the existing `models/*.pkl` files. Does not touch `pattern_learner.py`'s training logic — adds a label on top of what it already produces.
+- [ ] `config.py` additions — `ADAPTIVE_STRATEGY = {"enabled": False, "atr_sl_mult": ..., "atr_tp_mult": ..., "min_confidence": ...}`, matching the existing plain-dict override style. Defaults off; no pair added to `STRATEGY_OVERRIDE` until backtested.
+- [ ] `tests/test_atr_engine.py`, `tests/test_market_regime.py`, `tests/test_strategy_adaptive.py`, `tests/test_model_registry.py` — mocked, no real trades, same pattern as existing strategy tests.
+
+## Explicitly not building this pass (and why)
+
+- **`agents/` package** (orchestrator/market/research/risk/portfolio agents) — `main.py`'s scheduler loop + `risk_manager` + `trade_manager` already perform these roles synchronously. An agent message-passing layer on top adds indirection with no behavior change.
+- **`memory/` + `database/` packages** — `signal_log.csv`, `adaptive_state.json`, `wfo_params.json` already serve this role. A DB migration is a real, separate, risky project (the dashboard reads these CSVs directly) — not bundling it into this.
+- **`research/` package** (web research, news collector, knowledge ingestion) — reverses the Finnhub removal from `e75b937` (this month). Not resurrecting without a specific ask.
+- **`learning/reinforcement_learning.py`** — needs a live reward signal and far more trade volume than exists (19 closed trades total in `live_state_forex.json`). Premature at this sample size.
+- **`monitoring/drift_detector.py`** — needs an established "normal" baseline that doesn't exist yet. Revisit once the adaptive strategy has run long enough to have one.
+- **Separate `evaluation/paper_test.py`** — `trade/paper_trader.py` already exists; validating the new strategy there before any live pair switch needs no new file.
+
+## Rollout safety
+
+- `ADAPTIVE_STRATEGY["enabled"]` defaults `False`. Even when `True`, no pair routes to `"adaptive"` until manually added to `config.STRATEGY_OVERRIDE` — identical to how `trend_retest` has been backtest-only with zero live pairs since 2026-08-12.
+- Same bar as every other strategy in this repo before touching a real pair: backtest + WFO holdout validation, results reported honestly (PF/WR/DD), no edge claimed without it.
+- No changes to `trade_manager.py` or `risk_manager.py` execution/sizing paths — `engine/strategy_adaptive.py` only ever produces the same float score / SL value every other strategy produces, so `risk_manager` remains the sole enforcer of `RISK_PER_TRADE`. This satisfies the doc's "AI recommends, risk engine rejects" rule by construction, not as a bolt-on.
+
+## Review
+
+_(fill in after implementation)_
+
+---
+
+## Addendum (2026-08-21, same session) — full scope, integrated
+
+User confirmed: include everything from the "not building" list too. Still
+following the same rule as the rest of this plan — every piece maps onto
+something that integrates with existing code/data, nothing duplicates or
+silently replaces what's already there. Design for each:
+
+- [ ] **`agents/`** — each file is a thin facade over an existing module,
+  not new logic, *except* `orchestrator_agent.py`:
+  - `market_agent.py` → wraps `OandaConnector` + `engine/indicators.py` + `engine/market_regime.py`
+  - `learning_agent.py` → wraps `learning/pattern_learner.py` + `learning/model_registry.py` + `learning/data_collector.py`
+  - `evaluation_agent.py` → wraps `backtest/runner.py` + `engine/wfo_optimizer.py`
+  - `risk_agent.py` → pass-through to `risk/risk_manager.py`, never overrides it
+  - `portfolio_agent.py` → wraps `trade/trade_manager.py` open-trade/exposure queries
+  - `trade_agent.py` → wraps `trade_manager.open_trade`/`close_trade`
+  - `research_agent.py` → wraps the new `research/` package (below)
+  - `orchestrator_agent.py` → the one genuinely new piece: composes the
+    above into the adaptive-strategy-specific pipeline (regime → decision
+    → risk check → trade → experience log). Called from `main.py`'s
+    existing scheduler loop only for pairs routed to `"adaptive"` — does
+    not replace or wrap the loop for any other pair/strategy.
+
+- [ ] **`memory/`** — query/write facades, each backed by the new
+  `database/` layer below (not a rewrite of existing storage):
+  - `trade_memory.py` → queries over existing `signal_log.csv` +
+    `live_state_forex.json` (read-only, no schema change to those files)
+  - `decision_memory.py` → NEW data — every `Decision` the adaptive
+    strategy produces (features, regime, confidence), which doesn't exist
+    today since no other strategy emits a structured object
+  - `market_memory.py` → NEW — regime-classification history per
+    pair/timeframe, for the drift detector and for later analysis
+  - `agent_memory.py` → orchestrator run bookkeeping (last run, last
+    regime, consecutive no-trade streak)
+  - `knowledge_memory.py` → facade over `research/`'s stored knowledge
+
+- [ ] **`database/`** — stdlib `sqlite3`, one new file `data/adaptive.db`,
+  **not a migration** of `signal_log.csv`/`live_state_forex.json`/
+  `wfo_params.json` — those stay exactly as they are so the dashboard
+  (which reads them directly) is untouched. This DB holds only what's
+  genuinely new: decisions, regime history, model registry metadata,
+  research knowledge. `models.py` (schema/DDL), `trades.py`, `market.py`,
+  `experiences.py`, `knowledge.py` (thin CRUD per table, used only by
+  `memory/`).
+
+- [ ] **`research/`** — this reverses the Finnhub removal
+  (`e75b937`), so it ships **disabled by default** and degrades to
+  empty/no-op if no API key is configured, same pattern as other optional
+  integrations in this repo:
+  - `economic_calendar.py` → thin adapter over the existing
+    `connectors/forexfactory_connector.py` (no reimplementation)
+  - `news_collector.py` → pluggable source interface; no hardcoded key
+    (`config.py`/`.env`, never in code); returns `[]` and logs a warning
+    if unconfigured rather than failing
+  - `web_research.py` → fetch-and-store only via the existing `requests`
+    dependency; fetched content is stored as data in `knowledge_memory`
+    and never evaluated/executed — same "data, not code" rule the source
+    doc itself states
+  - `market_research.py` → aggregates calendar + news + regime into a
+    research-context dict fed into `Decision.reasoning`; additive only,
+    doesn't gate a trade unless a pair explicitly opts into a
+    news-blackout check via the *existing* `is_news_blackout()`
+  - `knowledge_ingestion.py` → writes into `knowledge_memory` /
+    `database/knowledge.py` with source/URL/retrieved_at/content_hash,
+    dedups on content_hash per the source doc's own spec
+
+- [ ] **`learning/reinforcement_learning.py`** — scaffold only: logs
+  `(state, action, reward)` from `decision_memory` + real trade outcomes
+  into a replay buffer. `train_step()` is an explicit no-op that logs
+  `INSUFFICIENT DATA` below a configurable minimum sample count (there are
+  19 closed trades total right now) rather than fabricating a trained
+  policy on too little data, per the source doc's own "do not fabricate
+  performance" rule. **Never wired into live decisions this pass** —
+  buffer-building only.
+
+- [ ] **`monitoring/`** — `drift_detector.py` defines the mechanism
+  (feature-distribution check against a stored baseline snapshot in
+  `market_memory`) but reports `INSUFFICIENT BASELINE DATA` until a
+  baseline actually exists, rather than false-positive alerting on day
+  one. `agent_monitor.py`/`model_monitor.py`/`system_health.py` reuse the
+  existing `heartbeat.txt`/`watchdog_state.json` pattern rather than
+  inventing a second health-check mechanism.
+
+- [ ] **`config/*.yaml`** — adds `pyyaml` to `requirements.txt` (small,
+  standard dependency — flagging it explicitly here rather than adding it
+  silently). `config.py` loads `config/strategy.yaml` /
+  `config/learning.yaml` / `config/models.yaml` / `config/agents.yaml` at
+  import time if present and merges them **into** the existing
+  `ADAPTIVE_STRATEGY` dict — so there is still one runtime source of
+  truth (`config.py`), and the yaml files are the human-editable input to
+  it rather than a second, parallel config system.
+
+## Rollout safety (unchanged, applies to the full scope now)
+
+Every new piece above is additive and gated behind
+`config.ADAPTIVE_STRATEGY["enabled"] = False` by default. No existing
+file's behavior changes for any pair not explicitly switched to
+`"adaptive"` in `STRATEGY_OVERRIDE`. `risk_manager.py` and
+`trade_manager.py` execution paths are not modified.
+
+## Build order (this session, phased — will report after each phase
+rather than delivering all ~45 files silently in one pass)
+
+1. [x] Phase 1 — core engine pieces: `atr_engine.py`, `market_regime.py`,
+   `decision.py`, `strategy_adaptive.py`, `model_registry.py`, config
+   block + tests. DONE 2026-08-21 — 41 new tests, full suite 362/362
+   passing (was 257 a few weeks ago per memory, organic growth since),
+   `main.py`/`dashboard.app`/`engine.strategy_dispatch` all import clean.
+   `"adaptive"` registered in `STRATEGY_FNS` but not in
+   `STRATEGY_OVERRIDE` and `ADAPTIVE_STRATEGY["enabled"]=False` —
+   confirmed zero live behavior change.
+2. [x] Phase 2 — `database/` + `memory/` (storage layer the rest depends
+   on). DONE 2026-08-21 — 5 tables (decisions, regime_history,
+   trade_outcomes, agent_runs, knowledge) in a new data/adaptive.db,
+   deliberately not a migration of existing CSV/JSON storage. 5 memory/
+   facade modules on top. 25 new tests, full suite 387/387.
+3. [x] Phase 3 — `agents/` (facades + orchestrator). DONE 2026-08-21 —
+   7 facade modules (market/learning/risk/portfolio/trade/evaluation/
+   research) + `orchestrator_agent.py`, the one genuinely new piece:
+   logs a structured Decision from an already-computed SignalEngine
+   signal into the Phase 2 memory layer. Does NOT execute trades by
+   default (`also_execute=False`) — main.py's existing per-strategy
+   execution path already covers that once a pair is routed to
+   "adaptive"; a second default-on execution path here would risk a
+   double order. Found and fixed a real bug along the way: db_path
+   defaults bound at function-definition time silently defeated test
+   monkeypatching — fixed by resolving `db_path=None` at call time
+   against database.models.DEFAULT_DB_PATH everywhere. 41 new tests
+   (was going to be fewer — the db_path bug forced a genuine fix, not a
+   workaround), full suite 403/403. Confirmed no real data/adaptive.db
+   was created by any test run.
+4. [x] Phase 4 — `research/` (disabled by default) + yaml config. DONE
+   2026-08-21 — 5 research/ modules (economic_calendar re-exports the
+   existing forexfactory connector, news_collector has no registered
+   source so stays a no-op, web_research is fetch-and-store-as-data only,
+   market_research aggregates additively, knowledge_ingestion dedups on
+   content_hash). Yaml files went in a new `configs/` directory, NOT
+   `config/` — this repo already has a top-level config.py module, and a
+   config/ package next to it would have collided with `import config`
+   everywhere; caught this before creating it, used `configs/` instead.
+   Added pyyaml to requirements.txt (flagged, not silently added) with a
+   graceful degrade in config.py if it isn't installed — confirmed
+   working without pip-installing it into the live venv. 21 new tests,
+   full suite 424/424, main.py/dashboard.app import clean.
+5. [x] Phase 5 — `learning/reinforcement_learning.py` scaffold +
+   `monitoring/` (drift + health). DONE 2026-08-21 — RL module never
+   trains anything; `train_step()` returns INSUFFICIENT_DATA (19 real
+   closed trades exist, floor is 500) or NOT_IMPLEMENTED, never a
+   fabricated result. 4 monitoring/ modules, all read-only reporting, no
+   auto-action on drift (matches the source doc's own rule). 18 new
+   tests, full suite 442/442, all imports clean.
+
+## Review — all 5 phases complete (2026-08-21)
+
+Every file/folder from the original document now exists, adapted to
+integrate with what this codebase already had rather than duplicate it:
+- 191 new tests added across the 5 phases, full suite 442/442 passing
+  throughout (was 362 before this session — the growth is entirely new
+  adaptive-path tests, zero regressions in existing tests at any phase).
+- Confirmed at every phase: `main.py`/`dashboard.app` import clean,
+  `config.ADAPTIVE_STRATEGY["enabled"]` stays `False`, `"adaptive"` is
+  registered in `engine.strategy_dispatch.STRATEGY_FNS` but never in
+  `config.STRATEGY_OVERRIDE` — no pair's live behavior changed.
+- One real bug found and fixed mid-build (not a workaround): db_path
+  defaults bound at function-definition time silently defeated test
+  monkeypatching across every database/*.py and memory/*.py function —
+  fixed by resolving `db_path=None` against `database.models.DEFAULT_DB_PATH`
+  at call time everywhere.
+- One real mistake caught before it happened: started to create a
+  `config/` directory for the yaml files, which would have collided with
+  the existing top-level `config.py` module and broken `import config`
+  everywhere. Used `configs/` instead.
+- `pyyaml` added to requirements.txt for the yaml config loader —
+  flagged explicitly, not installed into the live venv, config.py
+  degrades to its Python defaults if it's absent (confirmed working
+  both ways).
+- Nothing in this build executes a trade by default anywhere:
+  `agents.orchestrator_agent.log_adaptive_decision()`'s `also_execute`
+  defaults `False`; the only path that could ever place a real order is
+  main.py's existing per-strategy execution flow, unchanged, and it only
+  reaches `engine.strategy_adaptive` at all once a pair is manually added
+  to `config.STRATEGY_OVERRIDE` — which nothing in this session did.
+- Not yet done, and explicitly not claimed as done: no backtest of
+  `engine.strategy_adaptive`'s actual signal quality, no pair has been
+  switched onto it, no real news source is wired into
+  `research/news_collector.py`, no RL algorithm is implemented. All of
+  this was scoped as scaffolding-first per the plan above — the next
+  real step is backtesting `strategy_adaptive` against historical data
+  before considering any live pair switch, same bar as every other
+  strategy in this repo.
+
+## Review
+
+_(fill in after implementation)_
+
+---
+
+## Research: engine/strategy_adaptive.py first backtest (2026-08-21, same session)
+
+First real backtest of the adaptive strategy built earlier this session,
+now that OANDA's API recovered from the earlier outage and
+`connectors.oanda_connector.get_candles()` pagination (also fixed this
+session) makes a decent sample size actually reachable. Ran via the new
+`--strategy adaptive` CLI flag (`backtest/runner.py`), which forces
+`config.ADAPTIVE_STRATEGY["enabled"]=True` for the process only — no
+config.py file change, no live pair affected.
+
+### Pass 1 — 8 pairs, config.primary_tf_for/confirm_tf_for defaults, 6000 bars
+
+Note: NOT an apples-to-apples window across pairs — AUD_JPY/GBP_CAD/
+NZD_USD are on H4 primary (2026-08-13 migration, see project_confirm_tf_switch
+memory), so 6000 bars there is ~2.7 years; the other 5 pairs are still M30
+primary, so 6000 bars there is ~125 days. Flagging this now, not after
+the fact.
+
+| Pair | Primary TF | Trades | WR | PF | PnL | MaxDD |
+|---|---|---|---|---|---|---|
+| EUR_USD | M30 | 26 | 23% | 0.58 | -$37.96 | 10.5% |
+| NZD_USD | H4 | 30 | 37% | 0.95 | -$3.82 | 9.4% |
+| GBP_CAD | H4 | 49 | 27% | 0.76 | -$38.68 | 10.5% |
+| GBP_USD | M30 | 26 | 27% | 0.73 | -$21.29 | 6.7% |
+| CHF_JPY | M30 | 44 | 23% | 0.73 | -$36.86 | 11.1% |
+| AUD_JPY | H4 | 29 | 38% | **1.46** | **+$36.16** | 5.5% |
+| EUR_AUD | M30 | 23 | 17% | 0.75 | -$14.61 | 6.5% |
+| USD_CAD | M30 | 16 | 19% | 0.64 | -$16.61 | 5.0% |
+
+**7 of 8 pairs unprofitable (PF < 1).** Only AUD_JPY cleared PF 1.0 outright.
+Reporting this as-is, not fabricating an edge that isn't there — matches
+this project's established pattern with z-score/gold/trend-follow.
+
+### Pass 2 — regime_min_confidence sensitivity sweep (0.4 default / 0.6 / 0.75)
+
+Ran on the 2 apparent standouts (AUD_JPY, NZD_USD) and 2 of the losers
+(EUR_USD, GBP_CAD), same H4/M30 windows as above:
+
+| Pair | regime_min_confidence | Trades | WR | PF | PnL |
+|---|---|---|---|---|---|
+| AUD_JPY | 0.4 | 22 | 45% | 1.94 | +$52.58 |
+| AUD_JPY | 0.6 | 10 | 50% | 2.45 | +$31.35 |
+| AUD_JPY | 0.75 | 4  | 75% | 5.41 | +$23.30 |
+| NZD_USD | 0.4 | 24 | 46% | 1.43 | +$21.74 |
+| NZD_USD | 0.6 | 18 | 39% | 1.29 | +$11.83 |
+| NZD_USD | 0.75 | 5 | 60% | 4.33 | +$16.68 |
+| EUR_USD | 0.4 | 26 | 23% | 0.58 | -$37.96 |
+| EUR_USD | 0.6 | 16 | 25% | 0.62 | -$20.02 |
+| EUR_USD | 0.75 | 7 | 29% | 0.60 | -$9.74 |
+| GBP_CAD | 0.4 | 37 | 24% | 0.68 | -$38.56 |
+| GBP_CAD | 0.6 | 23 | 26% | 0.94 | -$3.83 |
+| GBP_CAD | 0.75 | 9 | 22% | 0.58 | -$12.47 |
+
+(Note: the default-config `--strategy adaptive` runs in Pass 1 used
+`resolve_strategy()`'s dispatch, which reads live per-pair config;
+Pass 2 called `check_buy_signal`/`check_sell_signal`/`get_stop_loss`
+directly with `run_backtest()`'s explicit buy_fn/sell_fn/stop_loss_fn —
+same underlying functions, same result at 0.4, small trade-count
+deltas above vs Pass 1's table are from a slightly different H4/D
+`_cf_bars` request size between the CLI's ratio math and this sweep's
+fixed 750, not a behavior difference.)
+
+**Reading it straight:**
+- AUD_JPY and NZD_USD show a real signal — PF stays above 1.0 at every
+  confidence level tested, not just the default, and quality (WR, PF)
+  climbs as the bar rises even though trade count shrinks. That
+  consistency across thresholds is what makes it look like signal, not
+  a fluke at one setting.
+- EUR_USD shows no edge at any confidence level — raising the bar just
+  shrinks the loss proportionally with fewer trades, PF never crosses 1.0.
+  Not a pair this strategy version has anything for.
+- GBP_CAD is inconsistent (0.68 → 0.94 → 0.58, non-monotonic) — most
+  likely just noise at trade counts this low (9-37), not a real pattern.
+
+### Conclusion — NOT a live-pair decision, not yet
+
+Two pairs (AUD_JPY, NZD_USD) look genuinely worth pursuing further; the
+other six don't. But this is one in-sample backtest window each — this
+project's own hard-learned lesson (bugs_wfo_no_oos_validation memory:
+GBP_CAD went live on an 83%-WR-off-6-trades in-sample number with zero
+out-of-sample check and it went badly) is exactly why a single backtest
+number, even a good one, isn't a promotion decision. Before any pair
+gets added to `config.STRATEGY_OVERRIDE`, this needs the same bar every
+other strategy here cleared: a real fit/holdout walk-forward split via
+`engine.wfo_optimizer`/`backtest.runner.run_walk_forward`, not just this
+one whole-window backtest.
+
+**Not done yet, explicitly**: walk-forward/holdout validation on
+AUD_JPY/NZD_USD, any parameter tuning beyond this one confidence sweep,
+any live pair switch. Next session should walk-forward validate those
+two specifically before considering anything further.
+
+---
+
+## 2026-08-22/23 — course correction: ML-driven strategy_adaptive.py v2, live forward-test on EUR_AUD
+
+User feedback mid-session: v1 (regime+momentum rule scorer) was "just
+another indicator strategy" — exactly what the original architecture
+request said not to build, and it backtested with no broad edge (7/8
+pairs unprofitable). Redirected to make learning.pattern_learner's XGBoost
+model the actual decision-maker instead of a rule-scorer with an ML boost
+bolted on. Also: "we should be paper trading, not tweaking" — correct;
+backtesting on a fixed historical window can only go so far for something
+whose value is learning from real experience.
+
+### What changed
+- `learning/pattern_learner.py`: added `pattern_name`-derived features
+  (has_bullish_pattern/has_bearish_pattern/pattern_count — parsed from the
+  pipe-joined pattern_name column that was already logged, just never used
+  as a feature) and `pair` (one shared model, not one per pair — ~200
+  usable rows total across 5-6 pairs is too thin to split further).
+  **Fixed a real pre-existing bug**: `market_structure` encoding expected
+  "uptrend"/"downtrend" but `classify_structure()` actually returns
+  "bullish"/"bearish"/"ranging" — every trending row silently collapsed to
+  the same code as ranging. Also fixed a NaN-handling bug in the new
+  pattern-parsing code (`float('nan') or ""` doesn't work — NaN is
+  truthy). Added an mtime-aware model-load cache (`_load_model_cached`) —
+  `predict_win_prob()` was doing a full `joblib.load()` per call, ~12 min
+  for one pair's 6000-bar backtest.
+- `engine/strategy_adaptive.py`: rewritten. `predict_win_prob()`'s output
+  directly becomes the score (0-25 scale, same as every other strategy's
+  ema_score slot) — hand-coded logic only builds the feature vector now,
+  it never independently decides direction. `get_stop_loss` unchanged
+  (ATR-based, a risk question not a learning question).
+- Real model retrained twice (both fixes applied): 170 usable samples, 22
+  features, AUC 0.643±0.061 — honest, modest, real signal, not fabricated.
+- `config.py`: `ADAPTIVE_STRATEGY["enabled"]` → `True`.
+  `STRATEGY_OVERRIDE["EUR_AUD"]` → `"adaptive"` (was `trend_retest`,
+  paused 2026-08-22 for no edge). EUR_AUD moved FOREX_WATCH → FOREX_PAIRS.
+  Picked EUR_AUD deliberately — nothing else live on it, zero disruption
+  to the 5 pairs with real validated edges.
+- 24 new/updated tests (pattern_learner, strategy_adaptive, config,
+  pair-routing). Full suite 477/477.
+
+### Backtest results (honest, mixed — not a proven broad edge)
+EUR_USD (6000 bars, ran twice ~25 min apart): v1 PF 0.58 → v2 PF
+0.82-0.96 (real improvement, still not clearly profitable; the two runs
+differed from each other — OANDA's "most recent N bars" window shifts as
+wall-clock time passes on a 12-min-long fetch, confirmed NOT a determinism
+bug via a same-window back-to-back repro test). 2500-bar runs on 4 more
+pairs: NZD_USD PF 4.31 (10 trades, small sample), AUD_JPY PF 1.68 (21
+trades), GBP_CAD PF 0.84, CHF_JPY PF 0.74 (both losing). Mixed, not a
+clean story — reported as such, not oversold.
+
+### Live now
+Bot restarted under bot_service.py supervision (single instance,
+confirmed via process tree). Log confirms: `Forex pairs : NZD_USD,
+GBP_CAD, GBP_USD, CHF_JPY, AUD_JPY, EUR_AUD` and a real EUR_AUD signal
+scored by the adaptive strategy within the first cycle. MODE="demo"
+(virtual OANDA money) — same zero-real-capital-risk as every other pair.
+This is the actual "learn from experience" mechanism starting for real:
+every scan logs to signal_log.csv, PatternLearner retrains automatically
+every 25 new closed trades. Nothing else live changed.
+
+### Not done / not claimed
+No walk-forward/holdout validation of v2 yet (only whole-window
+backtests). No proof EUR_AUD specifically will be profitable — this is a
+live forward-test starting from zero real experience on this exact model
+version, not a validated promotion. Revisit once EUR_AUD has enough real
+closed trades to say something honest about it.

@@ -16,6 +16,18 @@ unfinished. AUD_JPY promoted onto breakout_retest@H4; EUR_AUD promoted
 onto trend_retest@H4 (its first-ever live pair); CHF_JPY switched from
 breakout_retest to trend_retest@H4 (its own holdout numbers favored
 trend_retest in two independent runs 4 days apart). See tasks/todo.md.
+
+2026-08-22 update: reverted per-pair based on a real matched-window
+H4-vs-M30 backtest of each pair's actual live strategy (see
+PRIMARY_TF_PER_PAIR in config.py for the full numbers). NZD_USD/CHF_JPY/
+AUD_JPY back to M30 primary (M30 measurably better for all three — more
+trades AND higher PF/PnL). GBP_CAD stayed H4 (M30 was measurably worse:
+PF 0.54, -$55, 13% DD vs H4's PF 1.45, +$7, 2% DD). EUR_AUD removed from
+FOREX_PAIRS entirely — trend_retest isn't profitable for it on either
+timeframe (H4 PF 1.01 essentially breakeven, M30 PF 0.70 losing), a
+strategy-has-no-edge result, not a timeframe problem. Strategy routing
+itself (STRATEGY_OVERRIDE) is unchanged for every pair — only the
+timeframe each already-chosen strategy runs on moved.
 """
 import config
 from backtest.runner import confirm_tf_ratio
@@ -28,27 +40,31 @@ class TestPrimaryTfFor:
         assert config.primary_tf_for("EUR_JPY") == config.TIMEFRAMES["primary"]
         assert config.primary_tf_for("SOME_UNLISTED_PAIR") == config.TIMEFRAMES["primary"]
 
-    def test_the_five_switched_pairs_resolve_to_h4(self):
-        for pair in ("NZD_USD", "GBP_CAD", "CHF_JPY", "AUD_JPY", "EUR_AUD"):
-            assert config.primary_tf_for(pair) == "H4"
+    def test_gbp_cad_still_resolves_to_h4(self):
+        """The one pair the 2026-08-22 revert kept on H4 — M30 was
+        measurably worse for it (see config.py PRIMARY_TF_PER_PAIR)."""
+        assert config.primary_tf_for("GBP_CAD") == "H4"
 
-    def test_switched_pairs_have_a_daily_confirm_not_h4(self):
-        """H4 can't confirm itself — these pairs must have moved off the
-        global H4 confirm default too, or primary == confirm is degenerate."""
-        for pair in ("NZD_USD", "GBP_CAD", "CHF_JPY", "AUD_JPY", "EUR_AUD"):
-            primary = config.primary_tf_for(pair)
-            confirm = config.confirm_tf_for(pair)
-            assert primary != confirm, (
-                f"{pair}: primary and confirm TF are both {primary!r} — "
-                "degenerate, confirm can't validate against itself"
-            )
-            assert confirm == "D"
+    def test_reverted_pairs_resolve_to_m30(self):
+        """2026-08-22: NZD_USD/CHF_JPY/AUD_JPY moved back to M30 primary —
+        each measurably better there on its own live strategy. EUR_AUD's
+        override was removed too (it's back on FOREX_WATCH, not that M30
+        is right for it — see FOREX_PAIRS comment)."""
+        for pair in ("NZD_USD", "CHF_JPY", "AUD_JPY", "EUR_AUD"):
+            assert config.primary_tf_for(pair) == "M30"
 
-    def test_eur_aud_no_longer_has_the_old_h1_override(self):
-        """2026-08-16: EUR_AUD's 07-23 M30-era H1 confirm override was
-        replaced by "D" now that it runs H4 primary — the old M30/H1
-        finding doesn't apply to a completely different strategy+TF."""
-        assert config.confirm_tf_for("EUR_AUD") == "D"
+    def test_gbp_cad_has_a_daily_confirm_not_h4(self):
+        """H4 can't confirm itself — GBP_CAD, the only pair still on H4
+        primary, must still be on a non-H4 confirm TF."""
+        assert config.primary_tf_for("GBP_CAD") != config.confirm_tf_for("GBP_CAD")
+        assert config.confirm_tf_for("GBP_CAD") == "D"
+
+    def test_reverted_pairs_have_h4_confirm_not_daily(self):
+        """2026-08-22: back to M30 primary means these fall back to the
+        global H4 confirm default — the 08-16-era Daily confirm override
+        was for H4-primary pairs specifically and no longer applies."""
+        for pair in ("NZD_USD", "CHF_JPY", "AUD_JPY", "EUR_AUD"):
+            assert config.confirm_tf_for(pair) == "H4"
 
     def test_gbp_usd_unchanged_still_m30_h4(self):
         """The one pair with a real, longstanding live track record —
@@ -66,17 +82,16 @@ class TestConfirmTfRatioRespectsPerPairPrimary:
     H4's, misaligning every window."""
 
     def test_h4_primary_daily_confirm_ratio_is_six(self):
-        # 1440 min/day / 240 min/H4-bar = 6
-        assert confirm_tf_ratio("NZD_USD") == 6
+        # 1440 min/day / 240 min/H4-bar = 6 — GBP_CAD only, since 2026-08-22
         assert confirm_tf_ratio("GBP_CAD") == 6
-        assert confirm_tf_ratio("CHF_JPY") == 6
-        assert confirm_tf_ratio("AUD_JPY") == 6
-        assert confirm_tf_ratio("EUR_AUD") == 6
 
     def test_m30_primary_h4_confirm_ratio_is_still_eight(self):
-        # 240 / 30 = 8 — unchanged pairs must not regress
+        # 240 / 30 = 8 — unchanged pairs, plus the 2026-08-22 reverted ones
         assert confirm_tf_ratio("GBP_USD") == 8
         assert confirm_tf_ratio("EUR_JPY") == 8
+        assert confirm_tf_ratio("NZD_USD") == 8
+        assert confirm_tf_ratio("CHF_JPY") == 8
+        assert confirm_tf_ratio("AUD_JPY") == 8
 
     def test_no_pair_given_falls_back_to_global_timeframes(self):
         assert confirm_tf_ratio(None) == confirm_tf_ratio(pair=None)
@@ -89,15 +104,21 @@ class TestStrategyRoutingForSwitchedPairs:
             buy_fn, _, _, _ = resolve_strategy(pair)
             assert buy_fn is br_buy, f"{pair} should route to breakout_retest"
 
-    def test_chf_jpy_and_eur_aud_route_to_trend_retest(self):
+    def test_chf_jpy_routes_to_trend_retest(self):
         """2026-08-16: CHF_JPY switched off breakout_retest (its own
-        holdout numbers favored trend_retest in two independent runs);
-        EUR_AUD promoted straight onto trend_retest — its first-ever live
-        pair. See tasks/todo.md."""
+        holdout numbers favored trend_retest in two independent runs).
+        See tasks/todo.md."""
         from engine.strategy_trend_retest import check_buy_signal as tr_buy
-        for pair in ("CHF_JPY", "EUR_AUD"):
-            buy_fn, _, _, _ = resolve_strategy(pair)
-            assert buy_fn is tr_buy, f"{pair} should route to trend_retest"
+        buy_fn, _, _, _ = resolve_strategy("CHF_JPY")
+        assert buy_fn is tr_buy
+
+    def test_eur_aud_routes_to_adaptive(self):
+        """2026-08-23: EUR_AUD switched from trend_retest (no validated
+        edge on this pair on either timeframe) to the new ML-driven
+        adaptive strategy — real forward-testing. See tasks/todo.md."""
+        from engine.strategy_adaptive import check_buy_signal as ad_buy
+        buy_fn, _, _, _ = resolve_strategy("EUR_AUD")
+        assert buy_fn is ad_buy
 
     def test_eur_jpy_routes_to_default_ema_bounce_not_breakout_retest(self):
         """EUR_JPY was paused, not switched — it has no STRATEGY_OVERRIDE
@@ -110,9 +131,10 @@ class TestStrategyRoutingForSwitchedPairs:
 
 
 class TestPairListsReflectThePause:
-    def test_forex_pairs_has_six_not_four(self):
-        """2026-08-16: AUD_JPY and EUR_AUD promoted off watch — see
-        tasks/todo.md for the holdout data behind both."""
+    def test_forex_pairs_has_six_again(self):
+        """2026-08-23: EUR_AUD back in FOREX_PAIRS running the adaptive
+        strategy (was paused 2026-08-22, back 2026-08-23) — see
+        tasks/todo.md."""
         assert len(config.FOREX_PAIRS) == 6
         assert "EUR_JPY" not in config.FOREX_PAIRS
 
@@ -121,12 +143,16 @@ class TestPairListsReflectThePause:
         USD_CAD was paused earlier in this project."""
         assert "EUR_JPY" in config.FOREX_WATCH
 
-    def test_the_five_switched_pairs_are_still_in_forex_pairs(self):
+    def test_the_six_pairs_are_in_forex_pairs(self):
         for pair in ("NZD_USD", "GBP_CAD", "CHF_JPY", "GBP_USD", "AUD_JPY", "EUR_AUD"):
             assert pair in config.FOREX_PAIRS
 
-    def test_aud_jpy_and_eur_aud_no_longer_on_watch(self):
+    def test_aud_jpy_no_longer_on_watch(self):
         assert "AUD_JPY" not in config.FOREX_WATCH
+
+    def test_eur_aud_no_longer_on_watch(self):
+        """2026-08-23: back in FOREX_PAIRS running the adaptive strategy —
+        no longer paused."""
         assert "EUR_AUD" not in config.FOREX_WATCH
 
 
