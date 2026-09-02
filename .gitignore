@@ -6,6 +6,9 @@
 # multi-machine branch divergence, not meaningful history)
 logs/
 
+# Single-instance lock file (runtime artifact, holds the live PID)
+main.lock
+
 # Data and trained models
 data/
 models/

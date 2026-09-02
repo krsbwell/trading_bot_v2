@@ -10,6 +10,7 @@ Live mode:              set MODE = "live" in config.py — real orders on
 
 Dashboard opens at:     http://localhost:8050
 """
+import atexit
 import logging
 import sys
 import threading
@@ -23,6 +24,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 import config
+import single_instance
 from connectors.oanda_connector import OandaConnector
 from connectors.forexfactory_connector import is_news_blackout as ff_is_news_blackout
 from engine.signal_engine import SignalEngine
@@ -1063,6 +1065,21 @@ def main() -> None:
     global _oanda_connector, _paper_trader
     global _forex_engine
     global _trade_manager_fx
+
+    # ── Single-instance guard (added 2026-08-26) ────────────────────────────
+    # See bugs_duplicate_bot_instances memory: 6 main.py-related processes
+    # were found running at once, one a 2-day-old zombie racing the live
+    # process to manage the same open trade. Refuse to start a second
+    # scheduler rather than silently stacking on top of one already running.
+    # Exit 0 (not an error) — bot_service.py's supervisor treats that as a
+    # clean shutdown and won't waste 12+ minutes retrying a lock that isn't
+    # going to free up.
+    try:
+        _lock_fh = single_instance.acquire()
+    except single_instance.AlreadyRunningError as exc:
+        logger.critical("%s — exiting.", exc)
+        sys.exit(0)
+    atexit.register(single_instance.release, _lock_fh)
 
     logger.info("══════════════════════════════════════════════════════")
     logger.info("  Trading Bot  |  Mode: %s", config.MODE.upper())
