@@ -900,6 +900,141 @@ class TestTradeManagerReconcileOpenTrades:
         assert any(c["id"] == tid and c["close_reason"] == "sl" for c in tm2.closed_trades)
 
 
+class TestTradeManagerReconcileOrphanedTrades:
+    """
+    Mirror image of TestTradeManagerReconcileOpenTrades: a broker-open
+    trade with no local record at all. Confirmed live 2026-09-02
+    (bugs_weekend_close_desync) — a Friday weekend-close call for EUR_AUD
+    returned from connector.close_trade() without raising, yet OANDA has
+    no fill or reject transaction for it at all; the position stayed open
+    at the broker for 5 days, unmanaged, while local state believed it
+    had closed flat at $0, until its original static SL finally
+    triggered for a real loss the bot never saw.
+    """
+    def setup_method(self):
+        rm.TRADING_HALTED = False
+        rm._daily_loss = 0.0
+
+    def test_adopts_broker_trade_with_no_local_record(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        conn.broker_trades = [{"id": "168", "instrument": "EUR_AUD", "units": 2482,
+                               "price": 1.61787, "unrealizedPL": -3.04,
+                               "stopLoss": 1.61526, "takeProfit": None}]
+        conn.trade_details["168"] = {
+            "state": "OPEN", "open_time": "2026-08-28T20:30:07Z", "close_time": None,
+            "avg_close_price": None, "realized_pl": None, "close_reason": "unknown",
+        }
+        tm.reconcile_orphaned_trades()
+        assert "168" in tm.open_trades
+        t = tm.open_trades["168"]
+        assert t["pair"] == "EUR_AUD"
+        assert t["direction"] == "long"
+        assert t["entry"] == 1.61787
+        assert t["sl"] == 1.61526
+        assert t["size"] == 2482
+        assert t["reconciled_orphan"] is True
+
+    def test_short_units_map_to_short_direction(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        conn.broker_trades = [{"id": "200", "instrument": "GBP_USD", "units": -1500,
+                               "price": 1.30, "unrealizedPL": 0.0,
+                               "stopLoss": 1.31, "takeProfit": None}]
+        tm.reconcile_orphaned_trades()
+        t = tm.open_trades["200"]
+        assert t["direction"] == "short"
+        assert t["size"] == 1500
+
+    def test_trade_already_tracked_locally_is_untouched(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
+        original = dict(tm.open_trades[tid])
+        conn.broker_trades = [{"id": tid, "instrument": "EUR_USD", "units": 2000,
+                               "price": 1.0800, "unrealizedPL": 0.0,
+                               "stopLoss": 1.0780, "takeProfit": None}]
+        tm.reconcile_orphaned_trades()
+        assert tm.open_trades[tid] == original   # not overwritten with recovered defaults
+
+    def test_no_orphans_is_a_cheap_no_op(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tm.reconcile_orphaned_trades()   # must not raise with nothing to adopt
+        assert tm.open_trades == {}
+
+    def test_get_open_trades_failure_is_swallowed(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+
+        def _boom():
+            raise RuntimeError("network error")
+        conn.get_open_trades = _boom
+        tm.reconcile_orphaned_trades()   # must not raise
+
+    def test_adopted_trade_survives_restart(self, tmp_path):
+        path = tmp_path / "live_state.json"
+        conn = MockForexConnector()
+        tm1 = TradeManager(conn, "forex", save_path=path)
+        conn.broker_trades = [{"id": "168", "instrument": "EUR_AUD", "units": 2482,
+                               "price": 1.61787, "unrealizedPL": -3.04,
+                               "stopLoss": 1.61526, "takeProfit": None}]
+        tm1.reconcile_orphaned_trades()
+
+        tm2 = TradeManager(MockForexConnector(), "forex", save_path=path)
+        assert "168" in tm2.open_trades
+
+
+class TestCloseTradeVerifiesBrokerState:
+    """
+    close_trade()'s connector call not raising is necessary but not
+    sufficient proof the broker actually closed anything — confirmed live
+    2026-09-02 (bugs_weekend_close_desync): it returned cleanly with no
+    fill and no reject transaction on OANDA's side, and the position
+    stayed open at the broker for 5 days. close_trade() must confirm with
+    the broker before finalizing locally.
+    """
+    def setup_method(self):
+        rm.TRADING_HALTED = False
+        rm._daily_loss = 0.0
+
+    def test_broker_still_reporting_open_raises_and_leaves_state_untouched(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
+        # connector.close_trade() "succeeds" (no exception) but the broker
+        # still lists the trade as open — exactly what happened live.
+        conn.broker_trades = [{"id": tid, "instrument": "EUR_USD", "units": 2000,
+                               "price": 1.0800, "unrealizedPL": 0.0,
+                               "stopLoss": 1.0780, "takeProfit": None}]
+        with pytest.raises(RuntimeError, match="still reports this trade open"):
+            tm.close_trade(tid, 1.0800, reason="weekend_close")
+        assert tid in tm.open_trades
+        assert tm.closed_trades == []
+
+    def test_broker_confirms_closed_finalizes_normally(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
+        conn.broker_trades = []   # broker agrees it's gone
+        tm.close_trade(tid, 1.0800, reason="manual")
+        assert tid not in tm.open_trades
+        assert tm.closed_trades[-1]["close_reason"] == "manual"
+
+    def test_verification_call_failure_raises_and_leaves_state_untouched(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
+
+        def _boom():
+            raise RuntimeError("network error")
+        conn.get_open_trades = _boom
+        with pytest.raises(RuntimeError, match="broker verification failed"):
+            tm.close_trade(tid, 1.0800, reason="manual")
+        assert tid in tm.open_trades
+        assert tm.closed_trades == []
+
+
 # ── _InstrumentedLock (scheduler-freeze diagnostic, tasks/todo_scheduler_freeze.md) ──
 
 class TestInstrumentedLock:

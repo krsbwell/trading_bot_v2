@@ -692,6 +692,14 @@ def _weekend_close_check() -> None:
             except Exception as exc:
                 logger.error("Weekend close failed for %s: %s", pair, exc)
     elif config.MODE in ("demo", "live") and _trade_manager_fx:
+        # Reconcile against the broker first (bugs_weekend_close_desync,
+        # 2026-09-02): this pass only ever sees pairs already in local
+        # open_trades, so a trade the bot has already silently lost track
+        # of would otherwise be skipped here every single week.
+        try:
+            _trade_manager_fx.reconcile_orphaned_trades()
+        except Exception as exc:
+            logger.error("Weekend close: reconcile_orphaned_trades failed: %s", exc)
         for pair in list(_trade_manager_fx.open_pairs()):
             t = _trade_manager_fx.get_open_trade(pair)
             if not t:
@@ -785,6 +793,10 @@ def _tick_live_trades() -> None:
             manager.reconcile_open_trades()
         except Exception as exc:
             logger.error("reconcile_open_trades failed: %s", exc)
+        try:
+            manager.reconcile_orphaned_trades()
+        except Exception as exc:
+            logger.error("reconcile_orphaned_trades failed: %s", exc)
         # Sync unconditionally here — an order that just expired/cancelled
         # (no fill), or a trade closed via reconciliation rather than our
         # own candle check, wouldn't otherwise clear from the dashboard

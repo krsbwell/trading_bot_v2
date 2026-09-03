@@ -471,6 +471,31 @@ class TradeManager:
             # stop tracking/managing a real open position.
             logger.error("Manual close failed for %s: %s", trade_id, exc)
             raise
+
+        # Confirmed live 2026-09-02 (bugs_weekend_close_desync): a Friday
+        # weekend-close call for EUR_AUD trade 168 returned here without
+        # raising, yet OANDA has no fill or reject transaction for it at
+        # all — the position stayed open at the broker for 5 days while
+        # local state believed it had closed flat at $0, unmanaged, until
+        # its original static SL finally triggered for a real -$4.75 loss
+        # the bot never saw. connector.close_trade() not raising is
+        # necessary but not sufficient proof the broker actually closed
+        # anything — ask the broker directly before trusting it.
+        try:
+            still_open = {bt["id"] for bt in self.connector.get_open_trades()}
+        except Exception as exc:
+            logger.error("close_trade: could not verify broker state for %s: %s", trade_id, exc)
+            raise RuntimeError(
+                f"close_trade({trade_id}): broker verification failed after close "
+                "call — refusing to mark it closed locally"
+            ) from exc
+        if trade_id in still_open:
+            raise RuntimeError(
+                f"close_trade({trade_id}): broker still reports this trade open "
+                "after a close call that didn't raise — refusing to mark it "
+                "closed locally"
+            )
+
         fill_price, real_pnl = self._real_fill(resp)
         fill_price = fill_price if fill_price is not None else price
         pnl = real_pnl if real_pnl is not None else self._pnl(
@@ -856,6 +881,74 @@ class TradeManager:
             )
             self._finalize_close(t, exit_price, reason)
         if missing:
+            self._save_state()
+
+    def reconcile_orphaned_trades(self) -> None:
+        """
+        Mirror image of reconcile_open_trades(): detect broker-open trades
+        with NO local tracking at all, and re-adopt them so they're
+        actively managed again instead of sitting invisible.
+
+        Confirmed live 2026-09-02 (bugs_weekend_close_desync): a Friday
+        weekend-close call for EUR_AUD silently failed to actually close
+        the position at the broker — no fill, no reject transaction on
+        OANDA's side — while local state marked it closed flat at $0.
+        The bot then managed nothing for it (no trailing, no TP
+        monitoring) for 5 days until its original static SL finally
+        triggered for a real -$4.75 loss the local records never saw.
+        main.py's _reconcile_live_positions() already detects this class
+        of mismatch but only at startup, and only logs a warning — easy
+        to miss, and useless between restarts. This runs every tick and
+        actually fixes it.
+
+        Recovered fields the broker doesn't expose (score, risk_dollar,
+        TP levels) are set to safe defaults and the trade is flagged
+        `reconciled_orphan` so the dashboard/logs make clear it's a
+        recovered position, not one the bot opened normally.
+        """
+        try:
+            broker_trades = self.connector.get_open_trades()
+        except Exception as exc:
+            logger.error("reconcile_orphaned_trades: could not fetch broker state: %s", exc)
+            return
+
+        adopted = False
+        for bt in broker_trades:
+            trade_id = bt["id"]
+            if trade_id in self.open_trades:
+                continue
+            try:
+                open_time = self.connector.get_trade_details(trade_id).get("open_time")
+            except Exception:
+                open_time = None
+            direction = "long" if bt["units"] > 0 else "short"
+            self.open_trades[trade_id] = {
+                "id": trade_id,
+                "pair": bt["instrument"],
+                "market": "forex",
+                "direction": direction,
+                "entry": bt["price"],
+                "sl": bt["stopLoss"],
+                "tp1": None, "tp2": None, "tp3": None,
+                "size": abs(bt["units"]),
+                "remaining": 1.0,
+                "tp1_hit": False, "tp2_hit": False, "tp3_hit": False,
+                "breakeven_set": False,
+                "risk_dollar": 0.0,
+                "score": 0,
+                "open_time": open_time,
+                "realised_pnl": 0.0,
+                "reconciled_orphan": True,
+            }
+            adopted = True
+            logger.critical(
+                "RECONCILE — adopted orphaned broker trade %s (%s %s, %d units @ %.5f, "
+                "sl=%s) with no local record — manual review recommended "
+                "(bugs_weekend_close_desync)",
+                trade_id, direction.upper(), bt["instrument"], abs(bt["units"]),
+                bt["price"], bt["stopLoss"],
+            )
+        if adopted:
             self._save_state()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
