@@ -1,3 +1,30 @@
+# Round 4: open items after the re-screen (2026-09-28)
+
+- [x] Merge strategy-review-2026-09-28 -> main (fast-forward, e9056b9).
+- [x] News blackout: pair coverage. The hand-kept currency->pairs table was
+      stale: AUD_JPY (live now), NZD_USD, CHF_JPY, EUR_JPY had NO blackout,
+      and GBP_CAD only for USD news. Now derived: the event currency is on
+      either side of the pair. Real feed check: AUD_JPY had 0 high-impact
+      events covered under the old table, 5 AUD events this week now.
+- [x] News blackout: failure handling. A failed fetch (429 seen 09-27 and
+      twice today) cached [] for 60 min = blackout silently off. Now the
+      last good calendar is kept (memory + data/ff_calendar_cache.json,
+      max 7 days old), retried every 5 min, with a loud ERROR when there
+      is no calendar at all. Dead nextweek.xml URL removed (404 since 08-14).
+- [x] pyyaml installed in venv (was in requirements.txt). configs/*.yaml
+      now load. Only effective difference: ADAPTIVE_STRATEGY enabled=False,
+      and no pair uses adaptive, so no trading change.
+- [x] Checked, no change needed: EMA re-fit quirk only feeds the H4 display
+      + logged features (not trading); diagnostic scans never open trades.
+- [x] Tests: tests/test_forexfactory_blackout.py (5). 528 passed.
+- [x] Restarted 02:29 and 02:32 EDT. The startup fetch hit 429 both times
+      (my verification request made it worse). Watching for the first
+      successful fetch + disk cache write.
+- Security: new disk file holds public calendar data only; tests redirect
+  it to tmp; no new endpoints (one URL removed).
+
+---
+
 # Round 3: make the backtest trustworthy, then re-screen all pairs (2026-09-28)
 
 User: retest major + minor pairs for inclusion. A pair that fails is
