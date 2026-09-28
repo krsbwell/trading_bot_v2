@@ -19,7 +19,7 @@ import config
 from dashboard import state
 from dashboard.panels import (
     signal_monitor_panel, open_trades_panel, pending_orders_panel,
-    account_stats_bar, trade_log_drawer, learning_panel,
+    account_stats_bar, trade_log_drawer, learning_panel, trade_log_csv,
 )
 from dashboard.chart_builder_twlc import build_chart_data
 
@@ -761,6 +761,7 @@ app.layout = html.Div(
         html.Div(id="account-stats"),
         html.Div(id="trade-log-drawer",
                  children=trade_log_drawer([], [], {}, visible=False)),
+        dcc.Download(id="trade-log-download"),   # target of the drawer's Export CSV button
         html.Div(id="drawer-backdrop", n_clicks=0,
                  style={"display": "none", "position": "fixed", "top": 0, "left": 0,
                         "width": "100%", "height": "100%",
@@ -3739,6 +3740,21 @@ def toggle_drawer(open_clicks, close_clicks, backdrop_n, visible):
         s.get("ml_stats", {}), visible=new_vis,
         equity_curve=eq_curve,
     ), back_style
+
+
+@app.callback(
+    Output("trade-log-download", "data"),
+    Input("trade-log-export-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def export_trade_log(n_clicks):
+    """Every closed trade (all pages, full detail) as a CSV download."""
+    if not n_clicks:
+        return no_update
+    trades = state.get_key("closed_trades", []) or []
+    from datetime import timezone as _tz_utc
+    fname  = f"trade_log_{_dt.now(_tz_utc.utc):%Y%m%d_%H%M}_UTC.csv"
+    return dcc.send_string(trade_log_csv(trades), filename=fname)
 
 
 @app.callback(

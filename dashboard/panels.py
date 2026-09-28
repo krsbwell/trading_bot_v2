@@ -715,66 +715,139 @@ def trade_log_drawer(
 
 # ── Sub-builders ─────────────────────────────────────────────────────────────
 
-def _trade_table(trades: list) -> html.Table:
+TRADE_LOG_PAGE_SIZE = 15
+
+
+def _iso(v) -> str:
+    """open/close times may be datetimes or ISO strings (from the state file)."""
+    if not v:
+        return ""
+    return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+
+def _px(v, pair: str) -> str:
+    if not isinstance(v, (int, float)):
+        return "—"
+    return f"{v:.3f}" if "JPY" in pair else f"{v:.5f}"
+
+
+def _sl_initial(t: dict):
+    """The SL the trade STARTED with; old trades only have the final
+    (possibly trailed) SL."""
+    sig = t.get("ml_signal") or {}
+    return t.get("sl_initial", sig.get("stop_loss", t.get("sl")))
+
+
+def trade_log_rows(trades: list) -> list[dict]:
+    """Display rows for the paginated trade log, newest first (all trades)."""
+    rows = []
+    for t in reversed(trades):
+        pnl  = t.get("realised_pnl", 0) or 0
+        pair = t.get("pair", "—")
+        o, c = _iso(t.get("open_time")), _iso(t.get("close_time"))
+        rows.append({
+            "opened":  f"{o[5:10]} {o[11:16]}" if o else "—",   # MM-DD HH:MM (UTC)
+            "closed":  f"{c[5:10]} {c[11:16]}" if c else "—",
+            "pair":    pair,
+            "dir":     (t.get("direction") or "—")[:1].upper(),
+            "entry":   _px(t.get("entry"), pair),
+            "sl":      _px(_sl_initial(t), pair),
+            "exit":    _px(t.get("exit_price"), pair),
+            "pnl":     f"${pnl:+.2f}",
+            # 100 = manual dashboard order, not a computed score
+            "score":   "manual" if t.get("score") == 100 else str(t.get("score", "—")),
+            "outcome": t.get("close_reason", "—"),
+            "win":     1 if pnl > 0 else 0,        # styling only (not a column)
+        })
+    return rows
+
+
+_CSV_COLUMNS = [
+    "id", "pair", "direction", "open_time_utc", "close_time_utc", "entry", "sl_initial",
+    "sl_final", "tp1", "tp2", "tp3", "exit_price", "size", "risk_dollar", "pnl_dollar",
+    "r_multiple", "score", "close_reason", "patterns",
+]
+
+
+def _csv_safe(v):
+    """Spreadsheet formula-injection guard: a text cell starting with = + @
+    (or tab/CR) can execute as a formula in Excel. Numbers pass through."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
+def trade_log_csv(trades: list) -> str:
+    """Full-detail CSV of ALL closed trades (oldest first), for export."""
+    import csv
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(_CSV_COLUMNS)
+    for t in trades:
+        pnl, risk = t.get("realised_pnl", 0) or 0, t.get("risk_dollar") or 0
+        sig = t.get("ml_signal") or {}
+        w.writerow([_csv_safe(x) for x in (
+            t.get("id", ""), t.get("pair", ""), t.get("direction", ""),
+            _iso(t.get("open_time")), _iso(t.get("close_time")),
+            t.get("entry", ""), _sl_initial(t), t.get("sl", ""),
+            t.get("tp1", ""), t.get("tp2", ""), t.get("tp3", ""), t.get("exit_price", ""),
+            t.get("size", ""), round(risk, 2) if risk else "", round(pnl, 2),
+            round(pnl / risk, 2) if risk else "",
+            "manual" if t.get("score") == 100 else t.get("score", ""),
+            t.get("close_reason", ""), "|".join(sig.get("patterns") or []),
+        )])
+    return buf.getvalue()
+
+
+def _trade_table(trades: list) -> html.Div:
     if not trades:
         return html.Div("No closed trades yet.", style={"color": _MUTED})
+    from dash import dash_table
 
-    header = html.Tr([
-        html.Th(h, style={"color": _MUTED, "padding": "0.3rem 0.4rem",
-                           "fontSize": "0.75rem", "fontWeight": 600,
-                           "textAlign": "left", "borderBottom": "1px solid #21262d",
-                           "whiteSpace": "nowrap"})
-        for h in ["Opened (UTC)", "Closed", "Pair", "Dir", "Entry", "SL", "Exit", "P&L", "Score", "Outcome"]
-    ])
-
-    def _when(v):
-        # open/close times may be datetimes or ISO strings (from the state file)
-        if not v:
-            return "—"
-        s = v.isoformat() if hasattr(v, "isoformat") else str(v)
-        return f"{s[5:10]} {s[11:16]}"   # MM-DD HH:MM
-
-    def _px(v, pair):
-        if not isinstance(v, (int, float)):
-            return "—"
-        return f"{v:.3f}" if "JPY" in pair else f"{v:.5f}"
-
-    rows = []
-    for t in list(reversed(trades[-50:])):    # last 50, newest first
-        pnl    = t.get("realised_pnl", 0)
-        pnl_c  = _BULL if pnl >= 0 else _BEAR
-        pair   = t.get("pair", "—")
-        sig    = t.get("ml_signal") or {}
-        # the SL the trade STARTED with; old trades only have the final
-        # (possibly trailed) SL, which is shown as-is
-        sl0    = t.get("sl_initial", sig.get("stop_loss", t.get("sl")))
-        patterns = ", ".join(sig.get("patterns") or []) or "no pattern recorded"
-        cell = {"padding": "0.25rem 0.4rem", "fontSize": "0.75rem", "color": _MUTED,
-                "whiteSpace": "nowrap", **_mono}
-        rows.append(html.Tr([
-            html.Td(_when(t.get("open_time")), style=cell),
-            html.Td(_when(t.get("close_time")), style=cell),
-            html.Td(pair, title=patterns,
-                    style={"padding": "0.25rem 0.4rem", "fontSize": "0.8rem",
-                           "color": _TEXT, **_mono}),
-            html.Td(t.get("direction", "—")[:1].upper(),
-                    style={"color": _BULL if t.get("direction") == "long" else _BEAR,
-                           "padding": "0.25rem 0.4rem", "fontSize": "0.8rem"}),
-            html.Td(_px(t.get("entry"), pair), style=cell),
-            html.Td(_px(sl0, pair), style=cell),
-            html.Td(_px(t.get("exit_price"), pair), style=cell),
-            html.Td(f"${pnl:+.2f}", style={"color": pnl_c, "padding": "0.25rem 0.4rem",
-                                             "fontSize": "0.8rem", **_mono}),
-            # 100 = manual dashboard order, not a computed score
-            html.Td("manual" if t.get("score") == 100 else str(t.get("score", "—")), style=cell),
+    cols = [("Opened (UTC)", "opened"), ("Closed", "closed"), ("Pair", "pair"), ("Dir", "dir"),
+            ("Entry", "entry"), ("SL", "sl"), ("Exit", "exit"), ("P&L", "pnl"),
+            ("Score", "score"), ("Outcome", "outcome")]
+    table = dash_table.DataTable(
+        id="trade-log-table",
+        columns=[{"name": n, "id": i} for n, i in cols],
+        data=trade_log_rows(trades),
+        page_action="native",                 # page 2, 3... instead of one long list
+        page_size=TRADE_LOG_PAGE_SIZE,
+        style_as_list_view=True,
+        style_table={"width": "100%"},
+        style_header={"backgroundColor": _PANEL, "color": _MUTED, "fontWeight": 600,
+                      "fontSize": "0.75rem", "border": "none",
+                      "borderBottom": "1px solid #21262d", "textAlign": "left"},
+        style_cell={"backgroundColor": _PANEL, "color": _MUTED, "fontSize": "0.75rem",
+                    "fontFamily": "'JetBrains Mono', 'Consolas', monospace",
+                    "padding": "0.3rem 0.4rem", "textAlign": "left", "whiteSpace": "nowrap",
+                    "border": "none", "borderBottom": "1px solid #21262d"},
+        style_data_conditional=[
+            {"if": {"column_id": "pair"}, "color": _TEXT},
+            {"if": {"column_id": "dir", "filter_query": '{dir} = "L"'}, "color": _BULL},
+            {"if": {"column_id": "dir", "filter_query": '{dir} = "S"'}, "color": _BEAR},
             # coloured by result, not label: an "sl" exit on a trailed stop can be a win
-            html.Td(t.get("close_reason", "—"),
-                    style={"padding": "0.25rem 0.4rem", "fontSize": "0.75rem",
-                           "whiteSpace": "nowrap", "color": pnl_c}),
-        ], style={"borderBottom": "1px solid #21262d"}))
-
-    return html.Table([header] + rows,
-                      style={"width": "100%", "borderCollapse": "collapse"})
+            {"if": {"column_id": ["pnl", "outcome"], "filter_query": "{win} = 1"}, "color": _BULL},
+            {"if": {"column_id": ["pnl", "outcome"], "filter_query": "{win} = 0"}, "color": _BEAR},
+        ],
+        css=[{"selector": ".previous-next-container, .page-number",
+              "rule": f"color: {_TEXT};"}],
+    )
+    export_btn = html.Button(
+        "⬇ Export CSV", id="trade-log-export-btn", n_clicks=0,
+        title="Download every closed trade (all pages, full detail) as CSV",
+        style={"background": "transparent", "border": "1px solid #30363d", "color": _TEXT,
+               "borderRadius": "4px", "padding": "3px 10px", "fontSize": "0.75rem",
+               "cursor": "pointer"})
+    return html.Div([
+        html.Div([
+            html.H6(f"Closed Trades ({len(trades)})",
+                    style={"color": _MUTED, "margin": 0, "fontSize": "0.75rem", **_sans}),
+            html.Div(export_btn, style={"marginLeft": "auto"}),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.4rem"}),
+        table,
+    ])
 
 
 def _suggestion_cards(suggestions: list) -> list:

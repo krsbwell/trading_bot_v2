@@ -339,3 +339,40 @@ def test_trade_log_drawer_has_no_frequency_or_watching_panels():
     assert "Signal Frequency" not in out and "Watching Signals" not in out
     assert "Per-Pair Analytics" not in out
     assert "Equity Curve" in out
+
+
+def _mk_trades(n):
+    from datetime import datetime, timedelta, timezone
+    base = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    return [{"id": str(i), "pair": "GBP_USD", "direction": "long", "entry": 1.3400, "sl": 1.3380,
+             "sl_initial": 1.3375, "tp1": 1.3437, "tp2": 1.3462, "tp3": 1.3487, "exit_price": 1.3410,
+             "size": 2000, "risk_dollar": 5.0, "realised_pnl": 2.5 if i % 2 else -5.0, "score": 57,
+             "close_reason": "sl", "open_time": base + timedelta(hours=i),
+             "close_time": base + timedelta(hours=i, minutes=30),
+             "ml_signal": {"patterns": ["bullish_engulfing"]}} for i in range(n)]
+
+
+def test_trade_log_paginates_all_trades_newest_first():
+    """2026-09-28: 15 rows per page (page 2, 3...) instead of one long list,
+    and ALL trades (was capped at the last 50)."""
+    from dash import dash_table
+    from dashboard.panels import _trade_table, trade_log_rows, TRADE_LOG_PAGE_SIZE
+    trades = _mk_trades(60)
+    rows = trade_log_rows(trades)
+    assert len(rows) == 60 and rows[0]["opened"] == "09-03 11:00"      # newest first
+    tables = [c for c in _trade_table(trades).children[1:] if isinstance(c, dash_table.DataTable)]
+    assert tables and tables[0].page_action == "native" and tables[0].page_size == TRADE_LOG_PAGE_SIZE == 15
+
+
+def test_trade_log_csv_full_detail_and_formula_injection_guard():
+    import csv, io
+    from dashboard.panels import trade_log_csv
+    t = _mk_trades(2)
+    t[0]["close_reason"] = "=HYPERLINK(\"http://evil\")"   # hostile text cell
+    rows = list(csv.DictReader(io.StringIO(trade_log_csv(t))))
+    assert len(rows) == 2
+    assert rows[1]["sl_initial"] == "1.3375" and rows[1]["sl_final"] == "1.338"
+    assert rows[1]["r_multiple"] == "0.5" and rows[0]["r_multiple"] == "-1.0"
+    assert rows[1]["patterns"] == "bullish_engulfing"
+    assert rows[0]["close_reason"].startswith("'=")            # neutralised
+    assert rows[0]["pnl_dollar"] == "-5.0"                      # negative numbers untouched
