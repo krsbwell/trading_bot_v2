@@ -30,7 +30,7 @@ import config
 from risk.risk_manager import (
     calculate_position_size, get_quote_to_usd_rate, get_tp_levels, validate_pre_trade, update_daily_loss,
 )
-from trade.paper_trader import _ser, _deser
+from trade.paper_trader import _ser, _deser, _runner_uncapped
 from learning.data_collector import make_snapshot, record_close
 
 logger = logging.getLogger(__name__)
@@ -235,18 +235,35 @@ class TradeManager:
     def on_candle_close(self, pair: str, candle: dict, atr_value: float = None) -> None:
         """
         Called after every candle close for each pair.
-        candle keys: high, low, close. `atr_value` (price units, not pips) is
-        only used when config.ATR_TRAILING_ENABLED — pass None otherwise.
+        candle keys: high, low, close, and optionally `end` (UTC datetime the
+        candle closed). `atr_value` (price units, not pips) is only used when
+        config.ATR_TRAILING_ENABLED — pass None otherwise.
+
+        A trade is only evaluated against a candle that was still forming
+        when it opened (end > open_time). Before 2026-09-28 the candle that
+        GENERATED the signal was fed straight back in: on H4 pairs for up
+        to 4 hours of 30-min checks. A rejection candle's wick is beyond the
+        stop by definition, so trades were "stopped" by price action from
+        before they existed, closed at market, and re-entered next scan
+        (GBP_CAD 2026-08-28: 4 entries at the same price in 2.5h). The
+        broker-side SL attached at order time still protects the trade
+        until its first post-entry candle.
         """
         high  = candle["high"]
         low   = candle["low"]
         close = candle["close"]
+        end   = candle.get("end")
+        if end is not None and end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
 
         to_remove = []
         evaluated_any = False
         for trade_id, t in self.open_trades.items():
             if t["pair"] != pair:
                 continue
+            opened = t.get("open_time")
+            if end is not None and isinstance(opened, datetime) and end <= opened:
+                continue   # candle closed before this trade existed
             evaluated_any = True
             fully_closed = self._eval_candle(t, high, low, close, trade_id, atr_value)
             if fully_closed:
@@ -344,7 +361,7 @@ class TradeManager:
                 t["remaining"] -= _TP2_PCT
 
         # ── TP3 ───────────────────────────────────────────────────────────────
-        if t["tp2_hit"] and not t["tp3_hit"] and t.get("tp3") is not None:
+        if t["tp2_hit"] and not t["tp3_hit"] and t.get("tp3") is not None and not _runner_uncapped():
             tp3_hit = (d == "long" and high >= t["tp3"]) or \
                       (d == "short" and low  <= t["tp3"])
             if tp3_hit:

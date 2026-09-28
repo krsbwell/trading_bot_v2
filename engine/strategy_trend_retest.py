@@ -53,6 +53,7 @@ import pandas as pd
 
 import config
 from engine.indicators import atr, ema, macd_full
+from engine.strategy_breakout_retest import retest_since_break
 from engine.strategy_market_structure import detect_pivots, classify_structure, detect_bos_choch
 from engine.strategy_price_action import detect_patterns, _BULLISH, _BEARISH
 
@@ -158,7 +159,8 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     low_now   = float(df_h1["low"].iloc[-1])
     close_now = float(df_h1["close"].iloc[-1])
 
-    c2 = abs(low_now - broken_level) <= band          # retest
+    c2 = (retest_since_break(df_h1, broken_level, band, "long") if config.SEQUENCED_RETEST
+          else abs(low_now - broken_level) <= band)       # retest
     c3 = close_now >= broken_level - band             # not invalidated
 
     patterns         = detect_patterns(df_h1)
@@ -221,7 +223,8 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     high_now  = float(df_h1["high"].iloc[-1])
     close_now = float(df_h1["close"].iloc[-1])
 
-    c2 = abs(high_now - broken_level) <= band
+    c2 = (retest_since_break(df_h1, broken_level, band, "short") if config.SEQUENCED_RETEST
+          else abs(high_now - broken_level) <= band)       # retest
     c3 = close_now <= broken_level + band
 
     patterns         = detect_patterns(df_h1)

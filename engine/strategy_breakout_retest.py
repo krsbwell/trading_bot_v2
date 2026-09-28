@@ -97,7 +97,34 @@ def _ma_aligned(df_h1: pd.DataFrame, direction: str) -> bool:
     if len(df_h1) < 100:
         return False
     fast, slow = ribbon(df_h1)[:2]
-    return fast > slow if direction == "long" else fast < slow
+    return bool(fast > slow) if direction == "long" else bool(fast < slow)
+
+
+def retest_since_break(df_h1: pd.DataFrame, level: float, band: float, direction: str) -> bool:
+    """config.SEQUENCED_RETEST: the retest may happen on ANY candle after
+    the one that broke the level (within the BOS detector's 5-candle
+    window), not only on the current candle. The 2026-09-28 diagnosis found
+    the "retest on the same candle as the confirming pattern" requirement
+    missing on 20 of 34 backtest trades. Real price action goes: break ->
+    pull back to the level -> confirming candle, often on different candles.
+    The break candle itself doesn't count (its wick near the level is the
+    breakout, not a pullback)."""
+    last5  = df_h1.tail(5)
+    broke  = (last5["close"] > level) if direction == "long" else (last5["close"] < level)
+    if not broke.any():
+        return False
+    after  = last5.iloc[int(broke.values.argmax()) + 1:]
+    touch  = after["low"] if direction == "long" else after["high"]
+    return bool(((touch - level).abs() <= band).any())
+
+
+def addon_ok(df_h1: pd.DataFrame, direction: str) -> bool:
+    """config.PYRAMID_REQUIRE_MA_CROSS: an ADD-ON entry (pair already has an
+    open trade) also needs the fast EMA crossed over EMA100 in the trade
+    direction, i.e. the trend is confirmed before adding size. First entries
+    don't need it (the cross lags a fresh breakout; it was missing on 20 of
+    34 backtest trades)."""
+    return (not config.PYRAMID_REQUIRE_MA_CROSS) or _ma_aligned(df_h1, direction)
 
 
 def _strict_entry_ok(df_h1: pd.DataFrame, direction: str, retest: bool,
@@ -162,7 +189,8 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     low_now   = float(df_h1["low"].iloc[-1])
     close_now = float(df_h1["close"].iloc[-1])
 
-    c2 = abs(low_now - broken_level) <= band
+    c2 = (retest_since_break(df_h1, broken_level, band, "long") if config.SEQUENCED_RETEST
+          else abs(low_now - broken_level) <= band)
     c3 = close_now >= broken_level - band
 
     patterns          = detect_patterns(df_h1)
@@ -224,7 +252,8 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     high_now  = float(df_h1["high"].iloc[-1])
     close_now = float(df_h1["close"].iloc[-1])
 
-    c2 = abs(high_now - broken_level) <= band
+    c2 = (retest_since_break(df_h1, broken_level, band, "short") if config.SEQUENCED_RETEST
+          else abs(high_now - broken_level) <= band)
     c3 = close_now <= broken_level + band
 
     patterns          = detect_patterns(df_h1)

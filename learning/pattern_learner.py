@@ -72,6 +72,7 @@ _PAIR_ENCODING: dict = {
     "GBP_USD": 0, "NZD_USD": 1, "GBP_CAD": 2, "CHF_JPY": 3, "AUD_JPY": 4,
     "EUR_AUD": 5, "EUR_JPY": 6, "USD_CAD": 7, "EUR_CHF": 8, "EUR_CAD": 9,
     "EUR_GBP": 10, "CAD_CHF": 11, "NZD_CHF": 12, "XAU_USD": 13,
+    "EUR_USD": 14,   # 2026-09-28 — live again after the full re-screen
 }
 
 # ── Encoding maps ─────────────────────────────────────────────────────────────

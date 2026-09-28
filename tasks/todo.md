@@ -1,3 +1,111 @@
+# Round 3: make the backtest trustworthy, then re-screen all pairs (2026-09-28)
+
+User: retest major + minor pairs for inclusion. A pair that fails is
+REMOVED (FOREX_REJECTED), not put on watch. Then continue the agreed order.
+
+- [x] 1. Live vs backtest: why GBP_CAD fires ~13x more live, and NZD_USD
+      went 0/3 live vs 67% in backtest. Compare trade by trade and find the
+      code-path difference.
+- [x] 2. Spread in backtest/runner.py itself (per-pair typical spread,
+      applied at entry), so the dashboard backtest button and WFO see it too.
+- [x] 3. Pair screen: all 7 majors + 21 minors x {breakout_retest,
+      trend_retest}, spread included, longer history. Criteria fixed BEFORE
+      running (below). Pass -> FOREX_PAIRS; fail -> FOREX_REJECTED (removed
+      from watch). Any currently-active pair that fails is flagged to the
+      user before removal.
+- [x] 4. Sequenced entry behind a flag (retest within N bars of the break,
+      confirming candle on entry bar, MA not-against for the first entry,
+      full MA cross for add-ons). Backtest vs current.
+- [x] 5. ATR-trailed runner instead of the hard TP3 cap, behind a flag.
+      Backtest vs current.
+- [ ] 6. Tests, review, security check, restart, commit.
+
+Inclusion criteria (set before seeing results):
+- Strategy picked on the FIRST half of the history only.
+- Judged on the SECOND half (out-of-sample): PF after spread >= 1.3,
+  >= 8 trades in that half, max drawdown <= 10%.
+- First half PF after spread >= 1.1 as well (not a one-period fluke).
+
+Progress notes (round 3):
+- 1 FOUND + FIXED (live): phantom stops. _tick_live_trades fed the last
+  COMPLETED primary candle, which for H4 pairs was the signal candle itself
+  (for up to 4h of 30-min checks). Its rejection wick is beyond the SL by
+  definition, so trades closed at market instantly and re-entered next scan
+  (GBP_CAD 08-28: 4 entries at 1.88174 in 2.5h). 8 of 27 live "sl" closes
+  look like this. TradeManager.on_candle_close now skips candles with
+  end <= open_time. + test.
+- 1 FOUND + FIXED (live): one entry per (pair, direction, signal candle).
+  An H4 signal re-triggered every scan, and with pyramiding on it could
+  stack 3 positions on one setup. signal_engine adds "signal_bar"; main.py
+  blocks the repeat with a BLOCKED audit row. + test. Caveat: in-memory,
+  so a restart mid-candle could allow one repeat.
+- 1 FINDING: most "bad" live GBP_CAD/NZD_USD trades predate 08-13 (the old
+  EMA-bounce strategy), so they weren't evidence against the current setup.
+- 2 FIXED: backtest/runner.py now pays config.SPREAD_PIPS (London-typical)
+  at entry. + test.
+- 2 FOUND + FIXED (backtest): H4 LOOK-AHEAD. Confirm candles were selected
+  by OPEN time <= bar time, which included the still-forming H4 candle with
+  its final high/low/close. Now only candles CLOSED by the bar's close.
+  + test. CHF_JPY 3000-bar PF 2.78 -> 1.76; breakout pairs ~unchanged.
+- 2 FOUND + FIXED (backtest): the strategy saw ALL history per bar vs live's
+  250-candle window. config.LIVE_CANDLE_WINDOW=250 now used by both (also
+  made the backtest O(n) instead of O(n^2)).
+- 2 FOUND (not fixed): EMA cache keyed on candle count, so live never
+  re-fits EMA periods except on restart (always exactly 250 candles).
+- 2 FOUND (fixing in step 4): the backtest never allowed add-on entries
+  (skips any bar with an open trade on the pair); live has since 09-16.
+- 3 RESULT: 3 of 28 pass -> FOREX_PAIRS = GBP_USD (trend_retest), EUR_USD
+  (trend_retest), AUD_JPY (breakout_retest). Removed (incl. live GBP_CAD,
+  NZD_USD, CHF_JPY) and FOREX_WATCH emptied; numbers are in config's
+  rejected list. EUR_USD added to pattern_learner._PAIR_ENCODING (=14).
+  Note: AUD_JPY was paused on a 3-month test (PF 0.70) but passes on 1.5y.
+  Short samples mislead both ways.
+  Caveat: 28 pairs x 2 strategies = 56 tries; some passes can still be luck.
+  Live results on these 3 are the real test.
+- 4 BUILT (flags off): backtest now applies live's add-on rules
+  (validate_pre_trade + addon_ok) instead of skipping every bar with an open
+  trade. SEQUENCED_RETEST: retest_since_break() accepts a pullback on any
+  candle after the break candle (within the 5-candle BOS window), used by
+  breakout_retest AND trend_retest. PYRAMID_REQUIRE_MA_CROSS: add-ons need
+  fast EMA over EMA100 in the trade direction (live: main.py via signal
+  "ma_aligned"; backtest: runner). Strict entry diagnosis (34 trades): the
+  candle was never missing; retest missing 20, MA cross missing 20.
+- 5 BUILT (flag off): RUNNER_NO_TP3_CAP: with the ATR trail on (it has been
+  since 09-16), the final 25% ignores TP3 and exits only on the trail. Live
+  (TradeManager) + backtest (PaperTrader). + tests. 523 passed.
+- 4/5 EVAL: 1.5y on GBP_USD/EUR_USD/AUD_JPY, variants base / no_addons /
+  seq_retest / addon_ma / runner / all3. Adopt a change only if it helps the
+  3-pair total in BOTH halves. Caveat: these 3 pairs were selected on this
+  same history, so gains here are optimistic.
+- 4/5 RESULT (1.5y, net $ per pair GBP_USD / EUR_USD / AUD_JPY = total):
+    base (add-ons @55)  76.7 / 41.0 / 125.7 = 243
+    no_addons           89.3 / 31.2 /  81.7 = 202  (add-ons: +41 overall, mixed by half)
+    seq_retest          35.4 / 37.8 / 135.4 = 209  REJECT
+    addon_ma            82.8 / 30.4 / 125.7 = 239  REJECT (mixed)
+    runner (no TP3)     76.8 / 33.1 / 116.2 = 226  REJECT
+    all3                41.2 / 35.1 / 119.6 = 196  REJECT
+  All four flags stay False; code kept behind them for future re-tests.
+  Note: GBP_USD base DD 10.1% (add-ons push it just over the 10% cap).
+  Watch this at the 2026-10-04 pyramid review.
+
+## Review (round 3, 2026-09-28)
+- Live bugs fixed: phantom stops from pre-entry candles; repeated/stacked
+  entries on one H4 signal candle.
+- Backtester fixed: spread modeled; H4 look-ahead removed; live-sized
+  250-candle window; add-on rules match live. Backtests are now a fair
+  test of what the bot actually does (and much faster).
+- Pairs: full 28-pair re-screen with criteria set in advance -> GBP_USD +
+  EUR_USD (trend_retest), AUD_JPY (breakout_retest). 25 pairs removed,
+  watch list emptied.
+- Tested and rejected: sequenced retest, MA-cross for add-ons, uncapped
+  runner (switches left off).
+- Security: no credentials, endpoints or user input paths added. The new
+  code is config flags + pure functions over candle data; the dashboard is
+  unchanged except the earlier ML-log line; data written only to local files.
+- NOT live until restart (needs the user's OK, since it removes 3 live pairs).
+
+---
+
 # Round 2: fixes approved 2026-09-27
 
 User's instructions (verbatim intent): fix the trade-id mismatch first, then

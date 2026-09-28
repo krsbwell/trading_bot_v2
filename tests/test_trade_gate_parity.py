@@ -212,3 +212,32 @@ def test_score_floor_drop_is_audited(monkeypatch):
     assert audit_calls[0]["result"] == "BLOCKED"
     assert "floor" in audit_calls[0]["reject_reason"]
     assert len(skip_calls) == 1
+
+
+def test_same_signal_candle_enters_only_once(monkeypatch):
+    """2026-09-28: an H4 signal re-triggers on every 30-min scan for 4h.
+    With pyramiding on it must still open only ONE trade per signal candle
+    (the backtest's behavior); a new candle may add on."""
+    _reset_state()
+    monkeypatch.setattr(main, "_last_entry_bar", {})
+    tm = _FakeTradeManager()
+    audit_calls, _ = _patch_common(monkeypatch, tm, mode="demo")
+    monkeypatch.setattr(main, "get_quote_to_usd_rate", lambda *a, **k: 1.0)
+    monkeypatch.setattr(main, "calculate_position_size", lambda *a, **k: 1000)
+    monkeypatch.setattr(main, "_sync_live_state", lambda: None)
+
+    class _BarEngine(_FakeEngine):
+        bar = "2026-08-28 09:00:00"
+        def run(self, *a, **k):
+            return {**super().run(*a, **k), "signal_bar": self.bar}
+    eng = _BarEngine(score=66)
+
+    main._process_pair("NZD_USD", "forex", eng)
+    assert tm.open_trade_called is True
+    tm.open_trade_called = False
+    main._process_pair("NZD_USD", "forex", eng)          # same candle, next scan
+    assert tm.open_trade_called is False
+    assert "signal candle" in audit_calls[-1]["reject_reason"]
+    eng.bar = "2026-08-28 13:00:00"                      # new candle
+    main._process_pair("NZD_USD", "forex", eng)
+    assert tm.open_trade_called is True

@@ -79,7 +79,18 @@ MODE = "demo"   # "paper" (pure simulation, no OANDA orders) / "demo" (real
 # ML model whose P(win) was found anti-predictive (see ML_GATE_ENABLED), and
 # it fired 0 trades in backtest. Re-add only with a backtest that holds up
 # after spread.
-FOREX_PAIRS  = ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY"]
+#
+# 2026-09-28 — FULL RE-SCREEN of all 7 majors + 21 minors on the corrected
+# backtester (spread included, live-sized 250-candle window, no H4
+# look-ahead), ~1.5 years of M30 (20000 bars), breakout_retest vs
+# trend_retest. Criteria fixed before running: strategy picked on the FIRST
+# half only; pass = 2nd-half (out-of-sample) PF >= 1.3 with >= 8 trades,
+# 1st-half PF >= 1.1, max DD <= 10%. 3 of 28 passed. Per the user, every
+# failure is REMOVED (not watched) — see the rejected list below.
+#   GBP_USD trend_retest    1st PF 1.16 (22) | 2nd PF 2.25 (27) | DD 7.2%
+#   EUR_USD trend_retest    1st PF 1.17 (22) | 2nd PF 1.55 (16) | DD 7.2%
+#   AUD_JPY breakout_retest 1st PF 1.53 (30) | 2nd PF 1.34 (39) | DD 7.7%
+FOREX_PAIRS  = ["GBP_USD", "EUR_USD", "AUD_JPY"]
 
 # Per-pair strategy override — a pair not listed here uses the default
 # (strategy_ema_cci_macd / "EMA-bounce"). breakout_retest and trend_retest
@@ -92,34 +103,13 @@ FOREX_PAIRS  = ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY"]
 # knobs and tasks/todo.md for the two independent holdout runs (08-12 and
 # 08-16, 4 days apart) that agreed on both pairs before this switch.
 STRATEGY_OVERRIDE = {
-    "GBP_USD":  "breakout_retest",   # promoted 2026-07-02 — see FOREX_PAIRS comment above.
-    "NZD_USD":  "breakout_retest",   # 2026-08-13 — holdout-validated at H4, see FOREX_PAIRS comment.
-    "GBP_CAD":  "breakout_retest",   # 2026-08-13 — holdout-validated at H4 (PF improved 1.59->3.59
-                                      # out-of-sample); previously tested under breakout-retest at M30
-                                      # in 2026-07 and showed a persistent conflict there (PF 0.44) —
-                                      # that finding was M30-specific, not a blanket rejection of the
-                                      # strategy for this pair; H4 is a genuinely different result.
-    "AUD_JPY":  "breakout_retest",   # 2026-08-16 — holdout PF 2.81, exact match across two runs
-                                      # 4 days apart (08-12 and 08-16). Promoted off FOREX_WATCH.
-    "CHF_JPY":  "trend_retest",      # 2026-08-16 — changed from breakout_retest (which had been
-                                      # live since 08-13). Its own holdout numbers favored tuned
-                                      # trend_retest over breakout_retest in BOTH the 08-12 and
-                                      # 08-16 runs (PF 2.03 vs 1.36, exact match both times) — a
-                                      # real, confirmed discrepancy, not a one-off window. See
-                                      # tasks/todo.md 2026-08-16.
-    "EUR_AUD":  "adaptive",          # 2026-08-23 — switched from trend_retest (no validated edge
-                                      # on this pair on either timeframe, see FOREX_PAIRS comment)
-                                      # to the new ML-driven adaptive strategy
-                                      # (engine/strategy_adaptive.py) — real forward-testing, not a
-                                      # backtest claim. MODE="demo" (virtual money). See
-                                      # tasks/todo.md 2026-08-22/23 for the full design + backtest
-                                      # history behind this strategy.
-                                      # Prior history: 2026-08-16 promoted off FOREX_WATCH onto
-                                      # trend_retest (holdout PF 1.98); paused 2026-08-22 (PF 1.01
-                                      # H4 / 0.70 M30, no edge either way).
-    # XAU_USD/"gold_trend" removed 2026-08-01 — shelved, see tasks/todo.md.
-    # engine/strategy_gold_trend.py and its STRATEGY_FNS entry are left in
-    # place (unused, harmless) in case gold is revisited later.
+    # 2026-09-28 re-screen (see FOREX_PAIRS comment); earlier routing
+    # history for removed pairs is in git (commit cc94ff4 and before).
+    "GBP_USD":  "trend_retest",      # was breakout_retest (2nd-half PF 2.26 but DD 10.8% >
+                                      # 10% cap and 1st-half PF 1.04 < 1.1); trend_retest
+                                      # won the 1st half and passed out-of-sample
+    "EUR_USD":  "trend_retest",
+    "AUD_JPY":  "breakout_retest",
 }
 
 # Per-pair tuned knobs for strategy_trend_retest.py (h4_bias_period,
@@ -167,10 +157,19 @@ GOLD_STOP_METHOD = "dynamic"
 # AUD_JPY: promoted to FOREX_PAIRS 2026-08-16 — see FOREX_PAIRS comment
 # above. EUR_AUD: promoted 2026-08-16, paused 2026-08-22, back in
 # 2026-08-23 on the adaptive strategy — see FOREX_PAIRS comment above.
-FOREX_WATCH  = ["EUR_CHF", "EUR_CAD", "EUR_GBP", "CAD_CHF", "NZD_CHF",
-                "USD_CAD", "EUR_JPY", "AUD_JPY", "EUR_AUD"]   # last two paused 2026-09-28
+FOREX_WATCH  = []   # 2026-09-28: every watched pair failed the re-screen -> removed (user's rule)
 
 # Rejected / removed — losing money, not watched (re-test only if the strategy or gates change)
+# Rejected 2026-09-28 re-screen (corrected backtester, ~1.5y M30, spread incl.;
+# best strategy by 1st half -> 2nd-half PF / DD). Includes 3 pairs that were
+# LIVE until then: GBP_CAD, NZD_USD, CHF_JPY.
+#   AUD_CAD 0.71/23.7%  AUD_CHF 0.51/19.2%  AUD_NZD 0.82/12.2%  AUD_USD 0.82/14.1%
+#   CAD_CHF 0.76/10.5%  CAD_JPY 0.58/14.8%  CHF_JPY 0.94/24.1%  EUR_AUD 0.68/11.1%
+#   EUR_CAD 0.74/15.3%  EUR_CHF 0.90/9.2%   EUR_GBP 1.07/14.0%  EUR_JPY 0.84/10.4%
+#   EUR_NZD 0.72/16.8%  GBP_AUD 0.55/11.0%  GBP_CAD 1.26/26.1%  GBP_CHF 0.49/16.0%
+#   GBP_JPY 0.71/16.4%  GBP_NZD 0.68/18.9%  NZD_CAD 1.09/19.6%  NZD_CHF 0.43/12.4%
+#   NZD_JPY 1.42/16.6% (1st half 0.38)       NZD_USD 1.38/14.2% (1st half 0.63)
+#   USD_CAD 1.26/8.2% (1st half 1.07)        USD_CHF 0.75/14.3%  USD_JPY 0.73/10.8%
 # EUR_USD: 23% WR  $-16.51  9.7% DD (30 trades) PF=0.80 — removed from watch 2026-07-02; unsuited to EMA mean-reversion regardless of filters
 # USD_CHF: 29% WR  $-9.19   7.9% DD (31 trades) PF=0.89 — removed from watch 2026-07-02; pre-London CHF session still noisy
 # AUD_NZD: 19% win rate  -$23.38  6.6% DD — rejected; EMA-bounce has no edge on this cross
@@ -281,6 +280,9 @@ TRAILING_STOP_PIPS   = 15     # Trail SL 15 pips after TP2 is hit (0 = disabled)
 ATR_TRAILING_ENABLED    = True
 ATR_TRAILING_MULTIPLIER = 2.0
 ATR_TRAILING_PERIOD     = 14
+# 2026-09-28: let the final 25% run on the ATR trail with NO TP3 cap (live
+# CHF_JPY moves of 383/433 pips were cut at TP3). Off until backtested.
+RUNNER_NO_TP3_CAP       = False
 
 # ── Duplicate trade protection / pyramiding ───────────────────────────────────
 # Changed 2026-09-16 — see tasks/todo.md. User's complaint: in a sustained
@@ -380,6 +382,12 @@ BREAKOUT_STRICT_ENTRY = False
 MA_FAST_PERIOD    = 34       # fast line of the 34/100/200 ribbon + MA-cross check
 MA_SLOW_TYPE      = "ema"    # "ema" | "sma" for the 200 line
 BREAKOUT_MOMENTUM = "macd"   # "macd" (histogram sign) | "rsi50" (RSI14 vs 50)
+
+# Sequenced entry (2026-09-28): retest accepted on any candle after the break
+# (not only the entry candle); add-ons additionally need the EMA cross. Both
+# off until backtested — tasks/todo.md round 3 step 4.
+SEQUENCED_RETEST         = False
+PYRAMID_REQUIRE_MA_CROSS = False
 
 # ── Session gate ─────────────────────────────────────────────────────────────
 # 04:00 UTC captures European pre-market positioning (Frankfurt/Paris banks begin
@@ -502,6 +510,37 @@ def min_sl_pips_for(pair: str) -> float:
 # every pair (tasks/todo.md 2026-09-27 step 6); this widens stops in volatile
 # conditions instead of narrowing them in quiet ones.
 MIN_SL_ATR_MULT = 2.0   # applied 2026-09-28 — backtest: GBP_CAD PF 1.88->3.32, CHF_JPY 3.72->2.78, GBP_USD/NZD_USD unchanged; portfolio net $166->$183
+
+# ── Backtest spread model (2026-09-28) ───────────────────────────────────────
+# backtest/runner.py never modeled spread, so every backtest PF was
+# optimistic (more so for tight stops) and losing pairs got promoted.
+# Longs now fill at entry + spread, shorts at entry - spread. Values are
+# typical OANDA London-session spreads in pips (the bot trades 04-17 UTC).
+# Measured 2026-09-28 04:15 UTC (Asian session, wider) for comparison:
+# GBP_CAD 4.9, CHF_JPY 3.1, NZD_USD 1.6, GBP_USD 0.4. Re-measure during
+# London and tighten/loosen if these turn out off.
+BACKTEST_SPREAD_ENABLED = True
+
+# Candles the strategy sees per scan — live (signal_engine) AND backtest use
+# the same window so they compute the same pivots/structure/EMAs. Before
+# 2026-09-28 the backtest gave strategies ALL history up to each bar.
+LIVE_CANDLE_WINDOW = 250
+SPREAD_PIPS: dict = {
+    "EUR_USD": 1.0, "GBP_USD": 1.4, "USD_JPY": 1.2, "USD_CHF": 1.6,
+    "AUD_USD": 1.3, "USD_CAD": 1.8, "NZD_USD": 1.8,
+    "EUR_GBP": 1.4, "EUR_JPY": 1.8, "EUR_CHF": 1.9, "EUR_AUD": 2.2,
+    "EUR_CAD": 2.4, "EUR_NZD": 3.5, "GBP_JPY": 2.6, "GBP_CHF": 2.8,
+    "GBP_AUD": 3.0, "GBP_CAD": 3.0, "GBP_NZD": 4.5, "AUD_JPY": 1.8,
+    "AUD_CAD": 2.2, "AUD_CHF": 2.0, "AUD_NZD": 2.5, "CAD_JPY": 2.2,
+    "CAD_CHF": 2.2, "CHF_JPY": 2.8, "NZD_JPY": 2.2, "NZD_CAD": 2.8,
+    "NZD_CHF": 2.6,
+}
+SPREAD_PIPS_DEFAULT = 3.0   # anything not listed (e.g. XAU_USD needs its own)
+
+
+def spread_pips_for(pair: str) -> float:
+    return SPREAD_PIPS.get(pair, SPREAD_PIPS_DEFAULT)
+
 
 
 def min_sl_distance(pair: str, pip: float, atr_val: float) -> float:

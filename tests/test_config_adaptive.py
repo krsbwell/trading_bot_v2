@@ -9,14 +9,12 @@ import types
 import config
 
 
-def test_adaptive_strategy_enabled_scoped_to_one_pair():
-    """2026-08-23 — turned on for real forward-testing (see tasks/todo.md),
-    but the rollout-safety property that matters is limited blast radius,
-    not "off": only EUR_AUD is actually routed to it, every other pair's
-    strategy is unaffected by this flag."""
-    assert config.ADAPTIVE_STRATEGY["enabled"] is True
-    assert config.STRATEGY_OVERRIDE.get("EUR_AUD") == "adaptive"
-    for pair in ("NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY", "AUD_JPY"):
+def test_adaptive_strategy_not_routed_to_any_live_pair():
+    """2026-09-28: EUR_AUD (the only adaptive pair) failed the re-screen and
+    was removed; the adaptive strategy's entries came from the ML model that
+    was found anti-predictive. The flag may stay on, but no live pair may
+    route to it."""
+    for pair in config.FOREX_PAIRS:
         assert config.STRATEGY_OVERRIDE.get(pair, "ema_bounce") != "adaptive"
 
 

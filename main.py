@@ -15,7 +15,7 @@ import logging
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -124,6 +124,7 @@ _paper_trader      = None
 _forex_engine      = None
 _pattern_learner   = PatternLearner()
 _trade_manager_fx  = None
+_last_entry_bar: dict = {}   # (pair, direction) -> signal_bar of the last opened trade
 _last_candle_slot  = None   # UTC :00/:30 slot of last on_candle_close() run (prevents restart duplicates)
 
 
@@ -499,6 +500,27 @@ def _process_pair(pair: str, market: str, engine) -> None:
     # already has an open trade") look like an unexplained missed trade with
     # nothing in the audit log to explain it. Cooldown enforcement in
     # demo/live mode is a genuine behavior change (previously: none at all).
+    # ── One entry per signal candle ──────────────────────────────────────────
+    # Scans run every 30 min but an H4 candle lasts 4h, so the same signal
+    # re-triggers up to 8 times. With pyramiding on, that stacked add-ons on
+    # ONE setup; the backtest only ever enters once per candle.
+    _bar_key = (pair, signal["direction"])
+    _bar = signal.get("signal_bar")
+    if _bar and _last_entry_bar.get(_bar_key) == _bar:
+        _same_bar = f"Already entered on this signal candle ({_bar})"
+        logger.info("SAME-CANDLE BLOCKED: %s %s — %s", pair, signal["direction"], _same_bar)
+        _audit_blocked(
+            pair=pair, timeframe=signal.get("timeframe", "H1"),
+            direction=signal["direction"],
+            ema_score=signal.get("ema_score", 0),
+            structure_score=signal.get("structure_score", 0),
+            pa_score=signal.get("pa_score", 0),
+            confluence_score=score,
+            result="BLOCKED", reject_reason=_same_bar,
+        )
+        state.update_signal_detail(pair, {**signal, "trade_blocked_reason": _same_bar})
+        return   # not a new setup, so no record_skip() either
+
     _open_trade_source = _paper_trader if config.MODE == "paper" else _trade_manager_fx
     if _open_trade_source:
         # 1. Check for existing open trade on this pair
@@ -535,6 +557,8 @@ def _process_pair(pair: str, market: str, engine) -> None:
         ok, reason = validate_pre_trade(score, len(open_trades_list), pair, open_pairs,
                                          direction=signal["direction"],
                                          same_pair_directions=same_pair_directions)
+        if ok and same_pair_directions and config.PYRAMID_REQUIRE_MA_CROSS and not signal.get("ma_aligned"):
+            ok, reason = False, f"{pair} add-on needs EMA cross in trade direction"
         if not ok:
             logger.info("PRE-TRADE BLOCKED: %s — %s", pair, reason)
             _audit_blocked(
@@ -645,6 +669,8 @@ def _process_pair(pair: str, market: str, engine) -> None:
 
     if actual_id:
         logger.info("Trade opened: %s", actual_id)
+        if signal.get("signal_bar"):
+            _last_entry_bar[(pair, signal["direction"])] = signal["signal_bar"]
     elif config.MODE in ("paper", "demo", "live"):
         # open_trade() returned None — the PRIMARY guard above already
         # cleared this signal, so reaching None here means the secondary,
@@ -847,9 +873,13 @@ def _tick_live_trades() -> None:
                     except Exception as exc:
                         logger.debug("ATR calc failed for %s: %s", pair, exc)
                 closed_before = {t["id"] for t in manager.closed_trades}
+                _tf_min = {"M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D": 1440}.get(gran, 30)
                 manager.on_candle_close(
                     pair,
-                    {"high": last["high"], "low": last["low"], "close": last["close"]},
+                    {"high": last["high"], "low": last["low"], "close": last["close"],
+                     # index = candle OPEN time (UTC); end lets TradeManager
+                     # skip candles that closed before a trade opened
+                     "end": df.index[-1].to_pydatetime() + timedelta(minutes=_tf_min)},
                     atr_value=atr_value,
                 )
                 _sync_live_state()

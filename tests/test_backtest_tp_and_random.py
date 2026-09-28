@@ -57,7 +57,9 @@ class TestTpFnPlumbing:
         assert res["total_trades"] >= 1
         from risk.risk_manager import get_tp_levels
         first = res["trades"][0]
-        expected = get_tp_levels(first["entry"], first["sl"], first["direction"], "EUR_USD")
+        sig   = res["signal_log"][0]   # TP levels come from the SIGNAL price; the trade's
+                                       # entry is the spread-adjusted fill (2026-09-28)
+        expected = get_tp_levels(sig["entry"], first["sl"], first["direction"], "EUR_USD")
         assert first["tp1"] == expected["tp1"]
 
     def test_custom_tp_fn_overrides_default(self):
@@ -124,3 +126,76 @@ class TestRandomSignalFns:
         res = bt.run_backtest("EUR_USD", df, df, buy_fn=buy_fn, sell_fn=sell_fn,
                               stop_loss_fn=_stub_sl)
         assert "error" not in res
+
+
+
+def test_spread_model_makes_backtest_pay_the_spread(monkeypatch):
+    """2026-09-28: the runner used to fill at the signal price (zero spread),
+    overstating every backtest. With the model on, the long fill must sit
+    exactly one spread above the signal price and P&L must be lower."""
+    import config
+    df = _make_df()
+    kw = dict(buy_fn=_stub_buy_always, sell_fn=_stub_sell_never, stop_loss_fn=_stub_sl)
+    monkeypatch.setattr(config, "BACKTEST_SPREAD_ENABLED", False)
+    ema_strat.clear_cache()
+    free = bt.run_backtest("EUR_USD", df, df, **kw)
+    monkeypatch.setattr(config, "BACKTEST_SPREAD_ENABLED", True)
+    ema_strat.clear_cache()
+    paid = bt.run_backtest("EUR_USD", df, df, **kw)
+    sig, trade = paid["signal_log"][0], paid["trades"][0]
+    assert abs(trade["entry"] - (sig["entry"] + config.spread_pips_for("EUR_USD") * 0.0001)) < 1e-9
+    assert paid["total_pnl"] < free["total_pnl"]
+
+
+def test_backtest_never_sees_unclosed_confirm_candle():
+    """2026-09-28 look-ahead fix: at each primary bar's close, every H4
+    candle handed to the strategy must already have CLOSED, and the primary
+    slice must be the live-sized window."""
+    import pandas as pd, numpy as np, config
+    idx = pd.date_range("2026-01-05", periods=400, freq="30min")
+    px = 1.08 + np.cumsum(np.random.default_rng(1).normal(0, 1e-4, len(idx)))
+    m30 = pd.DataFrame({"open": px, "high": px + 2e-4, "low": px - 2e-4,
+                        "close": px, "volume": 100}, index=idx)
+    h4 = m30.resample("4h").agg({"open": "first", "high": "max", "low": "min",
+                                 "close": "last", "volume": "sum"}).dropna()
+    seen = []
+    def spy(pair, df_h1, df_h4, adaptive=None):
+        seen.append((df_h1.index[-1], len(df_h1), df_h4.index[-1]))
+        return 0.0
+    bt.run_backtest("EUR_USD", m30, h4, buy_fn=spy, sell_fn=spy, stop_loss_fn=_stub_sl)
+    assert seen
+    for bar_open, n, h4_open in seen:
+        decided_at = bar_open + pd.Timedelta(minutes=30)
+        assert h4_open + pd.Timedelta(hours=4) <= decided_at
+        assert n <= config.LIVE_CANDLE_WINDOW
+
+
+def test_retest_since_break_accepts_earlier_pullback_not_break_candle():
+    import pandas as pd
+    from engine.strategy_breakout_retest import retest_since_break
+    lvl, band = 1.1000, 0.0005
+    def df(rows):
+        return pd.DataFrame(rows, columns=["open", "high", "low", "close"],
+                            index=pd.date_range("2026-01-05", periods=len(rows), freq="30min"))
+    # break on candle 2, pullback to the level on candle 3, confirming candle 4 away from it
+    ok = df([(1.098, 1.0995, 1.097, 1.0990), (1.099, 1.0998, 1.0985, 1.0995),
+             (1.0995, 1.1030, 1.0994, 1.1025), (1.1025, 1.1028, 1.1002, 1.1010),
+             (1.1010, 1.1040, 1.1008, 1.1035)])
+    assert retest_since_break(ok, lvl, band, "long") is True
+    # only the break candle's wick is near the level — not a retest
+    no = df([(1.098, 1.0995, 1.097, 1.0990), (1.099, 1.0998, 1.0985, 1.0995),
+             (1.0995, 1.1030, 1.0997, 1.1025), (1.1025, 1.1050, 1.1020, 1.1045),
+             (1.1045, 1.1060, 1.1040, 1.1055)])
+    assert retest_since_break(no, lvl, band, "long") is False
+
+
+def test_addon_ma_gate_only_when_enabled(monkeypatch):
+    import numpy as np, pandas as pd, config
+    from engine.strategy_breakout_retest import addon_ok
+    falling = pd.DataFrame({"close": np.linspace(1.2, 1.0, 300)},
+                           index=pd.date_range("2026-01-05", periods=300, freq="30min"))
+    monkeypatch.setattr(config, "PYRAMID_REQUIRE_MA_CROSS", False)
+    assert addon_ok(falling, "long") is True
+    monkeypatch.setattr(config, "PYRAMID_REQUIRE_MA_CROSS", True)
+    assert addon_ok(falling, "long") is False
+    assert addon_ok(falling, "short") is True

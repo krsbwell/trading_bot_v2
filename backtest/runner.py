@@ -39,7 +39,8 @@ from engine.strategy_market_structure import (
 from engine.strategy_price_action import detect_patterns, score_price_action
 from engine.confluence_scorer import score_signal
 from engine.indicators import cci as _cci_fn, macd_histogram as _macd_h_fn, atr as _atr_fn, ema as _ema_fn
-from risk.risk_manager import get_tp_levels, calculate_position_size
+from risk.risk_manager import get_tp_levels, calculate_position_size, validate_pre_trade
+from engine.strategy_breakout_retest import addon_ok as _addon_ok
 from trade.paper_trader import PaperTrader
 
 
@@ -339,15 +340,28 @@ def run_backtest(
     peak        = starting_balance
     daily_prep  = _prep_daily_trend(df_d)
 
+    # Candle length from the data itself (index = candle OPEN time) — the
+    # CLI can override timeframes, so don't assume config's.
+    def _bar_len(df):
+        d = pd.Series(df.index).diff().dropna()
+        return d.median() if len(d) else pd.Timedelta(minutes=30)
+    p_len, c_len = _bar_len(df_h1), _bar_len(df_h4)
+    c_end = df_h4.index + c_len          # when each confirm candle CLOSES
+    win   = config.LIVE_CANDLE_WINDOW
+
     for i in range(_WARMUP, len(df_h1)):
         bar_time = df_h1.index[i]
         d_trend  = _d_trend_at(daily_prep, bar_time)
 
-        # Build H1 slice up to and including bar i
-        slice_h1 = df_h1.iloc[:i + 1].copy()
+        # Same window the live engine sees: the last LIVE_CANDLE_WINDOW
+        # primary candles up to and including bar i (decided at its close).
+        slice_h1 = df_h1.iloc[max(0, i + 1 - win):i + 1].copy()
 
-        # Build matching H4 slice: bars whose index <= current H1 bar time
-        slice_h4 = df_h4[df_h4.index <= bar_time].copy()
+        # Confirm-TF candles that had CLOSED by bar i's close. Before
+        # 2026-09-28 this was `index <= bar_time`, i.e. by OPEN time, which
+        # included the still-forming H4 candle with its FINAL high/low/close
+        # (up to 3.5h of future data on M30/H4). Live only sees closed candles.
+        slice_h4 = df_h4[c_end <= bar_time + p_len].iloc[-win:].copy()
         if len(slice_h4) < 50:
             continue
 
@@ -365,8 +379,12 @@ def run_backtest(
         equity.append({"bar_idx": i, "balance": pt.balance, "nav": pt.balance + pt._calc_unrealized()})
         peak = max(peak, pt.balance)
 
-        # Check for new signal (skip if already open on this pair)
-        if pt.get_open_trade(pair):
+        # Open trade on this pair: skip unless add-on entries are allowed,
+        # the same rule live uses (validate_pre_trade's pyramiding checks run
+        # below, once the signal's direction and score are known). Before
+        # 2026-09-28 the backtest never tested add-ons at all.
+        existing = [t for t in pt.open_trades if t["pair"] == pair]
+        if existing and not config.ALLOW_MULTIPLE_PER_PAIR:
             continue
 
         buy_score  = buy_fn(pair, slice_h1, slice_h4, adaptive=adaptive)
@@ -423,6 +441,13 @@ def run_backtest(
         if final_score < min_score:
             continue
 
+        if existing:
+            _ok, _ = validate_pre_trade(final_score, len(existing), pair, [pair],
+                                        direction=direction,
+                                        same_pair_directions=[t["direction"] for t in existing])
+            if not _ok or not _addon_ok(slice_h1, direction):
+                continue
+
         # Session filter: skip trades outside London/NY overlap (07:00–21:00 UTC).
         # Intraday bars only — Daily+ candles are timestamped at the broker's
         # daily close (OANDA: 21:00 UTC), outside every FX session window by
@@ -451,7 +476,13 @@ def run_backtest(
             ema_score, struct_score, pa_score, final_score,
             structure, sr_zones, bos_ok, patterns, entry, d_trend,
         )
-        pt.open_trade(pair=pair, direction=direction, entry_price=entry,
+        # Pay the spread: longs fill at the ask, shorts at the bid. Sizing
+        # above uses the signal price, same as live.
+        fill = entry
+        if config.BACKTEST_SPREAD_ENABLED:
+            _sp = config.spread_pips_for(pair) * (0.01 if "JPY" in pair or "XAU" in pair else 0.0001)
+            fill = entry + _sp if direction == "long" else entry - _sp
+        pt.open_trade(pair=pair, direction=direction, entry_price=fill,
                       sl=stop_loss, tp_levels=tp_levels, size=size,
                       extra={"_sig": sig_feat})
 

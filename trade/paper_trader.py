@@ -57,6 +57,13 @@ def _str_to_dt(s) -> datetime | None:
         return None
 
 
+def _runner_uncapped() -> bool:
+    """True when the final slice should run on the ATR trail with no TP3 —
+    only meaningful when there IS a trail (ATR_TRAILING_ENABLED)."""
+    import config
+    return bool(getattr(config, "RUNNER_NO_TP3_CAP", False) and config.ATR_TRAILING_ENABLED)
+
+
 def _ser(trade: dict) -> dict:
     """Serialise a trade dict for JSON (convert datetimes to strings)."""
     d = dict(trade)
@@ -484,7 +491,9 @@ class PaperTrader:
                 self._partial_close(t, t["tp2"], _TP2_PCT, "tp2")
                 t["tp2_hit"] = True
 
-        if t["tp2_hit"] and not t["tp3_hit"]:
+        # config.RUNNER_NO_TP3_CAP: the last 25% has no fixed TP3 and exits
+        # only on the ATR trail (above), so a big trend isn't cut short.
+        if t["tp2_hit"] and not t["tp3_hit"] and not _runner_uncapped():
             tp3_hit = (d == "long" and high >= t["tp3"]) or \
                       (d == "short" and low  <= t["tp3"])
             if tp3_hit:
@@ -639,7 +648,7 @@ class PaperTrader:
                         t["tp2_hit"] = True
                         dirty = True
 
-                if t.get("tp2_hit") and not t.get("tp3_hit") and t.get("tp3"):
+                if t.get("tp2_hit") and not t.get("tp3_hit") and t.get("tp3") and not _runner_uncapped():
                     tp3_hit = (d == "long"  and tp_price >= t["tp3"]) or \
                               (d == "short" and tp_price <= t["tp3"])
                     if tp3_hit:

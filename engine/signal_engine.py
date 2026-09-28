@@ -7,6 +7,7 @@ import pandas as pd
 import config
 from engine.indicators import ema, atr as calc_atr, cci, macd_histogram
 from engine.strategy_ema_cci_macd import get_best_emas
+from engine.strategy_breakout_retest import _ma_aligned
 from engine.strategy_dispatch import resolve_strategy
 from engine.adaptive_params import adaptive_params
 from engine.wfo_optimizer import wfo_optimizer
@@ -76,8 +77,8 @@ class SignalEngine:
             df_h1, df_h4 = candles_override
         else:
             try:
-                df_h1 = self._get_candles(pair, config.primary_tf_for(pair), 250)
-                df_h4 = self._get_candles(pair, config.confirm_tf_for(pair),   250)
+                df_h1 = self._get_candles(pair, config.primary_tf_for(pair), config.LIVE_CANDLE_WINDOW)
+                df_h4 = self._get_candles(pair, config.confirm_tf_for(pair),   config.LIVE_CANDLE_WINDOW)
             except Exception as exc:
                 logger.error("Candle fetch failed for %s: %s", pair, exc)
                 return None
@@ -376,6 +377,12 @@ class SignalEngine:
             "market":              market,
             "direction":           direction,
             "timeframe":           config.primary_tf_for(pair),
+            # open time of the candle that produced this signal — main.py
+            # allows one entry per (pair, direction, signal_bar)
+            "signal_bar":          str(df_h1.index[-1]),
+            # fast EMA crossed EMA100 in this direction — required for
+            # add-on entries when config.PYRAMID_REQUIRE_MA_CROSS
+            "ma_aligned":          _ma_aligned(df_h1, direction),
             "h4_gate":             h4_gate_info,
             "h4_trend":            h4_trend,
             "d_trend":             d_trend,

@@ -1372,3 +1372,52 @@ def test_learning_health_banner_renders():
     ok = str(signal_monitor_panel({}, learning_health={"logged": 3, "unlogged": [],
                                                          "last_logged": datetime(2026, 9, 28, tzinfo=timezone.utc)}))
     assert "3 trade outcome(s) recorded" in ok and "LEARNING GAP" not in ok
+
+
+class TestPreEntryCandleIgnored:
+    """2026-09-28: the signal candle (closed BEFORE entry) was fed back into
+    SL/TP checks — its rejection wick "hit" the stop instantly. Only candles
+    that end after the trade opened may manage it."""
+    def setup_method(self):
+        rm.TRADING_HALTED = False
+        rm._daily_loss = 0.0
+
+    def test_candle_that_closed_before_entry_does_not_stop_trade(self):
+        from datetime import datetime, timedelta, timezone
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(direction="short", entry=1.8817, sl=1.8842))
+        opened = tm.open_trades[tid]["open_time"]
+        # H4 signal candle that ended 30 min before entry, wick above the SL
+        tm.on_candle_close("EUR_USD", {"high": 1.8850, "low": 1.8800, "close": 1.8817,
+                                        "end": opened - timedelta(minutes=30)})
+        assert tid in tm.open_trades
+        assert conn.closes == []
+
+    def test_post_entry_candle_still_stops_trade(self):
+        from datetime import timedelta
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tid = tm.open_trade(_signal(direction="short", entry=1.8817, sl=1.8842))
+        opened = tm.open_trades[tid]["open_time"]
+        tm.on_candle_close("EUR_USD", {"high": 1.8850, "low": 1.8800, "close": 1.8845,
+                                        "end": (opened + timedelta(hours=4)).replace(tzinfo=None)})
+        assert tid not in tm.open_trades
+
+
+def test_runner_rides_past_tp3_when_uncapped(monkeypatch):
+    """RUNNER_NO_TP3_CAP (+ ATR trail): the last 25% ignores TP3 and exits
+    only on the trailed SL. Off -> TP3 closes it, as before."""
+    rm.TRADING_HALTED = False; rm._daily_loss = 0.0
+    for uncapped, still_open in ((False, False), (True, True)):
+        monkeypatch.setattr(config, "ATR_TRAILING_ENABLED", True)
+        monkeypatch.setattr(config, "RUNNER_NO_TP3_CAP", uncapped)
+        tm = TradeManager(MockForexConnector(), "forex")
+        tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
+        t = tm.open_trades[tid]
+        tm.on_candle_close("EUR_USD", {"high": t["tp1"] + 0.001, "low": 1.0795, "close": t["tp1"]})
+        tm.on_candle_close("EUR_USD", {"high": t["tp2"] + 0.001, "low": 1.0802, "close": t["tp2"]})
+        # trail = high - 2xATR = tp3 - 0.001; low stays above it, so only TP3 could close it
+        tm.on_candle_close("EUR_USD", {"high": t["tp3"] + 0.001, "low": t["tp3"] - 0.0005, "close": t["tp3"]},
+                           atr_value=0.0010)
+        assert (tid in tm.open_trades) is still_open

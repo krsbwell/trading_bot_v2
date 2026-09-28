@@ -98,27 +98,14 @@ class TestConfirmTfRatioRespectsPerPairPrimary:
 
 
 class TestStrategyRoutingForSwitchedPairs:
-    def test_nzd_gbpcad_gbpusd_aud_jpy_route_to_breakout_retest(self):
+    def test_live_pairs_route_per_2026_09_28_rescreen(self):
+        """Full re-screen: GBP_USD + EUR_USD -> trend_retest, AUD_JPY ->
+        breakout_retest (see config.FOREX_PAIRS comment)."""
         from engine.strategy_breakout_retest import check_buy_signal as br_buy
-        for pair in ("NZD_USD", "GBP_CAD", "GBP_USD", "AUD_JPY"):
-            buy_fn, _, _, _ = resolve_strategy(pair)
-            assert buy_fn is br_buy, f"{pair} should route to breakout_retest"
-
-    def test_chf_jpy_routes_to_trend_retest(self):
-        """2026-08-16: CHF_JPY switched off breakout_retest (its own
-        holdout numbers favored trend_retest in two independent runs).
-        See tasks/todo.md."""
         from engine.strategy_trend_retest import check_buy_signal as tr_buy
-        buy_fn, _, _, _ = resolve_strategy("CHF_JPY")
-        assert buy_fn is tr_buy
-
-    def test_eur_aud_routes_to_adaptive(self):
-        """2026-08-23: EUR_AUD switched from trend_retest (no validated
-        edge on this pair on either timeframe) to the new ML-driven
-        adaptive strategy — real forward-testing. See tasks/todo.md."""
-        from engine.strategy_adaptive import check_buy_signal as ad_buy
-        buy_fn, _, _, _ = resolve_strategy("EUR_AUD")
-        assert buy_fn is ad_buy
+        assert resolve_strategy("GBP_USD")[0] is tr_buy
+        assert resolve_strategy("EUR_USD")[0] is tr_buy
+        assert resolve_strategy("AUD_JPY")[0] is br_buy
 
     def test_eur_jpy_routes_to_default_ema_bounce_not_breakout_retest(self):
         """EUR_JPY was paused, not switched — it has no STRATEGY_OVERRIDE
@@ -131,22 +118,13 @@ class TestStrategyRoutingForSwitchedPairs:
 
 
 class TestPairListsReflectThePause:
-    def test_forex_pairs_has_four(self):
-        """2026-09-28: AUD_JPY + EUR_AUD paused (AUD_JPY PF 0.70 after
-        spread in backtest; EUR_AUD's adaptive entries come from the
-        anti-predictive ML model) — see tasks/todo.md."""
-        assert config.FOREX_PAIRS == ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY"]
-        assert "EUR_JPY" not in config.FOREX_PAIRS
+    def test_forex_pairs_after_rescreen(self):
+        """2026-09-28: only the 3 pairs that passed the pre-set criteria."""
+        assert config.FOREX_PAIRS == ["GBP_USD", "EUR_USD", "AUD_JPY"]
 
-    def test_eur_jpy_moved_to_watch_not_dropped_entirely(self):
-        """Paused, not rejected — still gets signals shown, matching how
-        USD_CAD was paused earlier in this project."""
-        assert "EUR_JPY" in config.FOREX_WATCH
-
-    def test_paused_pairs_are_watched_not_traded(self):
-        for pair in ("AUD_JPY", "EUR_AUD"):
-            assert pair in config.FOREX_WATCH
-            assert pair not in config.FOREX_PAIRS
+    def test_failed_pairs_removed_not_watched(self):
+        """User's rule: a pair that fails the screen is removed, not watched."""
+        assert config.FOREX_WATCH == []
 
 
 class TestTrendRetestParamsPerPair:
@@ -190,6 +168,9 @@ class TestTrendRetestParamsPerPair:
             "low": np.linspace(0.999, 1.099, 300), "close": np.linspace(1.0, 1.1, 300),
         }, index=idx)
 
+        # CHF_JPY no longer routed live (removed 2026-09-28) — pin the routing
+        # this test is about; the tuned params still live in config.
+        monkeypatch.setitem(config.STRATEGY_OVERRIDE, "CHF_JPY", "trend_retest")
         runner_mod.run_backtest("CHF_JPY", df, df)
 
         assert seen["adaptive"] == {"h4_bias_period": 20, "retest_band_mult": 0.30}
