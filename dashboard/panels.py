@@ -665,53 +665,6 @@ def equity_curve_chart(equity_curve: list) -> html.Div:
                      style={"borderRadius": "4px", "overflow": "hidden"})
 
 
-def analytics_block(closed_trades: list) -> html.Div:
-    """Per-pair win rate and average R:R from closed trades."""
-    if not closed_trades:
-        return html.Div()
-    from collections import defaultdict
-    stats = defaultdict(lambda: {"wins": 0, "total": 0, "rr_sum": 0.0})
-    for t in closed_trades:
-        pair = t.get("pair", "?")
-        pnl  = t.get("realised_pnl", 0)
-        stats[pair]["total"] += 1
-        if pnl > 0:
-            stats[pair]["wins"] += 1
-        # R = P&L / dollars risked at entry. Was (size x |entry - CURRENT sl|):
-        # a trailed/breakeven SL shrank the "risk" (GBP_USD showed +3.32R) and
-        # JPY/CAD quote currency was never converted to USD (JPY pairs ~0.00R).
-        risk = t.get("risk_dollar") or 0
-        if risk > 0:
-            stats[pair]["rr_sum"] += pnl / risk
-            stats[pair]["rr_n"]   = stats[pair].get("rr_n", 0) + 1
-
-    rows = []
-    for pair, s in sorted(stats.items()):
-        wr  = s["wins"] / s["total"] if s["total"] else 0
-        avg_rr = s["rr_sum"] / s["rr_n"] if s.get("rr_n") else 0
-        wr_col = _BULL if wr >= 0.5 else _BEAR
-        rows.append(html.Tr([
-            html.Td(pair,                style={"padding":"0.2rem 0.4rem","fontSize":"0.78rem",**_mono}),
-            html.Td(f"{s['total']}",     style={"padding":"0.2rem 0.4rem","fontSize":"0.75rem","color":_MUTED}),
-            html.Td(f"{wr:.0%}",         style={"padding":"0.2rem 0.4rem","fontSize":"0.75rem","color":wr_col}),
-            html.Td(f"{avg_rr:+.2f}R",  style={"padding":"0.2rem 0.4rem","fontSize":"0.75rem",
-                                                 "color":_BULL if avg_rr>0 else _BEAR}),
-        ]))
-
-    return html.Div([
-        html.H6("Per-Pair Analytics", style={"color": _MUTED, "margin": "0 0 0.4rem",
-                                              "fontSize": "0.75rem", **_sans}),
-        html.Table([
-            html.Thead(html.Tr([
-                html.Th(h, style={"color":_MUTED,"padding":"0.2rem 0.4rem","fontSize":"0.7rem",
-                                   "textAlign":"left","borderBottom":"1px solid #21262d"})
-                for h in ["Pair", "Trades", "Win%", "Avg R"]
-            ])),
-            html.Tbody(rows),
-        ], style={"width":"100%","borderCollapse":"collapse"}),
-    ])
-
-
 def trade_log_drawer(
     closed_trades: list,
     suggestions: list,
@@ -719,13 +672,12 @@ def trade_log_drawer(
     visible: bool = False,
     equity_curve: list = None,
 ) -> html.Div:
-    # "Signal Frequency (weekly)" and "Watching Signals (Near-Miss)" panels
-    # removed 2026-09-28 (user's call — neither was actionable).
+    # "Signal Frequency (weekly)", "Watching Signals (Near-Miss)" and
+    # "Per-Pair Analytics" panels removed 2026-09-28 (user's call).
     trades_content   = _trade_table(closed_trades)
     suggestion_cards = _suggestion_cards(suggestions)
     ml_content       = _ml_block(ml_stats)
     eq_chart         = equity_curve_chart(equity_curve or [])
-    analytics        = analytics_block(closed_trades)
 
     return html.Div([
         html.Div([
@@ -745,15 +697,15 @@ def trade_log_drawer(
             eq_chart,
         ], style={"marginBottom": "1.5rem"}),
 
-        # Per-pair analytics
-        html.Div([analytics], style={"marginBottom": "1.5rem"}),
-
         html.Div([trades_content], style={"marginBottom": "1.5rem"}),
         html.Div([ml_content],    style={"marginBottom": "1.5rem"}),
         html.Div(suggestion_cards),
     ], style={
         "position": "fixed", "top": 0, "right": 0, "bottom": 0,
-        "width": "460px", "background": _PANEL,
+        # wide enough for all 10 trade-log columns without sideways
+        # scrolling (was 460px); never wider than the window
+        "width": "940px", "maxWidth": "100vw", "boxSizing": "border-box",
+        "background": _PANEL,
         "boxShadow": "-4px 0 20px rgba(0,0,0,0.5)",
         "padding": "1.5rem", "overflowY": "auto",
         "zIndex": 1000, "transform": "translateX(0)" if visible else "translateX(100%)",

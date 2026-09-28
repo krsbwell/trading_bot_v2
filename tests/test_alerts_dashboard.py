@@ -316,7 +316,7 @@ def test_trade_log_shows_sl_dates_and_real_r():
     and Per-Pair Avg R = P&L / risk_dollar (was |entry - CURRENT sl| x size,
     unconverted — trailed stops inflated it, JPY pairs read ~0R)."""
     from datetime import datetime, timezone
-    from dashboard.panels import _trade_table, analytics_block
+    from dashboard.panels import _trade_table
     t_old = {"pair": "AUD_JPY", "direction": "long", "entry": 110.5, "sl": 110.9, "sl_initial": 110.25,
              "exit_price": 110.25, "realised_pnl": -5.0, "risk_dollar": 5.0, "score": 57,
              "close_reason": "sl", "open_time": datetime(2026, 9, 1, 8, 30, tzinfo=timezone.utc),
@@ -330,8 +330,6 @@ def test_trade_log_shows_sl_dates_and_real_r():
     assert "09-01 08:30" in html_out and "09-01 12:00" in html_out
     assert html_out.index("GBP_USD") < html_out.index("AUD_JPY")   # newest first
     assert "manual" in html_out             # score 100 = manual order
-    r = str(analytics_block([t_old, t_new]))
-    assert "-1.00R" in r and "+2.00R" in r
 
 
 def test_trade_log_drawer_has_no_frequency_or_watching_panels():
@@ -339,4 +337,5 @@ def test_trade_log_drawer_has_no_frequency_or_watching_panels():
     from dashboard.panels import trade_log_drawer
     out = str(trade_log_drawer([], [], {}, visible=True))
     assert "Signal Frequency" not in out and "Watching Signals" not in out
+    assert "Per-Pair Analytics" not in out
     assert "Equity Curve" in out
