@@ -3713,7 +3713,6 @@ def toggle_drawer(open_clicks, close_clicks, backdrop_n, visible):
     triggered = ctx.triggered[0]["prop_id"].split(".")[0]
     new_vis = not visible if triggered == "drawer-toggle-btn" else False
     s = state.get()
-    from engine.signal_audit import signal_frequency_by_week, watching_signal_stats
     back_style = {**_BACK_SHOW, "zIndex": 999} if new_vis else {**_BACK_HIDE, "zIndex": 999}
 
     # If equity curve is empty (e.g. fresh restart), rebuild from closed trades on the fly
@@ -3739,8 +3738,6 @@ def toggle_drawer(open_clicks, close_clicks, backdrop_n, visible):
         s.get("closed_trades", []), s.get("suggestions", []),
         s.get("ml_stats", {}), visible=new_vis,
         equity_curve=eq_curve,
-        signal_freq=signal_frequency_by_week(),
-        watching_counts=watching_signal_stats(),
     ), back_style
 
 

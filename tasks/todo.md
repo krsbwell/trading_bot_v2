@@ -23,6 +23,38 @@
 - Security: new disk file holds public calendar data only; tests redirect
   it to tmp; no new endpoints (one URL removed).
 
+Round 4b (user 2026-09-28: right-pane panels, trade log SL/dates, "is the score broken?"):
+- [x] Trade log: Opened/Closed (UTC), SL (sl_initial; old trades show the
+      final SL), newest first, Outcome coloured by P&L, score 100 shown as
+      "manual", candle patterns in a hover tooltip (Pattern column was always
+      empty). New trades store sl_initial. + test.
+- [x] Per-Pair Avg R bug: used |entry - CURRENT sl| x size, unconverted
+      (trailed stops inflated R: GBP_USD +3.32R; JPY pairs ~0R). Now
+      P&L / risk_dollar. + test. 529 passed.
+- [ ] Signal Frequency + Watching Signals panels: recommended remove /
+      replace with near-miss would-win/would-lose; waiting on the user.
+- Score floor backtest (1.5y, isolated runs; net $ GBP_USD / EUR_USD / AUD_JPY):
+    floor40  65.4 / 49.5 / -87.3  (n 184/175/282, PF 1.11/1.09/0.89, AUD_JPY DD 34.7%)
+    floor55  76.7 / 41.0 / 144.7  (n 53/44/78,  PF 1.55/1.39/1.59)
+    floor65 -10.5 / 23.1 /   3.3  (n 2/4/5, almost no trades)
+  -> The floor WORKS as a cut-off (40-54 setups are clearly worse) but the
+     score does NOT rank setups above it (live: no link between 56 and 66).
+- CORRECTION: round-3 step 4/5 comparison was contaminated. The variant
+  script set config switches in reused worker processes without resetting,
+  so later "base" jobs inherited earlier variants' switches (AUD_JPY base ==
+  addon_ma exactly). Rerunning with per-job reset; base must reproduce
+  floor55 (76.7 / 41.0 / 144.7). The pair screen and floor runs were not
+  affected (they set their keys explicitly on every job).
+- CLEAN step 4/5 rerun (base reproduces floor55 exactly -> isolation OK);
+  net $ GBP_USD / EUR_USD / AUD_JPY = total:
+    base (add-ons @55)  76.7 / 41.0 / 144.7 = 262
+    no_addons           89.3 / 31.2 /  90.8 = 211   add-ons +51 (GBP_USD -13, DD 7.2 -> 10.1%)
+    seq_retest          35.4 / 37.8 / 135.4 = 209   REJECT
+    addon_ma            82.8 / 30.4 / 125.7 = 239   REJECT
+    runner (no TP3)     76.8 / 42.9 / 133.8 = 254   REJECT (slightly worse)
+    all3                41.2 / 28.8 / 119.6 = 190   REJECT
+  Same conclusions as the contaminated run: all four flags stay off.
+
 ---
 
 # Round 3: make the backtest trustworthy, then re-screen all pairs (2026-09-28)

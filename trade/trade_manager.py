@@ -205,6 +205,7 @@ class TradeManager:
             "direction":     direction,
             "entry":         entry,
             "sl":            stop_loss,
+            "sl_initial":    stop_loss,   # "sl" moves (trail/breakeven); this doesn't
             "tp1":           tp_levels["tp1"],
             "tp2":           tp_levels["tp2"],
             "tp3":           tp_levels["tp3"],

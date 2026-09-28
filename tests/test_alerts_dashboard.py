@@ -309,3 +309,34 @@ class TestDashboardPanels:
         ml_stats    = {"accuracy": 0.72, "top_features": ["confluence_score", "ema_score"], "n_samples": 60}
         drawer = trade_log_drawer(trades, suggestions, ml_stats, visible=True)
         assert isinstance(drawer, html.Div)
+
+
+def test_trade_log_shows_sl_dates_and_real_r():
+    """2026-09-28: trade log gained Opened/Closed/SL columns (newest first),
+    and Per-Pair Avg R = P&L / risk_dollar (was |entry - CURRENT sl| x size,
+    unconverted — trailed stops inflated it, JPY pairs read ~0R)."""
+    from datetime import datetime, timezone
+    from dashboard.panels import _trade_table, analytics_block
+    t_old = {"pair": "AUD_JPY", "direction": "long", "entry": 110.5, "sl": 110.9, "sl_initial": 110.25,
+             "exit_price": 110.25, "realised_pnl": -5.0, "risk_dollar": 5.0, "score": 57,
+             "close_reason": "sl", "open_time": datetime(2026, 9, 1, 8, 30, tzinfo=timezone.utc),
+             "close_time": "2026-09-01T12:00:00+00:00"}
+    t_new = {**t_old, "pair": "GBP_USD", "entry": 1.3400, "sl": 1.3390, "sl_initial": 1.3375,
+             "exit_price": 1.3450, "realised_pnl": 10.0, "score": 100, "close_reason": "sl",
+             "open_time": datetime(2026, 9, 2, 9, 0, tzinfo=timezone.utc)}
+    html_out = str(_trade_table([t_old, t_new]))
+    assert "SL" in html_out and "Opened (UTC)" in html_out
+    assert "110.250" in html_out            # initial SL shown, not the trailed 110.9
+    assert "09-01 08:30" in html_out and "09-01 12:00" in html_out
+    assert html_out.index("GBP_USD") < html_out.index("AUD_JPY")   # newest first
+    assert "manual" in html_out             # score 100 = manual order
+    r = str(analytics_block([t_old, t_new]))
+    assert "-1.00R" in r and "+2.00R" in r
+
+
+def test_trade_log_drawer_has_no_frequency_or_watching_panels():
+    """2026-09-28: user removed "Signal Frequency" and "Watching Signals"."""
+    from dashboard.panels import trade_log_drawer
+    out = str(trade_log_drawer([], [], {}, visible=True))
+    assert "Signal Frequency" not in out and "Watching Signals" not in out
+    assert "Equity Curve" in out

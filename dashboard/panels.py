@@ -677,18 +677,18 @@ def analytics_block(closed_trades: list) -> html.Div:
         stats[pair]["total"] += 1
         if pnl > 0:
             stats[pair]["wins"] += 1
-        # Approximate RR: pnl vs initial risk (size × |entry − sl|)
-        size = t.get("size", 1)
-        entry = t.get("entry", 0)
-        sl    = t.get("sl", entry)
-        risk  = abs(entry - sl) * size
+        # R = P&L / dollars risked at entry. Was (size x |entry - CURRENT sl|):
+        # a trailed/breakeven SL shrank the "risk" (GBP_USD showed +3.32R) and
+        # JPY/CAD quote currency was never converted to USD (JPY pairs ~0.00R).
+        risk = t.get("risk_dollar") or 0
         if risk > 0:
             stats[pair]["rr_sum"] += pnl / risk
+            stats[pair]["rr_n"]   = stats[pair].get("rr_n", 0) + 1
 
     rows = []
     for pair, s in sorted(stats.items()):
         wr  = s["wins"] / s["total"] if s["total"] else 0
-        avg_rr = s["rr_sum"] / s["total"] if s["total"] else 0
+        avg_rr = s["rr_sum"] / s["rr_n"] if s.get("rr_n") else 0
         wr_col = _BULL if wr >= 0.5 else _BEAR
         rows.append(html.Tr([
             html.Td(pair,                style={"padding":"0.2rem 0.4rem","fontSize":"0.78rem",**_mono}),
@@ -712,65 +712,20 @@ def analytics_block(closed_trades: list) -> html.Div:
     ])
 
 
-def signal_frequency_chart(freq_data: dict) -> html.Div:
-    """Bar chart of weekly triggered signal counts per pair."""
-    if not freq_data:
-        return html.Div("No signal history yet.", style={"color": _MUTED, "fontSize": "0.8rem"})
-
-    fig = go.Figure()
-    colors = ["#38b6ff", "#00ff88", "#ffd700", "#ff9900", "#ff3366", "#aa00ff", "#26a69a"]
-    for i, (pair, weeks) in enumerate(sorted(freq_data.items())):
-        x = [w["week"] for w in weeks]
-        y = [w["count"] for w in weeks]
-        fig.add_bar(name=pair, x=x, y=y, marker_color=colors[i % len(colors)])
-
-    fig.update_layout(
-        barmode="group",
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": _TEXT, "size": 10},
-        margin={"l": 30, "r": 10, "t": 5, "b": 30},
-        height=160,
-        legend={"orientation": "h", "y": -0.3, "font": {"size": 9}},
-        xaxis={"gridcolor": "#21262d", "tickfont": {"size": 9}},
-        yaxis={"gridcolor": "#21262d", "tickfont": {"size": 9}},
-    )
-    return dcc.Graph(figure=fig, config={"displayModeBar": False},
-                     style={"height": "160px"})
-
-
 def trade_log_drawer(
     closed_trades: list,
     suggestions: list,
     ml_stats: dict,
     visible: bool = False,
     equity_curve: list = None,
-    signal_freq: dict = None,
-    watching_counts: dict = None,
 ) -> html.Div:
+    # "Signal Frequency (weekly)" and "Watching Signals (Near-Miss)" panels
+    # removed 2026-09-28 (user's call — neither was actionable).
     trades_content   = _trade_table(closed_trades)
     suggestion_cards = _suggestion_cards(suggestions)
     ml_content       = _ml_block(ml_stats)
     eq_chart         = equity_curve_chart(equity_curve or [])
     analytics        = analytics_block(closed_trades)
-    freq_chart       = signal_frequency_chart(signal_freq or {})
-
-    # Missed setups summary (WATCHING signals per pair)
-    watching_rows = []
-    if watching_counts:
-        for pair, cnt in sorted(watching_counts.items(), key=lambda x: -x[1]):
-            watching_rows.append(html.Tr([
-                html.Td(pair, style={"color": _TEXT, "fontSize": "0.78rem", "padding": "2px 6px"}),
-                html.Td(str(cnt), style={"color": _GOLD, "fontSize": "0.78rem",
-                                          "padding": "2px 6px", "textAlign": "right",
-                                          **_mono}),
-            ]))
-    missed_block = html.Div([
-        html.H6("Watching Signals (Near-Miss)", style={"color": _MUTED, "margin": "0 0 0.4rem",
-                                                        "fontSize": "0.75rem", **_sans}),
-        html.Table(watching_rows, style={"width": "100%", "borderCollapse": "collapse"})
-        if watching_rows else
-        html.Div("None logged yet.", style={"color": _MUTED, "fontSize": "0.8rem"}),
-    ], style={"marginBottom": "1.5rem"})
 
     return html.Div([
         html.Div([
@@ -789,16 +744,6 @@ def trade_log_drawer(
                                             "fontSize": "0.75rem", **_sans}),
             eq_chart,
         ], style={"marginBottom": "1.5rem"}),
-
-        # Signal frequency by week
-        html.Div([
-            html.H6("Signal Frequency (weekly)", style={"color": _MUTED, "margin": "0 0 0.4rem",
-                                                         "fontSize": "0.75rem", **_sans}),
-            freq_chart,
-        ], style={"marginBottom": "1.5rem"}),
-
-        # Missed setups (watching signals)
-        missed_block,
 
         # Per-pair analytics
         html.Div([analytics], style={"marginBottom": "1.5rem"}),
@@ -825,39 +770,55 @@ def _trade_table(trades: list) -> html.Table:
     header = html.Tr([
         html.Th(h, style={"color": _MUTED, "padding": "0.3rem 0.4rem",
                            "fontSize": "0.75rem", "fontWeight": 600,
-                           "textAlign": "left", "borderBottom": "1px solid #21262d"})
-        for h in ["Pair", "Dir", "Entry", "Exit", "P&L", "Pattern", "Score", "Outcome"]
+                           "textAlign": "left", "borderBottom": "1px solid #21262d",
+                           "whiteSpace": "nowrap"})
+        for h in ["Opened (UTC)", "Closed", "Pair", "Dir", "Entry", "SL", "Exit", "P&L", "Score", "Outcome"]
     ])
+
+    def _when(v):
+        # open/close times may be datetimes or ISO strings (from the state file)
+        if not v:
+            return "—"
+        s = v.isoformat() if hasattr(v, "isoformat") else str(v)
+        return f"{s[5:10]} {s[11:16]}"   # MM-DD HH:MM
+
+    def _px(v, pair):
+        if not isinstance(v, (int, float)):
+            return "—"
+        return f"{v:.3f}" if "JPY" in pair else f"{v:.5f}"
+
     rows = []
-    for t in trades[-50:]:    # show last 50
+    for t in list(reversed(trades[-50:])):    # last 50, newest first
         pnl    = t.get("realised_pnl", 0)
         pnl_c  = _BULL if pnl >= 0 else _BEAR
-        exit_p = t.get("exit_price", "—")
+        pair   = t.get("pair", "—")
+        sig    = t.get("ml_signal") or {}
+        # the SL the trade STARTED with; old trades only have the final
+        # (possibly trailed) SL, which is shown as-is
+        sl0    = t.get("sl_initial", sig.get("stop_loss", t.get("sl")))
+        patterns = ", ".join(sig.get("patterns") or []) or "no pattern recorded"
+        cell = {"padding": "0.25rem 0.4rem", "fontSize": "0.75rem", "color": _MUTED,
+                "whiteSpace": "nowrap", **_mono}
         rows.append(html.Tr([
-            html.Td(t.get("pair", "—"),
+            html.Td(_when(t.get("open_time")), style=cell),
+            html.Td(_when(t.get("close_time")), style=cell),
+            html.Td(pair, title=patterns,
                     style={"padding": "0.25rem 0.4rem", "fontSize": "0.8rem",
                            "color": _TEXT, **_mono}),
             html.Td(t.get("direction", "—")[:1].upper(),
                     style={"color": _BULL if t.get("direction") == "long" else _BEAR,
                            "padding": "0.25rem 0.4rem", "fontSize": "0.8rem"}),
-            html.Td(f"{t.get('entry',0):.4f}",
-                    style={"padding": "0.25rem 0.4rem", "fontSize": "0.75rem",
-                           "color": _MUTED, **_mono}),
-            html.Td(f"{exit_p:.4f}" if isinstance(exit_p, float) else str(exit_p),
-                    style={"padding": "0.25rem 0.4rem", "fontSize": "0.75rem",
-                           "color": _MUTED, **_mono}),
+            html.Td(_px(t.get("entry"), pair), style=cell),
+            html.Td(_px(sl0, pair), style=cell),
+            html.Td(_px(t.get("exit_price"), pair), style=cell),
             html.Td(f"${pnl:+.2f}", style={"color": pnl_c, "padding": "0.25rem 0.4rem",
                                              "fontSize": "0.8rem", **_mono}),
-            html.Td((t.get("pattern_name") or "—")[:16],
-                    style={"padding": "0.25rem 0.4rem", "fontSize": "0.75rem",
-                           "color": _MUTED}),
-            html.Td(str(t.get("score", "—")),
-                    style={"padding": "0.25rem 0.4rem", "fontSize": "0.75rem",
-                           "color": _MUTED, **_mono}),
+            # 100 = manual dashboard order, not a computed score
+            html.Td("manual" if t.get("score") == 100 else str(t.get("score", "—")), style=cell),
+            # coloured by result, not label: an "sl" exit on a trailed stop can be a win
             html.Td(t.get("close_reason", "—"),
                     style={"padding": "0.25rem 0.4rem", "fontSize": "0.75rem",
-                           "color": _BULL if (t.get("close_reason","")
-                                              in ("tp1","tp2","tp3")) else _BEAR}),
+                           "whiteSpace": "nowrap", "color": pnl_c}),
         ], style={"borderBottom": "1px solid #21262d"}))
 
     return html.Table([header] + rows,

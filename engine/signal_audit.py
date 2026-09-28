@@ -111,55 +111,9 @@ def _b(val) -> str:
 
 # ── Analytics helpers ─────────────────────────────────────────────────────────
 
-def signal_frequency_by_week() -> dict[str, list[dict]]:
-    """
-    Read signal_audit.csv and return weekly trigger counts per pair.
-    Returns: {pair: [{week: "YYYY-Www", count: N}, ...]}
-    """
-    if not _AUDIT_PATH.exists():
-        return {}
-    try:
-        counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        with open(_AUDIT_PATH, newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row.get("result") != "TRIGGERED":
-                    continue
-                try:
-                    dt = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
-                    week = dt.strftime("%G-W%V")
-                    counts[row["pair"]][week] += 1
-                except Exception:
-                    pass
-        result = {}
-        for pair, weeks in counts.items():
-            result[pair] = [{"week": w, "count": c}
-                            for w, c in sorted(weeks.items())]
-        return result
-    except Exception as exc:
-        logger.warning("signal_frequency_by_week failed: %s", exc)
-        return {}
-
-
-def watching_signal_stats() -> dict:
-    """
-    Return counts of WATCHING signals (scored but not triggered) per pair.
-    These are potential missed setups — high score but below MIN_CONFLUENCE_SCORE.
-    """
-    if not _AUDIT_PATH.exists():
-        return {}
-    try:
-        counts: dict[str, int] = defaultdict(int)
-        with open(_AUDIT_PATH, newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row.get("result") == "WATCHING":
-                    counts[row["pair"]] += 1
-        return dict(counts)
-    except Exception as exc:
-        logger.warning("watching_signal_stats failed: %s", exc)
-        return {}
-
+# signal_frequency_by_week() / watching_signal_stats() removed 2026-09-28
+# along with the dashboard's "Signal Frequency" and "Watching Signals"
+# panels they fed (user's call — neither was actionable).
 
 def signal_quality_analysis() -> dict:
     """

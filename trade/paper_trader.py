@@ -263,6 +263,7 @@ class PaperTrader:
                 "direction":     direction,
                 "entry":         entry_price,
                 "sl":            sl,
+                "sl_initial":    sl,   # "sl" moves (trail/breakeven); this doesn't
                 "tp1":           tp_levels["tp1"],
                 "tp2":           tp_levels["tp2"],
                 "tp3":           tp_levels["tp3"],
