@@ -542,10 +542,13 @@ class PaperTrader:
     def _log_outcome(self, t: dict) -> None:
         """
         Feed the closed trade to learning.data_collector.record_close() so it
-        merges with the cached signal features (from record_signal() at open
-        time) into signal_log.csv for ML training. Best-effort — a logging
-        failure must never break real trade closing.
+        merges with the entry-time signal features (t["ml_signal"], stored at
+        open) into signal_log.csv for ML training. Best-effort — a logging
+        failure must never break real trade closing. Trades without
+        ml_signal (backtest simulations, manual orders) are skipped quietly.
         """
+        if not t.get("ml_signal"):
+            return
         try:
             from learning.data_collector import record_close
             pair = t.get("pair", "")
@@ -566,9 +569,10 @@ class PaperTrader:
                 pnl_dollar   = pnl_dollar,
                 hold_hours   = hold_hours,
                 tp_level_hit = t.get("close_reason", ""),
+                snapshot     = t.get("ml_signal"),   # stored at open via `extra`
             )
         except Exception as exc:
-            logger.debug("record_close failed for trade %s: %s", t.get("id"), exc)
+            logger.error("record_close failed for trade %s: %s", t.get("id"), exc, exc_info=True)
 
     # ── Real-time tick check (called every ~5 s from dashboard interval) ─────────
 

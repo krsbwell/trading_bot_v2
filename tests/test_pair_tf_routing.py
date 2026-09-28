@@ -131,11 +131,11 @@ class TestStrategyRoutingForSwitchedPairs:
 
 
 class TestPairListsReflectThePause:
-    def test_forex_pairs_has_six_again(self):
-        """2026-08-23: EUR_AUD back in FOREX_PAIRS running the adaptive
-        strategy (was paused 2026-08-22, back 2026-08-23) — see
-        tasks/todo.md."""
-        assert len(config.FOREX_PAIRS) == 6
+    def test_forex_pairs_has_four(self):
+        """2026-09-28: AUD_JPY + EUR_AUD paused (AUD_JPY PF 0.70 after
+        spread in backtest; EUR_AUD's adaptive entries come from the
+        anti-predictive ML model) — see tasks/todo.md."""
+        assert config.FOREX_PAIRS == ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY"]
         assert "EUR_JPY" not in config.FOREX_PAIRS
 
     def test_eur_jpy_moved_to_watch_not_dropped_entirely(self):
@@ -143,17 +143,10 @@ class TestPairListsReflectThePause:
         USD_CAD was paused earlier in this project."""
         assert "EUR_JPY" in config.FOREX_WATCH
 
-    def test_the_six_pairs_are_in_forex_pairs(self):
-        for pair in ("NZD_USD", "GBP_CAD", "CHF_JPY", "GBP_USD", "AUD_JPY", "EUR_AUD"):
-            assert pair in config.FOREX_PAIRS
-
-    def test_aud_jpy_no_longer_on_watch(self):
-        assert "AUD_JPY" not in config.FOREX_WATCH
-
-    def test_eur_aud_no_longer_on_watch(self):
-        """2026-08-23: back in FOREX_PAIRS running the adaptive strategy —
-        no longer paused."""
-        assert "EUR_AUD" not in config.FOREX_WATCH
+    def test_paused_pairs_are_watched_not_traded(self):
+        for pair in ("AUD_JPY", "EUR_AUD"):
+            assert pair in config.FOREX_WATCH
+            assert pair not in config.FOREX_PAIRS
 
 
 class TestTrendRetestParamsPerPair:

@@ -64,7 +64,7 @@ def compute_atr_stops(df, direction: str, pair: str,
     # every other strategy's get_stop_loss() already respects, so an
     # adaptive-strategy trade is never allowed a tighter stop than any
     # other strategy would be.
-    min_dist = pip * config.min_sl_pips_for(pair)
+    min_dist = config.min_sl_distance(pair, pip, atr_val)
     sl_distance = max(sl_distance, min_dist)
 
     if direction == "long":

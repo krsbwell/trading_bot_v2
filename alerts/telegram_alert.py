@@ -186,6 +186,15 @@ def send_bot_down(minutes_stale: float) -> bool:
     )
 
 
+def send_learning_gap(trade_ids: list) -> bool:
+    """Alert that closed trades' outcomes failed to reach the ML log."""
+    return _send(
+        "🟠 <b>LEARNING GAP</b>\n"
+        f"{len(trade_ids)} closed trade(s) NOT logged for ML: {', '.join(map(str, trade_ids))}\n"
+        "The bot is not learning from these — check logs/main.log for record_close errors."
+    )
+
+
 def send_bot_recovered() -> bool:
     """Notify that the heartbeat is fresh again after a BOT DOWN alert."""
     return _send("🟢 <b>BOT RECOVERED</b>\nHeartbeat is fresh again — main.py is running.")

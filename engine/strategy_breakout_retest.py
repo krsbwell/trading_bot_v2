@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from engine.indicators import atr, ema, macd_full
+from engine.indicators import atr, ema, macd_full, rsi
 from engine.strategy_market_structure import detect_pivots, classify_structure, detect_bos_choch
 from engine.strategy_price_action import detect_patterns, _BULLISH, _BEARISH
 
@@ -66,9 +66,50 @@ def _is_consolidated(df_h1: pd.DataFrame) -> bool:
     atr_val = float(atr(df_h1["high"], df_h1["low"], df_h1["close"], 14).iloc[-1])
     if not atr_val or np.isnan(atr_val):
         return False
-    emas = [ema(df_h1["close"], p).iloc[-1] for p in (34, 100, 200)]
+    emas = ribbon(df_h1)
     spread_atr = (max(emas) - min(emas)) / atr_val
     return spread_atr < config.BREAKOUT_MIN_MA_SPREAD_ATR
+
+
+def ribbon(df_h1: pd.DataFrame) -> list:
+    """Latest [fast, 100, 200] MA values — fast period and the 200's type
+    (EMA/SMA) come from config so they can be A/B backtested."""
+    close = df_h1["close"]
+    slow = (close.rolling(200).mean() if config.MA_SLOW_TYPE == "sma" else ema(close, 200)).iloc[-1]
+    return [ema(close, config.MA_FAST_PERIOD).iloc[-1], ema(close, 100).iloc[-1], slow]
+
+
+def _momentum_ok(df_h1: pd.DataFrame, direction: str) -> bool:
+    """c5 — momentum still with the breakout. "macd": histogram sign (original);
+    "rsi50": RSI(14) on the trade's side of 50."""
+    if config.BREAKOUT_MOMENTUM == "rsi50":
+        r = rsi(df_h1["close"], 14)
+        if not len(r) or np.isnan(r.iloc[-1]):
+            return False
+        return r.iloc[-1] > 50 if direction == "long" else r.iloc[-1] < 50
+    _, _, h = macd_full(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
+    return len(h) >= 1 and (float(h.iloc[-1]) > 0 if direction == "long" else float(h.iloc[-1]) < 0)
+
+
+def _ma_aligned(df_h1: pd.DataFrame, direction: str) -> bool:
+    """Fast EMA (config.MA_FAST_PERIOD, 34) on the trade's side of EMA100 (the "MA cross" state) — the
+    faster average has crossed in the breakout direction."""
+    if len(df_h1) < 100:
+        return False
+    fast, slow = ribbon(df_h1)[:2]
+    return fast > slow if direction == "long" else fast < slow
+
+
+def _strict_entry_ok(df_h1: pd.DataFrame, direction: str, retest: bool,
+                     held: bool, candle: bool) -> bool:
+    """config.BREAKOUT_STRICT_ENTRY: the user's entry rules as hard
+    requirements instead of optional points — a break (c1, already a hard
+    gate), a real retest of the broken level, the break holding, a
+    confirming candlestick pattern, and the MAs crossed in the trade
+    direction. Off = original scoring behavior (any 2 of 4 conditions)."""
+    if not config.BREAKOUT_STRICT_ENTRY:
+        return True
+    return retest and held and candle and _ma_aligned(df_h1, direction)
 
 
 def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
@@ -128,8 +169,12 @@ def check_buy_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     bullish_patterns   = [p for p in patterns if p in _BULLISH]
     c4 = len(bullish_patterns) >= 1
 
-    _, _, macd_hist = macd_full(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
-    c5 = len(macd_hist) >= 1 and float(macd_hist.iloc[-1]) > 0
+    c5 = _momentum_ok(df_h1, "long")
+
+    if not _strict_entry_ok(df_h1, "long", c2, c3, c4):
+        _buy_diag[pair] = dict(c1=c1, c2=c2, c3=c3, c4=c4, c5=c5, broken_level=broken_level,
+                               patterns=bullish_patterns, strict_blocked=True)
+        return 0.0
 
     passed = sum([c2, c3, c4, c5])
     score  = round(25 * passed / 4)
@@ -186,8 +231,12 @@ def check_sell_signal(pair: str, df_h1: pd.DataFrame, df_h4: pd.DataFrame,
     bearish_patterns   = [p for p in patterns if p in _BEARISH]
     c4 = len(bearish_patterns) >= 1
 
-    _, _, macd_hist = macd_full(df_h1["close"], config.MACD_FAST, config.MACD_SLOW, config.MACD_SIGNAL)
-    c5 = len(macd_hist) >= 1 and float(macd_hist.iloc[-1]) < 0
+    c5 = _momentum_ok(df_h1, "short")
+
+    if not _strict_entry_ok(df_h1, "short", c2, c3, c4):
+        _sell_diag[pair] = dict(c1=c1, c2=c2, c3=c3, c4=c4, c5=c5, broken_level=broken_level,
+                                patterns=bearish_patterns, strict_blocked=True)
+        return 0.0
 
     passed = sum([c2, c3, c4, c5])
     score  = round(25 * passed / 4)
@@ -212,7 +261,7 @@ def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
     atr_val  = float(atr(df_h1["high"], df_h1["low"], df_h1["close"], 14).iloc[-1])
     entry    = float(df_h1["close"].iloc[-1])
     pip      = _get_pip(pair)
-    min_dist = pip * config.min_sl_pips_for(pair)
+    min_dist = config.min_sl_distance(pair, pip, atr_val)
 
     if direction == "long":
         broken_level = pivots["highs"][-1] if pivots["highs"] else entry - atr_val

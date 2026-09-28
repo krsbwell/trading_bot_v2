@@ -10,6 +10,14 @@
     const IND_H    = Math.round(TOTAL_H * 0.20);
     const TEN_DAYS = 10 * 24 * 3600;
 
+    /* Blank space kept between the latest candle and the price scale, in
+       candle-widths. User-specified (2026-09-16): 16. Used in exactly two
+       places, which must agree or the margin visibly changes out from under
+       you: the default view-on-load logical range (see load()), and the
+       chart's own `rightOffset` (below), which is what preserves the margin
+       when real-time updates append new candles. */
+    const EDGE_MARGIN_BARS = 16;
+
     /* ── chart state ─────────────────────────────────────────────────────── */
     let chart = null, S = {}, wm = null;
     let _lastPairTf = null, _currentPair = '', _currentTf = '', _currentRawTf = '';
@@ -3631,7 +3639,12 @@
         chart = LC().createChart(el, {
             width: el.clientWidth, height: TOTAL_H,
             layout: { background:{ type:'solid', color:'#0f0f0f' },
-                textColor:'#e6edf3', fontFamily:"'IBM Plex Sans', sans-serif" },
+                textColor:'#e6edf3', fontFamily:"'IBM Plex Sans', sans-serif",
+                /* Hides the small "TradingView" link/logo the library shows
+                   in the bottom-left corner by default. Lightweight Charts
+                   is Apache-2.0 licensed — this option exists specifically
+                   because attribution is optional, not required. */
+                attributionLogo: false },
             grid: { vertLines:{ visible: false }, horzLines:{ visible: false } },
             crosshair: {
                 mode: LC().CrosshairMode.Normal,
@@ -3643,7 +3656,8 @@
             rightPriceScale: { borderColor:'#30363d', visible:true },
             leftPriceScale:  { visible:false },
             timeScale: { borderColor:'#30363d', timeVisible:true,
-                secondsVisible:false, rightOffset:5, shiftVisibleRangeOnNewBar:false },
+                secondsVisible:false, rightOffset:EDGE_MARGIN_BARS,
+                shiftVisibleRangeOnNewBar:false },
         });
 
         /* Double-click anywhere on the chart canvas (candles or empty space —
@@ -3727,10 +3741,14 @@
                 updateAllVLines(); updateAllCircles(); _updateAllTradeSvgLines(); updateAllTexts();
             });
             /* Save zoom (time range) whenever the user scrolls/zooms, keyed per pair+TF.
-               Suppressed during load() — see _suppressZoomSave comment there. */
+               Suppressed during load() — see _suppressZoomSave comment there.
+               Key prefix must match the read side in load() exactly (both
+               "v2" as of 2026-09-16c) — a mismatch here would silently break
+               zoom persistence entirely (saves go one place, reads look
+               somewhere else and never find them). */
             chart.timeScale().subscribeVisibleTimeRangeChange(function(range) {
                 if (!range || _suppressZoomSave) return;
-                var zoomKey = 'apex_zoom_' + (_currentPair||'') + '_' + (_currentTf||'');
+                var zoomKey = 'apex_zoom_v2_' + (_currentPair||'') + '_' + (_currentTf||'');
                 try { localStorage.setItem(zoomKey, JSON.stringify({ from: range.from, to: range.to })); } catch(e) {}
             });
         } catch(e) {}
@@ -4331,54 +4349,79 @@
         try { window._apexApplyIndSettings(data.ind_params || null); } catch(e) {}
 
         if (fitIt) {
-            /* Try to restore a previously-saved zoom for this pair+TF */
-            var zoomKey     = 'apex_zoom_' + (_currentPair||'') + '_' + (_currentTf||'');
+            /* ── View-on-load: one rule, not a chain of exceptions ──────────
+               2026-09-16d — replaces three same-day attempts that each tried
+               to be clever about exactly when a saved zoom near the live
+               edge could be trusted (restore-if-fresh-enough, then
+               nudge-if-too-tight, then discard-if-stale-or-tight): every one
+               of those introduced its own new edge case, because "trust it
+               unless X" keeps needing a new X. The actual fix is to stop
+               trying to validate a saved view near the edge at all.
+
+               Rule: a saved zoom is only ever restored when it's CLEARLY a
+               deliberate historical scroll — its right edge sits more than
+               _EDGE_ZONE_BARS bars behind the true latest candle. Anything
+               closer to "now" than that (behind, flush, exactly at, or any
+               other shape a past bug might have saved) is always rebuilt
+               from scratch via the plain default-view calculation below,
+               unconditionally. No shift math, no per-case thresholds to
+               keep tuning — the default branch is the one piece of this
+               that's been directly verified correct every time it's been
+               tested, so the fix is to lean on it more, not patch around it. */
+            var zoomKey     = 'apex_zoom_v2_' + (_currentPair||'') + '_' + (_currentTf||'');
             var savedRange  = null;
             try {
                 var zRaw = localStorage.getItem(zoomKey);
                 if (zRaw) savedRange = JSON.parse(zRaw);
             } catch(e) {}
 
-            /* Only trust the saved range if it actually overlaps the candle data we
-               just loaded — the backend only fetches the most recent _CANDLE_COUNT
-               bars (500 for intraday TFs), so a range saved while scrolled further
-               back in history than that window no longer exists in _candleData.
-               A separate, cheap safety check alongside _suppressZoomSave below
-               (the actual root cause of the 2026-07-20 zoom-reset bug) — this one
-               guards a genuinely different scenario: a user who panned deep into
-               history before switching TF, where restoring the exact saved range
-               could otherwise land outside the freshly-fetched window. */
-            var rangeUsable = false;
-            if (savedRange && savedRange.from && savedRange.to && _candleData.length > 0) {
-                var dataMin = _candleData[0].time;
-                var dataMax = _candleData[_candleData.length - 1].time;
-                rangeUsable = savedRange.to >= dataMin && savedRange.from <= dataMax;
-                if (!rangeUsable) {
-                    console.warn('[apex chart] saved zoom for', zoomKey,
-                        'is outside the loaded candle window — discarding and using default view',
-                        { savedRange: savedRange, dataMin: dataMin, dataMax: dataMax });
-                }
+            var interval = _candleInterval();
+            var dataMin  = _candleData.length > 0 ? _candleData[0].time : null;
+            var dataMax  = _candleData.length > 0 ? _candleData[_candleData.length - 1].time : null;
+
+            var _EDGE_ZONE_BARS = 20;
+            var savedIsHistorical = false;
+            if (savedRange && savedRange.from != null && savedRange.to != null && dataMax != null) {
+                savedIsHistorical =
+                    savedRange.to   <= (dataMax - interval * _EDGE_ZONE_BARS) &&
+                    savedRange.to   >= dataMin &&
+                    savedRange.from <= dataMax;
             }
 
-            if (rangeUsable) {
-                /* Restore saved zoom */
+            if (savedIsHistorical) {
                 try {
                     chart.timeScale().setVisibleRange(savedRange);
-                    console.debug('[apex chart] restored saved zoom for', zoomKey, savedRange);
+                    console.debug('[apex chart] restored historical saved zoom for', zoomKey, savedRange);
                 } catch(e) {
                     console.warn('[apex chart] setVisibleRange threw while restoring', zoomKey, e);
                     try { chart.timeScale().fitContent(); } catch(e2) {}
                 }
             } else if (_candleData.length > 0) {
-                /* Default: show last ~240 bars (≈ 10 days H1 / 60 days 4H / 240 days D) */
-                var interval = _candleInterval();
-                var nShow    = Math.min(_candleData.length, 240);
-                var firstVis = _candleData[Math.max(0, _candleData.length - nShow)];
-                var lastBar  = _candleData[_candleData.length - 1];
+                if (savedRange) {
+                    console.debug('[apex chart] saved zoom for', zoomKey,
+                        'is at/near the live edge — always rebuilding fresh rather than restoring it',
+                        { savedRange: savedRange, dataMax: dataMax });
+                }
+                /* Default: show last ~240 bars, with the latest candle
+                   _EDGE_MARGIN_BARS candle-widths clear of the price scale.
+
+                   Uses setVisibleLogicalRange (BAR-INDEX space), not
+                   setVisibleRange (time space) — 2026-09-16e. That's the
+                   actual reason every previous attempt at a right-hand
+                   margin collapsed to nothing no matter what number was
+                   used: setVisibleRange maps a *time* range onto existing
+                   data, and there is no data after the last candle, so a
+                   `to` of "last bar + N intervals" just clamps back to the
+                   last bar and renders flush against the price scale.
+                   Logical range is indexed in bars and explicitly supports
+                   indices past the end of the data, which is how whitespace
+                   to the right of the series is meant to be requested. */
+                var lastIdx = _candleData.length - 1;
+                var nShow   = Math.min(_candleData.length, 240);
                 try {
-                    chart.timeScale().setVisibleRange({
-                        from: firstVis.time - interval * 2,
-                        to:   lastBar.time  + interval * 10,
+                    chart.timeScale().setVisibleLogicalRange({
+                        from: Math.max(0, lastIdx - nShow),
+                        to:   lastIdx + EDGE_MARGIN_BARS,
                     });
                 } catch(e) {
                     try { chart.timeScale().fitContent(); } catch(e2) {}

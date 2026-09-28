@@ -2192,6 +2192,7 @@ def confirm_order(n, form_data, entry, limit_price, sl, tp1, tp2, tp3, lot):
             "pair": pair, "direction": direction, "entry": entry,
             "stop_loss": sl, "tp_levels": tp_levels,
             "score": 100,   # manual click — bypass the automated min-score gate
+            "manual": True, # human decision — never logged as bot ML training data
         }
         if order_type == "limit":
             trade_id = tm.open_limit_order(signal, limit_price=limit_price)
@@ -2515,10 +2516,13 @@ def toggle_edit_modal(edit_clicks, cancel_n, confirm_n, be_n, backdrop_n):
     return (
         {"id": tid},
         _show, _back_show, title,
-        round(float(t.get("sl",  0)), dec),
-        round(float(t.get("tp1", 0)), dec),
-        round(float(t.get("tp2", 0)), dec),
-        round(float(t.get("tp3", 0)), dec),
+        # `or 0`: a reconciled-orphan trade (see bugs_weekend_close_desync
+        # memory) has tp1/tp2/tp3 = None explicitly, not just absent —
+        # `.get("tpN", 0)` alone doesn't cover that and float(None) raises.
+        round(float(t.get("sl",  0) or 0), dec),
+        round(float(t.get("tp1", 0) or 0), dec),
+        round(float(t.get("tp2", 0) or 0), dec),
+        round(float(t.get("tp3", 0) or 0), dec),
     )
 
 
@@ -2654,11 +2658,14 @@ def toggle_edit_pending_modal(edit_clicks, cancel_n, confirm_n, backdrop_n):
     return (
         {"id": oid},
         _show, _back_show, title,
-        round(float(o.get("limit_price", 0)), dec),
-        round(float(o.get("sl",  0)), dec),
-        round(float(o.get("tp1", 0)), dec),
-        round(float(o.get("tp2", 0)), dec),
-        round(float(o.get("tp3", 0)), dec),
+        # `or 0`: a limit order placed with a TP left blank stores that TP
+        # as None, not a missing key — same trap as the open-trade edit
+        # handler above, float(None) raises without this.
+        round(float(o.get("limit_price", 0) or 0), dec),
+        round(float(o.get("sl",  0) or 0), dec),
+        round(float(o.get("tp1", 0) or 0), dec),
+        round(float(o.get("tp2", 0) or 0), dec),
+        round(float(o.get("tp3", 0) or 0), dec),
     )
 
 
@@ -3381,6 +3388,7 @@ def update_signals(_, threshold):
         signal_details=state.get_key("signal_details", {}),
         last_scan_time=state.get_key("last_scan_time"),
         pair_scan_times=state.get_key("pair_scan_times", {}),
+        learning_health=state.get_key("learning_health"),
     )
     return missed_banner + [panel] if missed_banner else panel
 

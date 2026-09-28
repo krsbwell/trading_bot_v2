@@ -2,9 +2,15 @@
 Logging layer for the signal and learning engines.
 
 Lifecycle:
-  1. signal fires    → record_signal(trade_id, signal, size, risk)  [cached in memory]
+  1. signal fires    → make_snapshot(signal, size, risk)            [stored ON the trade record,
+                                                                      which is disk-persisted]
   2. signal skipped  → record_skip(signal)                          [written immediately]
-  3. trade closes    → record_close(trade_id, outcome, ...)         [cache + outcome → CSV]
+  3. trade closes    → record_close(trade_id, ..., snapshot=...)    [snapshot + outcome → CSV]
+
+record_signal()'s in-memory cache is the legacy path, kept only as a
+fallback. Keying it by a synthetic id broke silently in demo/live (the
+trade manager returns OANDA's id, not ours), and it was lost on every
+restart. 0 of 43 demo trades reached this log 2026-07-31 → 2026-09-27.
 
 All CSV writes are append-only; the header is written on first creation.
 """
@@ -48,6 +54,44 @@ SOURCE_SEED = "seed"
 _pending: dict[str, dict] = {}
 
 
+# Signal keys _build_row() reads. The snapshot keeps only these, so it stays
+# small and JSON-safe enough to live on the disk-persisted trade record.
+_SNAPSHOT_KEYS = (
+    "pair", "market", "direction", "entry", "stop_loss", "tp_levels",
+    "score", "ema_score", "structure_score", "pa_score", "patterns",
+    "candle_body_ratio", "upper_wick_ratio", "lower_wick_ratio",
+    "cci_at_signal", "macd_hist_at_signal", "ema_periods", "atr_pips",
+    "h4_trend", "d_trend", "market_structure", "was_at_sr_zone",
+    "bos_confirmed", "ml_win_prob",
+)
+
+
+def _jsonable(v):
+    """numpy scalars / tuples → plain Python so json.dumps never chokes."""
+    if isinstance(v, dict):
+        return {k: _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    if hasattr(v, "item") and not isinstance(v, (str, bytes)):
+        try:
+            return v.item()
+        except Exception:
+            return str(v)
+    return v
+
+
+def make_snapshot(signal: dict, position_size: float, risk_dollar: float) -> dict:
+    """
+    Capture the signal's ML features at entry time, to be stored on the trade
+    record itself. Survives restarts and doesn't depend on any trade id.
+    """
+    snap = {k: _jsonable(signal[k]) for k in _SNAPSHOT_KEYS if signal.get(k) is not None}
+    snap["position_size"] = _jsonable(position_size)
+    snap["risk_dollar"]   = _jsonable(risk_dollar)
+    snap["signal_time"]   = datetime.now(timezone.utc).isoformat()
+    return snap
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def record_signal(
@@ -76,16 +120,35 @@ def record_close(
     pnl_dollar: float,
     hold_hours: float,
     tp_level_hit: str,     # "tp1" | "tp2" | "tp3" | "sl" | "manual"
-    log_path: str = SIGNAL_LOG,
-) -> None:
+    log_path: str | None = None,
+    snapshot: dict | None = None,
+) -> bool:
     """
-    Write a complete row to signal_log.csv for a closed trade.
-    Merges the cached signal features with the outcome data.
+    Write a complete row to signal_log.csv for a closed trade: the signal
+    features captured at entry (`snapshot`, from the trade record) merged
+    with the outcome. Falls back to the legacy in-memory cache when no
+    snapshot is given. Returns True only if a row was written.
     """
-    pending = _pending.pop(trade_id, None)
+    log_path = log_path or SIGNAL_LOG   # resolved at call time so tests can redirect it
+    if snapshot is not None:
+        _pending.pop(trade_id, None)
+        pending = {
+            "signal":        snapshot,
+            "position_size": snapshot.get("position_size", 0),
+            "risk_dollar":   snapshot.get("risk_dollar", 0),
+        }
+    else:
+        pending = _pending.pop(trade_id, None)
     if pending is None:
-        logger.warning("record_close: no cached signal for trade_id=%s — skipping log", trade_id)
-        return
+        logger.error("record_close: no signal features for trade_id=%s — outcome NOT logged for ML", trade_id)
+        return False
+
+    signal_time = None
+    try:
+        if pending["signal"].get("signal_time"):
+            signal_time = datetime.fromisoformat(pending["signal"]["signal_time"])
+    except (TypeError, ValueError):
+        pass
 
     row = _build_row(
         signal       = pending["signal"],
@@ -97,12 +160,14 @@ def record_close(
         hold_hours   = hold_hours,
         tp_level_hit = tp_level_hit,
         timestamp    = datetime.now(timezone.utc),
+        signal_time  = signal_time,
     )
     _write_row(log_path, SIGNAL_FIELDS, row)
     logger.info(
         "Trade logged — trade_id=%s  pair=%s  outcome=%s  pnl=$%.2f",
         trade_id, pending["signal"].get("pair"), outcome, pnl_dollar,
     )
+    return True
 
 
 def _is_duplicate_open_skip(pair: str, direction: str, entry_price: float, log_path: str) -> bool:
@@ -138,7 +203,7 @@ def _is_duplicate_open_skip(pair: str, direction: str, entry_price: float, log_p
     return last_outcome == "skipped"
 
 
-def record_skip(signal: dict, log_path: str = SIGNAL_LOG) -> None:
+def record_skip(signal: dict, log_path: str | None = None) -> None:
     """
     Log a signal that was scored but not traded (gate-blocked, below threshold,
     watching, etc.) with outcome='skipped'. Feeds the shadow-outcome resolver
@@ -151,6 +216,7 @@ def record_skip(signal: dict, log_path: str = SIGNAL_LOG) -> None:
     """
     if not signal.get("entry") or not signal.get("stop_loss"):
         return   # nothing to replay later without a real entry/SL (e.g. ATR-gated)
+    log_path = log_path or SIGNAL_LOG   # resolved at call time so tests can redirect it
     try:
         pair, direction, entry = signal.get("pair", ""), signal.get("direction", ""), signal["entry"]
         if _is_duplicate_open_skip(pair, direction, entry, log_path):
@@ -195,6 +261,7 @@ def _build_row(
     hold_hours: float,
     tp_level_hit: str,
     timestamp: datetime,
+    signal_time: datetime | None = None,
 ) -> dict:
     ema_periods  = signal.get("ema_periods") or (0, 0, 0)
     patterns     = signal.get("patterns") or []
@@ -239,8 +306,10 @@ def _build_row(
         "pnl_pips":             round(pnl_pips, 1),
         "pnl_dollar":           round(pnl_dollar, 2),
         "hold_hours":           round(hold_hours, 2),
-        "session":              _get_session(timestamp),
-        "hour_utc":             timestamp.hour,
+        # Session/hour describe when the SIGNAL fired (what the model sees
+        # at prediction time), not when the trade closed.
+        "session":              _get_session(signal_time or timestamp),
+        "hour_utc":             (signal_time or timestamp).hour,
         "source":               SOURCE_LIVE,
     }
 

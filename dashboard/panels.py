@@ -38,7 +38,8 @@ _REJECT_LABELS = {
 
 
 def signal_monitor_panel(signals: dict, signal_details: dict = None,
-                         last_scan_time=None, pair_scan_times: dict = None) -> html.Div:
+                         last_scan_time=None, pair_scan_times: dict = None,
+                         learning_health: dict = None) -> html.Div:
     """
     signals          : {pair: {"score": int, "direction": str, "status": str}}
     signal_details   : {pair: full signal dict with sub-scores, h4_gate, trends}
@@ -81,6 +82,24 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
             ),
         ], style={"background": "#2a1a00", "border": "1px solid #ffd700",
                    "borderRadius": "4px", "padding": "6px 10px", "marginBottom": "8px"})
+
+    # ── Learning health — is every closed bot trade reaching the ML log? ─────
+    learning_line = None
+    if learning_health:
+        _unlogged = learning_health.get("unlogged") or []
+        _last = learning_health.get("last_logged")
+        if _unlogged:
+            learning_line = html.Div(
+                f"⚠ LEARNING GAP: {len(_unlogged)} closed trade(s) not logged for ML "
+                f"({', '.join(map(str, _unlogged[:5]))}) — check logs/main.log",
+                style={"color": "#ff3366", "background": "#2a0010", "border": "1px solid #ff3366",
+                       "borderRadius": "4px", "padding": "6px 10px", "marginBottom": "8px",
+                       "fontSize": "0.72rem", "fontWeight": 700, **_mono})
+        else:
+            learning_line = html.Div(
+                f"ML log: {learning_health.get('logged', 0)} trade outcome(s) recorded"
+                + (f", last {_last:%Y-%m-%d %H:%M} UTC" if hasattr(_last, "strftime") else ""),
+                style={"color": "#3d444d", "fontSize": "0.65rem", "marginBottom": "6px", **_mono})
 
     active_rows  = []   # pairs with a long/short direction
     neutral_rows = []   # pairs returning no_signal (score = 0, direction = "—")
@@ -250,6 +269,8 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
                         "textAlign": "center", "padding": "0.75rem 0"})
     )
     body = [header, table_or_empty]
+    if learning_line:
+        body = [learning_line] + body
     if health_banner:
         body = [health_banner] + body
     return html.Div(body, style=_panel_style())
@@ -282,25 +303,39 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
         q2u  = _get_quote_to_usd_rate(pair)
         floating  = round(diff * units_rem * q2u, 4)
         pnl       = realised + floating
-        tp1       = t.get("tp1", entry)
-        tp3       = t.get("tp3", entry)
+        # Reconciled-orphan trades (adopted from the broker with no local
+        # record — see bugs_weekend_close_desync memory) have tp1/tp2/tp3
+        # explicitly set to None, not just absent: `.get("tp3", entry)`
+        # only substitutes its default for a *missing* key, so an explicit
+        # None sailed straight through into `tp3 - entry` below and crashed
+        # this whole callback every 5s, blanking the entire trades/stats
+        # panel. Treat None the same as "unset" everywhere it's used, and
+        # show "—" instead of a formatted number for an unset TP.
+        tp1   = t.get("tp1")
+        tp2   = t.get("tp2")
+        tp3   = t.get("tp3")
         remaining = t.get("remaining", 1.0)
         pnl_col   = _BULL if pnl >= 0 else _BEAR
         dir_col   = _BULL if direction == "long" else _BEAR
 
-        # Progress toward TP: % of distance from entry to tp3 covered
+        # Progress toward TP: % of distance from entry to tp3 covered.
+        # No progress bar to show if TP3 was never set (orphan adoption).
         price = current_prices.get(pair, entry)
-        if direction == "long":
+        if tp3 is None:
+            progress = 0
+        elif direction == "long":
             progress = max(0, min(100, (price - entry) / max(tp3 - entry, 1e-8) * 100))
         else:
             progress = max(0, min(100, (entry - price) / max(entry - tp3, 1e-8) * 100))
 
         sl         = t.get("sl",  0)
-        tp1        = t.get("tp1", 0)
         size       = t.get("size", 0)
         tid        = t.get("id", pair)
         dec        = 3 if "JPY" in pair else 5
         pair_label = pair.replace("_", "/")   # EUR_USD → EUR/USD
+        tp1_label  = f"{tp1:.{dec}f}" if tp1 is not None else "—"
+        tp2_label  = f"{tp2:.{dec}f}" if tp2 is not None else "—"
+        tp3_label  = f"{tp3:.{dec}f}" if tp3 is not None else "—"
 
         # Duration
         open_time = t.get("open_time")
@@ -314,8 +349,6 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
         else:
             dur_label = "—"
 
-        tp2   = t.get("tp2", 0)
-        tp3_v = t.get("tp3", 0)
         signal_score = t.get("score", "—")
         tf_label     = t.get("timeframe", "H1")
 
@@ -354,7 +387,7 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
                           style={"color": "#38b6ff", "fontSize": "0.75rem", **_mono}),
                 html.Span(f"  SL {sl:.{dec}f}",
                           style={"color": _BEAR, "fontSize": "0.75rem", **_mono}),
-                html.Span(f"  TP1 {tp1:.{dec}f}",
+                html.Span(f"  TP1 {tp1_label}",
                           style={"color": _BULL, "fontSize": "0.75rem", **_mono}),
                 html.Span(f"  Lot {size}",
                           style={"color": _MUTED, "fontSize": "0.72rem", "marginLeft": "6px"}),
@@ -362,10 +395,10 @@ def open_trades_panel(trades: list, mode: str, current_prices: dict = None) -> h
 
             # Row 2: TP2 / TP3 / Current price / Risk:Reward
             html.Div([
-                html.Span(f"TP2 {tp2:.{dec}f}",
+                html.Span(f"TP2 {tp2_label}",
                           style={"color": _BULL, "fontSize": "0.72rem", **_mono,
                                  "opacity": "0.7"}),
-                html.Span(f"  TP3 {tp3_v:.{dec}f}",
+                html.Span(f"  TP3 {tp3_label}",
                           style={"color": _BULL, "fontSize": "0.72rem", **_mono,
                                  "opacity": "0.7"}),
                 html.Span(f"  Now {cur_price:.{dec}f}",
@@ -445,14 +478,20 @@ def pending_orders_panel(orders: list, mode: str) -> html.Div:
         direction  = o.get("direction", "long")
         limit      = o.get("limit_price", 0)
         sl         = o.get("sl", 0)
-        tp1        = o.get("tp1", 0)
-        tp2        = o.get("tp2", 0)
-        tp3        = o.get("tp3", 0)
+        # tp2/tp3 (and, less commonly, tp1) can be None here — a limit
+        # order placed with a TP left blank — same None-vs-missing-key
+        # trap as open_trades_panel above; show "—" rather than crashing.
+        tp1        = o.get("tp1")
+        tp2        = o.get("tp2")
+        tp3        = o.get("tp3")
         size       = o.get("size", 0)
         oid        = o.get("id", pair)
         dec        = 3 if "JPY" in pair else 5
         pair_label = pair.replace("_", "/")
         dir_col    = _BULL if direction == "long" else _BEAR
+        tp1_label  = f"{tp1:.{dec}f}" if tp1 is not None else "—"
+        tp2_label  = f"{tp2:.{dec}f}" if tp2 is not None else "—"
+        tp3_label  = f"{tp3:.{dec}f}" if tp3 is not None else "—"
 
         candles_left = max(0, expiry_candles - o.get("candles_missed", 0))
 
@@ -475,17 +514,17 @@ def pending_orders_panel(orders: list, mode: str) -> html.Div:
                           style={"color": "#38b6ff", "fontSize": "0.75rem", **_mono}),
                 html.Span(f"  SL {sl:.{dec}f}",
                           style={"color": _BEAR, "fontSize": "0.75rem", **_mono}),
-                html.Span(f"  TP1 {tp1:.{dec}f}",
+                html.Span(f"  TP1 {tp1_label}",
                           style={"color": _BULL, "fontSize": "0.75rem", **_mono}),
                 html.Span(f"  Lot {size}",
                           style={"color": _MUTED, "fontSize": "0.72rem", "marginLeft": "6px"}),
             ], style={"marginBottom": "0.2rem"}),
 
             html.Div([
-                html.Span(f"TP2 {tp2:.{dec}f}",
+                html.Span(f"TP2 {tp2_label}",
                           style={"color": _BULL, "fontSize": "0.72rem", **_mono,
                                  "opacity": "0.7"}),
-                html.Span(f"  TP3 {tp3:.{dec}f}",
+                html.Span(f"  TP3 {tp3_label}",
                           style={"color": _BULL, "fontSize": "0.72rem", **_mono,
                                  "opacity": "0.7"}),
             ], style={"marginBottom": "0.3rem"}),

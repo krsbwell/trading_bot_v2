@@ -456,14 +456,23 @@ class TestTradeManagerForex:
         assert tm.open_trade(_signal(score=50)) is None
         assert len(conn.orders) == 0
 
-    def test_rejected_duplicate_pair(self):
+    def test_rejected_duplicate_pair(self, monkeypatch):
+        # Pyramiding (config.ALLOW_MULTIPLE_PER_PAIR) is on by default as of
+        # 2026-09-16 — pin it off here to test the original "no multiple
+        # positions per pair" behavior specifically. See
+        # TestTradeManagerPyramiding below for pyramiding-on coverage.
+        monkeypatch.setattr(config, "ALLOW_MULTIPLE_PER_PAIR", False)
         conn = MockForexConnector()
         tm = TradeManager(conn, "forex")
         tm.open_trade(_signal())
         assert tm.open_trade(_signal()) is None   # same pair
         assert len(conn.orders) == 1
 
-    def test_rejected_max_trades(self):
+    def test_rejected_max_trades(self, monkeypatch):
+        # Pin MAX_OPEN_TRADES explicitly (default raised to 5 on 2026-09-16
+        # to leave room for other pairs alongside a fully pyramided one —
+        # see config.py) so this test's own count stays meaningful.
+        monkeypatch.setattr(config, "MAX_OPEN_TRADES", 3)
         conn = MockForexConnector()
         tm = TradeManager(conn, "forex")
         tm.open_trade(_signal(pair="EUR_USD"))
@@ -575,10 +584,12 @@ class TestTradeManagerForex:
 
     def test_record_close_called_on_full_close(self, monkeypatch):
         """Previously only PaperTrader closes ever reached the ML training
-        data — a live close must feed learning.data_collector too."""
+        data — a live close must feed learning.data_collector too.
+        (Only checks the call; TestMLOutcomeLogging checks a row is really
+        written — this test alone passed while every demo close was dropped.)"""
         calls = []
-        import learning.data_collector as dc
-        monkeypatch.setattr(dc, "record_close", lambda **kw: calls.append(kw))
+        import trade.trade_manager as tmm
+        monkeypatch.setattr(tmm, "record_close", lambda **kw: calls.append(kw) or True)
         conn = MockForexConnector()
         tm = TradeManager(conn, "forex")
         tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
@@ -603,10 +614,13 @@ class TestTradeManagerForex:
         assert abs(tm.open_trades[tid]["sl"] - 1.0820) < 1e-9
         assert any(abs(u["sl"] - 1.0820) < 1e-9 for u in conn.sl_updates)
 
-    def test_atr_trailing_disabled_by_default_via_on_candle_close(self):
-        """Flag off (default): TP2 alone must not move the SL at all — this
-        class has no fixed-pip trailing fallback (unlike PaperTrader), it's
-        purely additive and only active when explicitly enabled."""
+    def test_atr_trailing_disabled_when_flag_off(self, monkeypatch):
+        """Flag off: TP2 alone must not move the SL at all — this class has
+        no fixed-pip trailing fallback (unlike PaperTrader), it's purely
+        additive and only active when explicitly enabled. ATR trailing is
+        on by default as of 2026-09-16, so pin it off here explicitly to
+        keep covering the disabled case."""
+        monkeypatch.setattr(config, "ATR_TRAILING_ENABLED", False)
         conn = MockForexConnector()
         tm = TradeManager(conn, "forex")
         tid = tm.open_trade(_signal(entry=1.0800, sl=1.0780))
@@ -619,6 +633,71 @@ class TestTradeManagerForex:
         )
         assert len(conn.sl_updates) == sl_updates_before
         assert abs(tm.open_trades[tid]["sl"] - 1.0780) < 1e-9   # unchanged
+
+
+class TestTradeManagerPyramiding:
+    """2026-09-16: user wanted a strong, later signal on a pair that already
+    has an open trade to be allowed to add a second position (same
+    direction only) once it clears a stricter pyramid-specific score bar,
+    instead of the strategy's TP ladder being the only way to capture an
+    extended trend. See config.py's "Duplicate trade protection /
+    pyramiding" comment and tasks/todo.md.
+
+    ALLOW_MULTIPLE_PER_PAIR=True and PYRAMID_MIN_SCORE=65 are now the real
+    defaults, so most of these don't need monkeypatching — only the tests
+    that need a *different* value than the default pin it explicitly.
+    """
+    def test_same_direction_high_score_pyramids(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tm.open_trade(_signal(direction="long", score=80))
+        tid2 = tm.open_trade(_signal(direction="long", score=70))
+        assert tid2 is not None
+        assert len(tm.open_trades) == 2
+
+    def test_opposite_direction_blocked_even_at_high_score(self):
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tm.open_trade(_signal(direction="long", score=80))
+        tid2 = tm.open_trade(_signal(direction="short", score=95))
+        assert tid2 is None
+        assert len(tm.open_trades) == 1
+
+    def test_same_direction_below_pyramid_score_blocked(self, monkeypatch):
+        monkeypatch.setattr(config, "PYRAMID_MIN_SCORE", 65)
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tm.open_trade(_signal(direction="long", score=80))
+        # Clears the normal 55-point floor but not the 65 pyramid bar.
+        tid2 = tm.open_trade(_signal(direction="long", score=60))
+        assert tid2 is None
+        assert len(tm.open_trades) == 1
+
+    def test_max_pyramid_per_pair_cap(self, monkeypatch):
+        # Raise the global cap so it's MAX_PYRAMID_PER_PAIR being tested
+        # here, not an incidental collision with MAX_OPEN_TRADES (both
+        # default to 3 today, but they're independent knobs).
+        monkeypatch.setattr(config, "MAX_OPEN_TRADES", 10)
+        monkeypatch.setattr(config, "MAX_PYRAMID_PER_PAIR", 3)
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tm.open_trade(_signal(direction="long", score=80))
+        tm.open_trade(_signal(direction="long", score=80))
+        tm.open_trade(_signal(direction="long", score=80))
+        assert len(tm.open_trades) == 3
+        # A 4th same-direction, high-score signal is still blocked — cap reached.
+        tid4 = tm.open_trade(_signal(direction="long", score=99))
+        assert tid4 is None
+        assert len(tm.open_trades) == 3
+
+    def test_pyramiding_off_still_blocks_regardless_of_score(self, monkeypatch):
+        monkeypatch.setattr(config, "ALLOW_MULTIPLE_PER_PAIR", False)
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        tm.open_trade(_signal(direction="long", score=80))
+        tid2 = tm.open_trade(_signal(direction="long", score=99))
+        assert tid2 is None
+        assert len(tm.open_trades) == 1
 
 
 class TestTradeManagerLimitOrders:
@@ -649,7 +728,10 @@ class TestTradeManagerLimitOrders:
         assert tm.open_limit_order(_signal(score=50), limit_price=1.0750) is None
         assert len(conn.pending) == 0
 
-    def test_open_limit_order_rejects_duplicate_pending_pair(self):
+    def test_open_limit_order_rejects_duplicate_pending_pair(self, monkeypatch):
+        # Pyramiding on by default as of 2026-09-16 — pin off to test the
+        # original single-position-per-pair behavior specifically.
+        monkeypatch.setattr(config, "ALLOW_MULTIPLE_PER_PAIR", False)
         conn = MockForexConnector()
         tm = TradeManager(conn, "forex", save_path=False)
         tm.open_limit_order(_signal(pair="EUR_USD"), limit_price=1.0750)
@@ -957,6 +1039,33 @@ class TestTradeManagerReconcileOrphanedTrades:
         tm.reconcile_orphaned_trades()
         assert tm.open_trades[tid] == original   # not overwritten with recovered defaults
 
+    def test_adopted_trade_on_candle_close_does_not_crash_on_none_tps(self):
+        # Regression: a reconciled orphan has tp1/tp2/tp3 = None (the broker
+        # doesn't expose the original TP ladder). on_candle_close()'s TP1
+        # check did `high >= t["tp1"]` unconditionally, raising a TypeError
+        # every candle close for that trade ("Live tick failed for <pair>"
+        # in logs/main.log, real occurrence 2026-09-16) — silently skipping
+        # the rest of that pair's tick every time. The SL check runs first
+        # and must still work; only the (nonexistent) TP checks should no-op.
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex", save_path=False)
+        conn.broker_trades = [{"id": "226", "instrument": "GBP_USD", "units": 100000,
+                               "price": 1.34847, "unrealizedPL": 0.0,
+                               "stopLoss": 1.34596, "takeProfit": None}]
+        tm.reconcile_orphaned_trades()
+        assert tm.open_trades["226"]["tp1"] is None
+
+        # A candle that would have hit TP1 on a normal trade must not raise,
+        # and must leave the (nonexistent) TP1 unhit.
+        tm.on_candle_close("GBP_USD", {"high": 1.36, "low": 1.348, "close": 1.359})
+        assert "226" in tm.open_trades
+        assert tm.open_trades["226"]["tp1_hit"] is False
+
+        # The stop loss must still close the trade normally.
+        tm.on_candle_close("GBP_USD", {"high": 1.349, "low": 1.345, "close": 1.346})
+        assert "226" not in tm.open_trades
+        assert tm.closed_trades[-1]["close_reason"] == "sl"
+
     def test_no_orphans_is_a_cheap_no_op(self):
         conn = MockForexConnector()
         tm = TradeManager(conn, "forex", save_path=False)
@@ -1177,3 +1286,89 @@ class TestTradeManagerPersistence:
         monkeypatch.setattr(tm_mod, "_DEFAULT_SAVE_DIR", tmp_path)
         TradeManager(MockForexConnector(), "forex").open_trade(_signal())
         assert (tmp_path / "live_state_forex.json").exists()
+
+
+class TestMLOutcomeLogging:
+    """
+    Regression for 2026-09-27: every demo trade's outcome was silently
+    dropped from the ML log. main.py cached features under a synthetic id
+    ("EUR_USD-<ts>") but TradeManager.open_trade() returns the BROKER's id,
+    so record_close() never found them, and the in-memory cache was lost
+    on every restart anyway. These tests use the broker's own id (the mock
+    returns "MOCK-0001", never the synthetic id) and a real restart.
+    """
+    def setup_method(self):
+        rm.TRADING_HALTED = False
+        rm._daily_loss = 0.0
+
+    @staticmethod
+    def _rows():
+        import csv, learning.data_collector as dc
+        try:
+            with open(dc.SIGNAL_LOG, newline="") as f:
+                return list(csv.DictReader(f))
+        except FileNotFoundError:
+            return []
+
+    def test_close_logs_outcome_with_broker_id(self):
+        tm = TradeManager(MockForexConnector(), "forex")
+        sig = {**_signal(score=61), "ema_score": 21, "patterns": ["bullish_engulfing"]}
+        tid = tm.open_trade(sig)
+        assert tid.startswith("MOCK-")            # broker id, not ours
+        tm.close_trade(tid, 1.0850, reason="manual")
+
+        rows = self._rows()
+        assert len(rows) == 1
+        assert rows[0]["pair"] == "EUR_USD"
+        assert rows[0]["confluence_score"] == "61"
+        assert rows[0]["ema_score"] == "21"
+        assert rows[0]["pattern_name"] == "bullish_engulfing"
+        assert rows[0]["outcome"] == "win"
+        assert tm.closed_trades[-1]["ml_logged"] is True
+
+    def test_outcome_survives_restart(self, tmp_path):
+        path = tmp_path / "state.json"
+        tid = TradeManager(MockForexConnector(), "forex", save_path=path).open_trade(_signal(score=58))
+
+        tm2 = TradeManager(MockForexConnector(), "forex", save_path=path)   # "restart"
+        tm2.close_trade(tid, 1.0750, reason="manual")
+
+        rows = self._rows()
+        assert len(rows) == 1 and rows[0]["outcome"] == "loss"
+        assert rows[0]["confluence_score"] == "58"
+
+    def test_adopted_trade_without_signal_is_not_logged(self):
+        tm = TradeManager(MockForexConnector(), "forex")
+        tid = tm.open_trade(_signal())
+        del tm.open_trades[tid]["ml_signal"]      # e.g. a manual/adopted orphan
+        tm.close_trade(tid, 1.0850, reason="manual")
+        assert self._rows() == []
+        assert not tm.closed_trades[-1].get("ml_logged")
+
+    def test_manual_dashboard_order_is_not_logged(self):
+        tm = TradeManager(MockForexConnector(), "forex")
+        tid = tm.open_trade({**_signal(score=100), "manual": True})
+        tm.close_trade(tid, 1.0850, reason="manual")
+        assert self._rows() == []
+
+    def test_learning_health_flags_failed_log(self, monkeypatch):
+        import trade.trade_manager as tmm
+        tm = TradeManager(MockForexConnector(), "forex")
+        ok_id = tm.open_trade(_signal())
+        tm.close_trade(ok_id, 1.0850, reason="manual")
+        monkeypatch.setattr(tmm, "record_close", lambda **kw: False)   # write fails
+        bad_id = tm.open_trade(_signal())
+        tm.close_trade(bad_id, 1.0850, reason="manual")
+        h = tm.learning_health()
+        assert h["logged"] == 1
+        assert h["unlogged"] == [bad_id]
+
+
+def test_learning_health_banner_renders():
+    from datetime import datetime, timezone
+    from dashboard.panels import signal_monitor_panel
+    gap = str(signal_monitor_panel({}, learning_health={"logged": 3, "unlogged": ["269"], "last_logged": None}))
+    assert "LEARNING GAP" in gap and "269" in gap
+    ok = str(signal_monitor_panel({}, learning_health={"logged": 3, "unlogged": [],
+                                                         "last_logged": datetime(2026, 9, 28, tzinfo=timezone.utc)}))
+    assert "3 trade outcome(s) recorded" in ok and "LEARNING GAP" not in ok

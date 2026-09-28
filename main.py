@@ -37,7 +37,7 @@ from risk.risk_manager import (
     validate_pre_trade, calculate_position_size, get_quote_to_usd_rate,
     update_daily_loss, reset_daily_state, TRADING_HALTED,
 )
-from learning.data_collector import record_signal, record_close, record_skip, clear_pending
+from learning.data_collector import make_snapshot, record_close, record_skip, clear_pending
 from learning.pattern_learner import PatternLearner
 from learning import shadow_outcomes
 from learning.feedback_loop import generate_suggestions, should_run as feedback_should_run
@@ -47,6 +47,7 @@ from alerts.telegram_alert import (
     send_trade_opened as tg_trade_opened,
     send_trade_closed as tg_trade_closed,
     send_drawdown_halt as tg_halt,
+    send_learning_gap as tg_learning_gap,
     is_configured as tg_enabled,
 )
 from dashboard import state
@@ -374,6 +375,22 @@ def _process_pair(pair: str, market: str, engine) -> None:
                     tg_signal(signal)
             except Exception:
                 pass
+        else:
+            # signal_engine already audited this as TRIGGERED (it clears the
+            # pair's own min_score), but the floor here is stricter. Without
+            # this row the drop was invisible: ~35 of 92 triggered setups
+            # 07-31 → 09-27 vanished here with no BLOCKED record.
+            _floor_reason = f"Score {score} < floor {effective_min}"
+            logger.info("SCORE FLOOR BLOCKED: %s %s — %s", pair, signal["direction"], _floor_reason)
+            _audit_blocked(
+                pair=pair, timeframe=signal.get("timeframe", "H1"),
+                direction=signal["direction"],
+                ema_score=signal.get("ema_score", 0),
+                structure_score=signal.get("structure_score", 0),
+                pa_score=signal.get("pa_score", 0),
+                confluence_score=score,
+                result="BLOCKED", reject_reason=_floor_reason,
+            )
         record_skip(signal)   # log for shadow-outcome resolution regardless of watching status
         return
 
@@ -388,7 +405,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
     # Signals scoring 55–64 are marginal — only trade when ML backs them up.
     # Signals 65+ have demonstrated edge regardless of ML probability.
     # Gate is skipped when ML model hasn't trained yet (ml_prob is None).
-    if score < 65 and ml_prob is not None:
+    if config.ML_GATE_ENABLED and score < 65 and ml_prob is not None:
         if ml_prob < 0.50:
             _ml_reason = f"ML gate: P(win)={ml_prob:.2f} below 0.50 for score {score}"
             logger.info("ML GATE BLOCKED: %s %s — %s", pair, signal["direction"], _ml_reason)
@@ -513,7 +530,11 @@ def _process_pair(pair: str, market: str, engine) -> None:
             else list(_open_trades_raw)
         )
         open_pairs = [t.get("pair") for t in open_trades_list]
-        ok, reason = validate_pre_trade(score, len(open_trades_list), pair, open_pairs)
+        same_pair_directions = [t.get("direction") for t in open_trades_list
+                                 if t.get("pair") == pair]
+        ok, reason = validate_pre_trade(score, len(open_trades_list), pair, open_pairs,
+                                         direction=signal["direction"],
+                                         same_pair_directions=same_pair_directions)
         if not ok:
             logger.info("PRE-TRADE BLOCKED: %s — %s", pair, reason)
             _audit_blocked(
@@ -573,7 +594,12 @@ def _process_pair(pair: str, market: str, engine) -> None:
     size    = calculate_position_size(balance, signal["entry"], signal["stop_loss"], pair, _q2u)
 
     trade_id  = f"{pair}-{int(datetime.now(timezone.utc).timestamp())}"
-    record_signal(trade_id, signal, size, balance * 0.01)
+    # Paper mode: entry-time ML features ride on the trade record (via
+    # `extra`). Demo/live: TradeManager.open_trade() stores them itself.
+    # The old record_signal(trade_id, ...) cache was keyed by this synthetic
+    # id, which never matched OANDA's trade id — no demo trade was ever
+    # logged for ML (2026-07-31 → 2026-09-27).
+    _ml_snapshot = make_snapshot(signal, size, balance * 0.01)
 
     actual_id = None   # guard against UnboundLocalError if manager is absent
     if config.MODE == "paper" and _paper_trader:
@@ -587,8 +613,8 @@ def _process_pair(pair: str, market: str, engine) -> None:
                 sl=signal["stop_loss"],
                 tp_levels=tp,
                 size=size,
-                extra={"latency_ms": latency_ms},
-                trade_id=trade_id,   # matches record_signal()'s id so record_close() finds it
+                extra={"latency_ms": latency_ms, "ml_signal": _ml_snapshot},
+                trade_id=trade_id,
             )
             _sync_paper_state()
             logger.debug("Latency %s → %.1f ms", pair, latency_ms)
@@ -861,6 +887,29 @@ def _sync_live_state() -> None:
         pending_orders.extend(manager.pending_orders.values())
     state.update(open_trades=open_trades, closed_trades=closed_trades,
                  pending_orders=pending_orders)
+    if _trade_manager_fx is not None:
+        _check_learning_health(_trade_manager_fx.learning_health())
+
+
+_learning_gap_alerted: set = set()
+
+
+def _check_learning_health(health: dict) -> None:
+    """Publish ML-logging health to the dashboard; ERROR log + one Telegram
+    alert per trade whose outcome didn't reach the ML log. This check didn't
+    exist before 2026-09-27, which is how 43 demo trades went unlogged for
+    8 weeks without anyone noticing."""
+    state.update(learning_health=health)
+    new = [tid for tid in health["unlogged"] if tid not in _learning_gap_alerted]
+    if not new:
+        return
+    _learning_gap_alerted.update(new)
+    logger.error("LEARNING GAP: closed trade(s) %s not logged for ML", new)
+    try:
+        if tg_enabled():
+            tg_learning_gap(new)
+    except Exception:
+        pass
 
 
 def _backfill_equity_curve() -> None:

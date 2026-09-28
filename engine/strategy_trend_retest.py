@@ -111,7 +111,8 @@ def _is_consolidated(df_h1: pd.DataFrame) -> bool:
     atr_val = float(atr(df_h1["high"], df_h1["low"], df_h1["close"], 14).iloc[-1])
     if not atr_val or np.isnan(atr_val):
         return False
-    emas = [ema(df_h1["close"], p).iloc[-1] for p in (34, 100, 200)]
+    from engine.strategy_breakout_retest import ribbon   # one ribbon definition
+    emas = ribbon(df_h1)
     spread_atr = (max(emas) - min(emas)) / atr_val
     return spread_atr < config.BREAKOUT_MIN_MA_SPREAD_ATR
 
@@ -251,7 +252,7 @@ def get_stop_loss(pair: str, df_h1: pd.DataFrame, direction: str) -> float:
     atr_val  = float(atr(df_h1["high"], df_h1["low"], df_h1["close"], 14).iloc[-1])
     entry    = float(df_h1["close"].iloc[-1])
     pip      = _get_pip(pair)
-    min_dist = pip * config.min_sl_pips_for(pair)
+    min_dist = config.min_sl_distance(pair, pip, atr_val)
 
     if direction == "long":
         broken_level = pivots["highs"][-1] if pivots["highs"] else entry - atr_val

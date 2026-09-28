@@ -72,7 +72,14 @@ MODE = "demo"   # "paper" (pure simulation, no OANDA orders) / "demo" (real
 # currently live on it — starting the adaptive strategy's real forward-
 # testing on a pair with no existing edge to disrupt. Still MODE="demo"
 # (virtual OANDA money), no real capital at risk. See tasks/todo.md.
-FOREX_PAIRS  = ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY", "AUD_JPY", "EUR_AUD"]
+#
+# 2026-09-28 — AUD_JPY and EUR_AUD paused (user-approved), moved to
+# FOREX_WATCH. AUD_JPY: PF 0.70 after spread in a 3000-bar backtest (loses
+# even in simulation). EUR_AUD: its adaptive strategy's entries come from the
+# ML model whose P(win) was found anti-predictive (see ML_GATE_ENABLED), and
+# it fired 0 trades in backtest. Re-add only with a backtest that holds up
+# after spread.
+FOREX_PAIRS  = ["NZD_USD", "GBP_CAD", "GBP_USD", "CHF_JPY"]
 
 # Per-pair strategy override — a pair not listed here uses the default
 # (strategy_ema_cci_macd / "EMA-bounce"). breakout_retest and trend_retest
@@ -161,7 +168,7 @@ GOLD_STOP_METHOD = "dynamic"
 # above. EUR_AUD: promoted 2026-08-16, paused 2026-08-22, back in
 # 2026-08-23 on the adaptive strategy — see FOREX_PAIRS comment above.
 FOREX_WATCH  = ["EUR_CHF", "EUR_CAD", "EUR_GBP", "CAD_CHF", "NZD_CHF",
-                "USD_CAD", "EUR_JPY"]
+                "USD_CAD", "EUR_JPY", "AUD_JPY", "EUR_AUD"]   # last two paused 2026-09-28
 
 # Rejected / removed — losing money, not watched (re-test only if the strategy or gates change)
 # EUR_USD: 23% WR  $-16.51  9.7% DD (30 trades) PF=0.80 — removed from watch 2026-07-02; unsuited to EMA mean-reversion regardless of filters
@@ -246,7 +253,18 @@ def primary_tf_for(pair: str) -> str:
     return PRIMARY_TF_PER_PAIR.get(pair, TIMEFRAMES["primary"])
 
 RISK_PER_TRADE       = 0.01    # 1% of account balance — hard rule
-MAX_OPEN_TRADES      = 3
+# Raised 3->5 on 2026-09-16, alongside MAX_PYRAMID_PER_PAIR=3 below: at
+# equal values, one pair fully pyramiding used the ENTIRE global budget
+# and blocked every other pair from trading at all — the opposite of the
+# diversification this cap exists for, across the 6 active pairs. 5 lets
+# one pair pyramid to its own cap of 3 while still leaving 2 slots free
+# for other pairs. Trade-off: raises worst-case simultaneous risk (all
+# open trades hitting SL the same day) from 3% to 5% of account at
+# RISK_PER_TRADE=1% each — MAX_DAILY_DRAWDOWN below is a REACTIVE halt on
+# realized losses, not a preventive cap on simultaneous open exposure, so
+# this is a real increase in tail risk, not just bookkeeping. Acceptable
+# for now since MODE="demo" (virtual money) — revisit before ever going live.
+MAX_OPEN_TRADES      = 5
 MAX_DAILY_DRAWDOWN   = 0.03    # 3% — halt new signals if breached
 MIN_CONFLUENCE_SCORE = 55      # Minimum score to trigger a trade (slider-adjustable 40–90)
 ALERT_DELAY_SECONDS  = 60      # Seconds the signal popup stays visible (trade opens immediately on signal)
@@ -255,16 +273,52 @@ TRAILING_STOP_PIPS   = 15     # Trail SL 15 pips after TP2 is hit (0 = disabled)
 # ── ATR-adaptive trailing stop ────────────────────────────────────────────────
 # Replaces the fixed TRAILING_STOP_PIPS distance with ATR(period)*multiplier
 # when enabled, so the trail widens/tightens with volatility instead of using
-# one static pip distance for every market condition. Off by default — same
-# convention as BREAKEVEN_ENABLED below: a new risk mechanism shouldn't
-# silently change live behavior until deliberately tested/enabled per pair.
-ATR_TRAILING_ENABLED    = False
+# one static pip distance for every market condition.
+# Enabled 2026-09-16 (was off by default) — part of the trend-pyramiding
+# change below: letting the final slice of a trade ride further with
+# volatility, instead of exiting at a fixed TP3, is what actually captures
+# more of an extended trend move within one trade. See tasks/todo.md.
+ATR_TRAILING_ENABLED    = True
 ATR_TRAILING_MULTIPLIER = 2.0
 ATR_TRAILING_PERIOD     = 14
 
-# ── Duplicate trade protection ────────────────────────────────────────────────
-ALLOW_MULTIPLE_PER_PAIR    = False  # Allow multiple open positions for the same pair
-TRADE_COOLDOWN_HOURS       = 4      # Min hours after a pair's trade closes before re-entry
+# ── Duplicate trade protection / pyramiding ───────────────────────────────────
+# Changed 2026-09-16 — see tasks/todo.md. User's complaint: in a sustained
+# trend, a genuinely new high-scoring breakout-retest setup further along
+# the same move was being blocked outright just because an earlier trade on
+# that pair was still open, then blocked again for 4h after it closed.
+#
+# ALLOW_MULTIPLE_PER_PAIR=True on its own does NOT enable pyramiding by
+# itself — risk_manager.validate_pre_trade() had its own hardcoded
+# "pair already has an open trade" block that didn't consult this flag at
+# all (a second, independent duplicate-guard). Fixed alongside this change
+# so the flag actually does what its name says — see validate_pre_trade().
+#
+# PYRAMID_MIN_SCORE: an add-on entry on an already-open pair must clear this
+# (stricter than the normal MIN_CONFLUENCE_SCORE=55 floor) — user wants to
+# start conservative here. Same-direction-only (user's explicit choice) —
+# never adds an opposite-direction position on a pair that already has one
+# open, enforced in validate_pre_trade().
+#
+# MAX_PYRAMID_PER_PAIR: added 2026-09-16 (same day, follow-up request) — user
+# initially chose no per-pair cap (relying on MAX_OPEN_TRADES alone), then
+# asked to cap it explicitly at 3 consecutive trades on one pair. This is
+# why MAX_OPEN_TRADES above was raised 3->5 the same day: at equal values,
+# a fully pyramided pair used the whole global budget and shut every other
+# pair out. Now one pair can still pyramid to this cap while 2 slots stay
+# free for the rest of the roster.
+#
+# 2026-09-27: PYRAMID_MIN_SCORE 65 -> 55 (user's call). At 65 only 4 of 106
+# triggered signals qualified, so pyramiding fired once in 8 weeks, and the
+# score has no measurable link to win rate anyway. 55 = the normal entry floor,
+# i.e. any same-direction signal that could open a trade can now add on.
+# REVIEW CHECKPOINT — Sunday 2026-10-04 (user asked for a 7-day review):
+# count add-on entries since 09-27 (same pair + direction, opened while
+# another was open) and their P&L vs single entries; decide keep / revert.
+ALLOW_MULTIPLE_PER_PAIR    = True   # Allow multiple open positions for the same pair
+PYRAMID_MIN_SCORE          = 55     # Min score for an add-on entry (was 65 until 2026-09-27)
+MAX_PYRAMID_PER_PAIR       = 3      # Max concurrent same-direction positions on one pair
+TRADE_COOLDOWN_HOURS       = 0      # Min hours after a pair's trade closes before re-entry (was 4)
 LIMIT_ORDER_EXPIRY_CANDLES = 8      # Cancel unfilled limit orders after N candle closes (8 M30 = 4h, was 4 H1)
 
 # ── Volatility gates ──────────────────────────────────────────────────────────
@@ -313,6 +367,19 @@ ADX_THRESHOLD = 28   # Hard-block signals when ADX(14) > this value (strong tren
 # see tasks/todo.md 2026-07-29.
 BREAKOUT_CONSOLIDATION_FILTER_ENABLED = False
 BREAKOUT_MIN_MA_SPREAD_ATR = 0.5   # (max-min of EMA34/100/200) / ATR(14) must clear this
+
+# Breakout-retest strict entry (user's rules, 2026-09-27): require retest +
+# break held + confirming candlestick + EMA34/EMA100 crossed in the trade
+# direction, instead of any 2 of 4 conditions earning points. Off until
+# backtested — see tasks/todo.md 2026-09-27 step 9.
+BREAKOUT_STRICT_ENTRY = False
+
+# MA ribbon / momentum knobs (2026-09-28, user asked: EMA34 -> 25? EMA -> SMA?
+# replace the oscillator?). Defaults = original behavior; changed only after
+# a spread-adjusted backtest (tasks/todo.md step 13).
+MA_FAST_PERIOD    = 34       # fast line of the 34/100/200 ribbon + MA-cross check
+MA_SLOW_TYPE      = "ema"    # "ema" | "sma" for the 200 line
+BREAKOUT_MOMENTUM = "macd"   # "macd" (histogram sign) | "rsi50" (RSI14 vs 50)
 
 # ── Session gate ─────────────────────────────────────────────────────────────
 # 04:00 UTC captures European pre-market positioning (Frankfurt/Paris banks begin
@@ -428,6 +495,20 @@ def min_sl_pips_for(pair: str) -> float:
     """Resolve MIN_SL_PIPS for a pair — MIN_SL_PIPS_PER_PAIR wins if set."""
     return MIN_SL_PIPS_PER_PAIR.get(pair, MIN_SL_PIPS)
 
+
+# Volatility-scaled floor on top of the fixed one (2026-09-28, user's 2.0x):
+# SL distance >= max(MIN_SL_PIPS, MIN_SL_ATR_MULT x ATR14). 0 = fixed floor
+# only. Removing the floor entirely (MIN_SL_PIPS=0) was backtested worse on
+# every pair (tasks/todo.md 2026-09-27 step 6); this widens stops in volatile
+# conditions instead of narrowing them in quiet ones.
+MIN_SL_ATR_MULT = 2.0   # applied 2026-09-28 — backtest: GBP_CAD PF 1.88->3.32, CHF_JPY 3.72->2.78, GBP_USD/NZD_USD unchanged; portfolio net $166->$183
+
+
+def min_sl_distance(pair: str, pip: float, atr_val: float) -> float:
+    """Minimum SL distance in PRICE units — fixed pip floor or ATR multiple, whichever is larger."""
+    atr_part = MIN_SL_ATR_MULT * atr_val if atr_val and atr_val == atr_val else 0.0
+    return max(pip * min_sl_pips_for(pair), atr_part)
+
 # ── Breakeven buffer ──────────────────────────────────────────────────────────
 # After TP1 is hit, SL moves to entry + this many pips in profit direction.
 # Gives the remaining position room to avoid being stopped by a single-tick
@@ -495,6 +576,16 @@ ADAPTIVE_REFIT_EVERY_N   = 5      # Minimum new trades before recalculating thre
 # convention as ATR_TRAILING_ENABLED: this changes live trigger rate/frequency,
 # so it shouldn't flip on without a backtest comparison first.
 ML_SCORE_BOOST_ENABLED = False
+
+# ML block gate (main.py: blocks score<65 signals when P(win) < 0.50).
+# OFF 2026-09-27: the model never trained on a single demo trade (id-mismatch
+# bug, 07-31 → 09-27), and on 275 live+shadow signals its P(win) was
+# NEGATIVELY correlated with outcome (top third 37% WR vs bottom third 48%),
+# so it was blocking the slightly better setups. P(win) is still computed and
+# logged per signal (ml_win_prob_at_entry). Re-enable only once the model
+# has >= 100 real (source="live") trade outcomes AND its P(win) beats the
+# base win rate on trades it wasn't trained on.
+ML_GATE_ENABLED = False
 
 CCI_PERIOD  = 20
 MACD_FAST   = 12

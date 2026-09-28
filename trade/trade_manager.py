@@ -31,6 +31,7 @@ from risk.risk_manager import (
     calculate_position_size, get_quote_to_usd_rate, get_tp_levels, validate_pre_trade, update_daily_loss,
 )
 from trade.paper_trader import _ser, _deser
+from learning.data_collector import make_snapshot, record_close
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,11 @@ class TradeManager:
 
         # Pre-trade validation
         open_pairs = [t["pair"] for t in self.open_trades.values()]
-        ok, reason = validate_pre_trade(score, len(self.open_trades), pair, open_pairs)
+        same_pair_directions = [t["direction"] for t in self.open_trades.values()
+                                 if t["pair"] == pair]
+        ok, reason = validate_pre_trade(score, len(self.open_trades), pair, open_pairs,
+                                         direction=direction,
+                                         same_pair_directions=same_pair_directions)
         if not ok:
             logger.warning("Trade rejected for %s: %s", pair, reason)
             return None
@@ -213,6 +218,10 @@ class TradeManager:
             "score":         score,
             "open_time":     datetime.now(timezone.utc),
             "realised_pnl":  0.0,
+            # ML features at entry, persisted with the trade so the outcome
+            # can be logged at close regardless of restarts or OANDA's id.
+            # Manual dashboard orders are the human's decision, not the bot's.
+            "ml_signal":     None if signal.get("manual") else make_snapshot(signal, size, risk_dollar),
         }
         self._save_state()
         logger.info(
@@ -290,7 +299,15 @@ class TradeManager:
             return True
 
         # ── TP1 ───────────────────────────────────────────────────────────────
-        if not t["tp1_hit"]:
+        # tp1/tp2/tp3 are None (not just falsy-zero) for a reconciled-orphan
+        # trade (see bugs_weekend_close_desync memory) — the broker doesn't
+        # expose the original TP ladder, so there's nothing to check. Without
+        # the `is not None` guard, `high >= None` raised every candle close
+        # for that trade, aborting the rest of this pair's tick (logged as
+        # "Live tick failed for <pair>") — the SL check above still ran fine
+        # each time, so this never left the trade unprotected, just unable
+        # to take partial profit.
+        if not t["tp1_hit"] and t.get("tp1") is not None:
             tp1_hit = (d == "long" and high >= t["tp1"]) or \
                       (d == "short" and low  <= t["tp1"])
             if tp1_hit:
@@ -318,7 +335,7 @@ class TradeManager:
                     t["breakeven_set"] = True
 
         # ── TP2 ───────────────────────────────────────────────────────────────
-        if t["tp1_hit"] and not t["tp2_hit"]:
+        if t["tp1_hit"] and not t["tp2_hit"] and t.get("tp2") is not None:
             tp2_hit = (d == "long" and high >= t["tp2"]) or \
                       (d == "short" and low  <= t["tp2"])
             if tp2_hit:
@@ -327,7 +344,7 @@ class TradeManager:
                 t["remaining"] -= _TP2_PCT
 
         # ── TP3 ───────────────────────────────────────────────────────────────
-        if t["tp2_hit"] and not t["tp3_hit"]:
+        if t["tp2_hit"] and not t["tp3_hit"] and t.get("tp3") is not None:
             tp3_hit = (d == "long" and high >= t["tp3"]) or \
                       (d == "short" and low  <= t["tp3"])
             if tp3_hit:
@@ -350,18 +367,27 @@ class TradeManager:
         t["close_reason"] = reason
         t["exit_price"]   = price
         t["close_time"]   = datetime.now(timezone.utc)
-        self.closed_trades.append(dict(t))
-        self.closed_trades = self.closed_trades[-500:]
         logger.info(
             "LIVE CLOSED  %s %s  reason=%s  exit=%.5f  total_pnl=%+.2f",
             t["direction"].upper(), t["pair"], reason, price, t["realised_pnl"],
         )
-        self._log_outcome(t)
+        self._log_outcome(t)   # before the copy below, so ml_logged is kept
+        self.closed_trades.append(dict(t))
+        self.closed_trades = self.closed_trades[-500:]
 
     def _log_outcome(self, t: dict) -> None:
-        """Best-effort — a logging failure must never break real trade closing."""
+        """
+        Write the closed trade's outcome + entry-time features to the ML log.
+        Sets t["ml_logged"]. Trades without "ml_signal" were not opened by the
+        bot's own signal (manual/adopted orphans) and are deliberately not
+        used as training data. Best-effort — a logging failure must never
+        break real trade closing.
+        """
+        snapshot = t.get("ml_signal")
+        if not snapshot:
+            logger.info("Trade %s has no bot signal (manual/adopted) — not logged for ML", t.get("id"))
+            return
         try:
-            from learning.data_collector import record_close
             pair = t.get("pair", "")
             pip  = 0.01 if "JPY" in pair else 0.0001
             entry, exit_price = t.get("entry", 0), t.get("exit_price", 0)
@@ -373,16 +399,32 @@ class TradeManager:
                 (close_time - open_time).total_seconds() / 3600
                 if open_time and close_time else 0.0
             )
-            record_close(
+            t["ml_logged"] = record_close(
                 trade_id     = t.get("id", ""),
                 outcome      = "win" if pnl_dollar > 0 else "loss",
                 pnl_pips     = pnl_pips,
                 pnl_dollar   = pnl_dollar,
                 hold_hours   = hold_hours,
                 tp_level_hit = t.get("close_reason", ""),
+                snapshot     = snapshot,
             )
         except Exception as exc:
-            logger.debug("record_close failed for trade %s: %s", t.get("id"), exc)
+            logger.error("record_close failed for trade %s: %s", t.get("id"), exc, exc_info=True)
+
+    def learning_health(self) -> dict:
+        """
+        Is every bot-opened trade reaching the ML log? `unlogged` lists closed
+        trades that carried entry features ("ml_signal") but whose outcome
+        write failed — should always be empty. Trades closed before the
+        2026-09-27 fix have no ml_signal and aren't counted either way.
+        """
+        bot_closed = [t for t in self.closed_trades if t.get("ml_signal")]
+        logged     = [t for t in bot_closed if t.get("ml_logged")]
+        return {
+            "logged":      len(logged),
+            "unlogged":    [t.get("id") for t in bot_closed if not t.get("ml_logged")],
+            "last_logged": max((t.get("close_time") for t in logged if t.get("close_time")), default=None),
+        }
 
     @staticmethod
     def _real_fill(resp: dict) -> tuple[float | None, float | None]:
@@ -586,7 +628,13 @@ class TradeManager:
         # unfilled is just as much "already committed to this pair".
         busy_pairs = [t["pair"] for t in self.open_trades.values()] + \
                      [o["pair"] for o in self.pending_orders.values()]
-        ok, reason = validate_pre_trade(score, len(self.open_trades), pair, busy_pairs)
+        same_pair_directions = [t["direction"] for t in self.open_trades.values()
+                                 if t["pair"] == pair] + \
+                                [o["direction"] for o in self.pending_orders.values()
+                                 if o["pair"] == pair]
+        ok, reason = validate_pre_trade(score, len(self.open_trades), pair, busy_pairs,
+                                         direction=direction,
+                                         same_pair_directions=same_pair_directions)
         if not ok:
             logger.warning("Limit order rejected for %s: %s", pair, reason)
             return None

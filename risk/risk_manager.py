@@ -120,10 +120,26 @@ def get_tp_levels(entry: float, stop_loss: float, direction: str, pair: str = ""
     }
 
 
-def validate_pre_trade(score: int, open_trade_count: int,
-                        pair: str, open_pairs: list) -> tuple[bool, str]:
-    """Return (ok, reason). Checks score, open count, halt flag, duplicate pair."""
-    from config import MIN_CONFLUENCE_SCORE, MAX_OPEN_TRADES
+def validate_pre_trade(score: int, open_trade_count: int, pair: str, open_pairs: list,
+                        direction: str | None = None,
+                        same_pair_directions: list | None = None) -> tuple[bool, str]:
+    """Return (ok, reason). Checks score, open count, halt flag, duplicate pair.
+
+    `direction`/`same_pair_directions` are optional — a caller that doesn't
+    pass them gets the original behavior (any existing trade on `pair`
+    blocks a new one). Passing them enables pyramiding when
+    config.ALLOW_MULTIPLE_PER_PAIR is True: an add-on entry on a pair that
+    already has open trade(s) is allowed only if every existing trade on
+    that pair is the SAME direction as this new signal (never hedges), the
+    pair doesn't already hold config.MAX_PYRAMID_PER_PAIR positions, and
+    this signal's score clears config.PYRAMID_MIN_SCORE — a stricter bar
+    than the normal MIN_CONFLUENCE_SCORE floor below. See tasks/todo.md
+    2026-09-16 and config.py's "Duplicate trade protection / pyramiding"
+    comment for the full rationale.
+    """
+    from config import (MIN_CONFLUENCE_SCORE, MAX_OPEN_TRADES,
+                         ALLOW_MULTIPLE_PER_PAIR, PYRAMID_MIN_SCORE,
+                         MAX_PYRAMID_PER_PAIR)
 
     if TRADING_HALTED:
         return False, "TRADING_HALTED: daily drawdown breached"
@@ -132,7 +148,22 @@ def validate_pre_trade(score: int, open_trade_count: int,
     if open_trade_count >= MAX_OPEN_TRADES:
         return False, f"Max open trades ({MAX_OPEN_TRADES}) reached"
     if pair in open_pairs:
-        return False, f"{pair} already has an open trade"
+        # `direction is None` means this caller didn't opt into the
+        # pyramiding-aware call shape (e.g. agents/risk_agent.py's plain
+        # pass-through) — stay conservative and keep the original hard
+        # block for it even with ALLOW_MULTIPLE_PER_PAIR on, rather than
+        # silently allowing a same-or-opposite-direction stack it never
+        # asked to check for.
+        if not ALLOW_MULTIPLE_PER_PAIR or direction is None:
+            return False, f"{pair} already has an open trade"
+        if same_pair_directions and any(d != direction for d in same_pair_directions):
+            return False, f"{pair} already has an open trade in the opposite direction"
+        if same_pair_directions and len(same_pair_directions) >= MAX_PYRAMID_PER_PAIR:
+            return False, (f"{pair} already has {len(same_pair_directions)} open "
+                            f"trades (max {MAX_PYRAMID_PER_PAIR} per pair)")
+        if score < PYRAMID_MIN_SCORE:
+            return False, (f"{pair} already has an open trade — pyramid score "
+                            f"{score} < {PYRAMID_MIN_SCORE}")
     return True, ""
 
 

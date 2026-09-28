@@ -22,3 +22,14 @@ def _isolate_trade_manager(tmp_path, monkeypatch):
     with disk persistence) — never inherit from data/live_state_*.json.
     """
     monkeypatch.setattr(_tm_mod, "_DEFAULT_SAVE_DIR", tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_signal_log(tmp_path, monkeypatch):
+    """
+    Trade closes now really write to the ML log (2026-09-27 id-mismatch
+    fix), so no test may ever append to data/signal_log.csv — a test
+    polluting that file already caused a stale-signal bug once (2026-07-24).
+    """
+    import learning.data_collector as _dc
+    monkeypatch.setattr(_dc, "SIGNAL_LOG", str(tmp_path / "test_signal_log.csv"))

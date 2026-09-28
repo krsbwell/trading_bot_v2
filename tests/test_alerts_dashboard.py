@@ -259,6 +259,34 @@ class TestDashboardPanels:
         panel = open_trades_panel(trades, "paper")
         assert isinstance(panel, html.Div)
 
+    def test_open_trades_reconciled_orphan_none_tps(self):
+        # Regression: reconcile_orphaned_trades() (see bugs_weekend_close_desync
+        # memory) adopts broker-open trades with no local record and sets
+        # tp1/tp2/tp3 to None (the broker doesn't expose the original TP
+        # ladder). open_trades_panel() used to crash on this every 5s
+        # (`tp3 - entry` on None), blanking the whole trades/stats panel —
+        # must render "—" for the unset TPs instead of raising.
+        from dash import html
+        from dashboard.panels import open_trades_panel
+        trades = [{"id": "226", "pair": "GBP_USD", "direction": "long",
+                   "entry": 1.34847, "tp1": None, "tp2": None, "tp3": None,
+                   "sl": 1.34596, "size": 1, "remaining": 1.0,
+                   "realised_pnl": 0.0, "reconciled_orphan": True}]
+        panel = open_trades_panel(trades, "live")
+        assert isinstance(panel, html.Div)
+
+    def test_pending_orders_none_tps(self):
+        # Same None-vs-missing-key trap for a limit order placed with a
+        # TP left blank — see the open_trades_panel regression above.
+        from dash import html
+        from dashboard.panels import pending_orders_panel
+        orders = [{"id": "P1", "pair": "EUR_USD", "direction": "long",
+                   "limit_price": 1.08, "sl": 1.078,
+                   "tp1": 1.082, "tp2": None, "tp3": None,
+                   "size": 50000, "candles_missed": 0}]
+        panel = pending_orders_panel(orders, "paper")
+        assert isinstance(panel, html.Div)
+
     def test_account_stats_bar(self):
         from dash import html
         from dashboard.panels import account_stats_bar

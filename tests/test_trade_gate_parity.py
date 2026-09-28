@@ -90,8 +90,15 @@ def _patch_common(monkeypatch, trade_manager, mode="demo"):
 def test_duplicate_pair_blocked_in_demo_mode_with_audit_trail(monkeypatch):
     """The exact NZD_USD 2026-08-06 scenario: a TRIGGERED signal on a pair
     that already has an open trade, in demo mode. Must be blocked AND
-    audited — neither happened before this fix."""
+    audited — neither happened before this fix.
+
+    Pins ALLOW_MULTIPLE_PER_PAIR off (on by default as of 2026-09-16) since
+    this test is specifically about the no-pyramiding behavior — see
+    TestTradeManagerPyramiding-equivalent coverage in test_trade.py for the
+    pyramiding-on case (same score/direction here would now be a valid
+    add-on, not a block)."""
     _reset_state()
+    monkeypatch.setattr(config, "ALLOW_MULTIPLE_PER_PAIR", False)
     existing = {"id": "77", "pair": "NZD_USD", "direction": "long", "entry": 0.58833}
     tm = _FakeTradeManager(existing_trade=existing)
     audit_calls, skip_calls = _patch_common(monkeypatch, tm, mode="demo")
@@ -142,7 +149,6 @@ def test_clean_signal_still_opens_a_trade_in_demo_mode(monkeypatch):
     _reset_state()
     tm = _FakeTradeManager()
     audit_calls, _ = _patch_common(monkeypatch, tm, mode="demo")
-    monkeypatch.setattr(main, "record_signal", lambda *a, **k: None)
     monkeypatch.setattr(main, "get_quote_to_usd_rate", lambda *a, **k: 1.0)
     monkeypatch.setattr(main, "calculate_position_size", lambda *a, **k: 1000)
     monkeypatch.setattr(main, "_sync_live_state", lambda: None)
@@ -155,8 +161,12 @@ def test_clean_signal_still_opens_a_trade_in_demo_mode(monkeypatch):
 
 def test_paper_mode_behavior_unchanged(monkeypatch):
     """Same duplicate scenario, but in paper mode — must behave exactly as
-    it did before this fix (this path was never broken)."""
+    it did before this fix (this path was never broken).
+
+    Pins ALLOW_MULTIPLE_PER_PAIR off (on by default as of 2026-09-16) — see
+    the demo-mode duplicate test above for why."""
     _reset_state()
+    monkeypatch.setattr(config, "ALLOW_MULTIPLE_PER_PAIR", False)
 
     class _FakePaperTrader:
         def __init__(self, existing):
@@ -184,3 +194,21 @@ def test_paper_mode_behavior_unchanged(monkeypatch):
 
     assert len(audit_calls) == 1
     assert "already has open trade id=77" in audit_calls[0]["reject_reason"]
+
+
+def test_score_floor_drop_is_audited(monkeypatch):
+    """2026-09-27: a TRIGGERED signal scoring under the main.py floor (e.g.
+    54 vs 55) was dropped with no BLOCKED audit row — ~35 setups vanished
+    that way. It must now be audited (and still not traded)."""
+    _reset_state()
+    tm = _FakeTradeManager()
+    audit_calls, skip_calls = _patch_common(monkeypatch, tm, mode="demo")
+    state.update(min_score=55)
+
+    main._process_pair("NZD_USD", "forex", _FakeEngine(score=54))
+
+    assert tm.open_trade_called is False
+    assert len(audit_calls) == 1
+    assert audit_calls[0]["result"] == "BLOCKED"
+    assert "floor" in audit_calls[0]["reject_reason"]
+    assert len(skip_calls) == 1
