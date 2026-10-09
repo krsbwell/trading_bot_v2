@@ -369,11 +369,20 @@ class MockForexConnector:
         # TradeDetails 404s NO_SUCH_TRADE on a trade that's been closed for
         # hours). Keyed by trade_id; None/absent means "nothing found".
         self.tx_close_data = {}
+        # set to an Exception instance to make place_market_order() raise
+        # it instead of returning a trade_id — simulates a cancelled/
+        # rejected order (2026-10-08 fix, see place_market_order() below).
+        self.place_order_raises = None
 
     def get_trade_close_from_transactions(self, trade_id):
         return self.tx_close_data.get(trade_id)
 
     def place_market_order(self, instrument, units, sl_price, tp_prices):
+        # Simulates the real connector's fixed 2026-10-08 behavior — a
+        # cancelled/rejected/unrecognized order raises instead of
+        # returning a fake trade_id. Tests set this to simulate that.
+        if self.place_order_raises is not None:
+            raise self.place_order_raises
         self._counter += 1
         tid = f"MOCK-{self._counter:04d}"
         self.orders.append({"id": tid, "instrument": instrument, "units": units})
@@ -456,6 +465,26 @@ class TestTradeManagerForex:
         assert tm.open_trade(_signal(score=50)) is None
         assert len(conn.orders) == 0
 
+    def test_cancelled_order_creates_no_phantom_open_trade(self):
+        """End-to-end regression for the 2026-10-08 incident: when the
+        broker cancels an order (e.g. INSUFFICIENT_MARGIN at 28-pair
+        scale), place_market_order() now raises instead of returning a
+        fake trade_id built from the cancellation's own transaction ID.
+        open_trade()'s existing exception handling (unchanged by this fix)
+        must turn that into a clean None — no entry in self.open_trades,
+        no inflated open-trade count feeding MAX_OPEN_TRADES or the
+        duplicate-pair gate for a position that was never actually opened
+        at the broker."""
+        conn = MockForexConnector()
+        conn.place_order_raises = ValueError(
+            "Oanda cancelled order for EUR_AUD: INSUFFICIENT_MARGIN"
+        )
+        tm = TradeManager(conn, "forex")
+        result = tm.open_trade(_signal(pair="EUR_AUD"))
+        assert result is None
+        assert tm.open_trades == {}
+        assert len(tm.closed_trades) == 0   # not even a phantom closed entry
+
     def test_rejected_duplicate_pair(self, monkeypatch):
         # Pyramiding (config.ALLOW_MULTIPLE_PER_PAIR) is on by default as of
         # 2026-09-16 — pin it off here to test the original "no multiple
@@ -487,6 +516,20 @@ class TestTradeManagerForex:
         tm.on_candle_close("EUR_USD", {"high": 1.0785, "low": 1.0772, "close": 1.0775})
         assert tid not in tm.open_trades
         assert len(conn.closes) >= 1
+
+    def test_sl_triggers_close_also_updates_daily_loss(self):
+        """The direct candle-check SL path (as opposed to the broker-
+        reconciled path — see TestTradeManagerReconcileOpenTrades'
+        test_reconciled_close_feeds_daily_loss_tracker for that one and
+        why both matter) must still feed update_daily_loss() after moving
+        the call from this call site into the shared _finalize_close()."""
+        rm.TRADING_HALTED = False
+        rm._daily_loss = 0.0
+        conn = MockForexConnector()
+        tm = TradeManager(conn, "forex")
+        tm.open_trade(_signal(entry=1.0800, sl=1.0780))
+        tm.on_candle_close("EUR_USD", {"high": 1.0785, "low": 1.0772, "close": 1.0775})
+        assert rm._daily_loss < 0
 
     def test_tp1_partial_close_issued(self):
         conn = MockForexConnector()
@@ -915,6 +958,71 @@ class TestTradeManagerReconcileOpenTrades:
         assert closed["close_reason"] == "sl"
         assert closed["exit_price"] == 1.0780
         assert closed["realised_pnl"] == -40.0
+
+    def test_reconciled_close_feeds_daily_loss_tracker(self):
+        """Regression for the 2026-10-07 incident: a real 28-pair live
+        session lost 7.3% of balance in a day (6 SL hits) while
+        TRADING_HALTED never engaged, because every one of those closes
+        went through reconcile_open_trades() (the broker already filled
+        the SL before our own candle check saw it — confirmed live, "LIVE
+        RECONCILED CLOSE ... detected via broker poll, not our own candle
+        check"), and that path never called update_daily_loss(). Fixed by
+        moving the call into _finalize_close(), the one chokepoint every
+        close path shares. This test is the SL/reconcile side; see
+        test_sl_triggers_close_also_updates_daily_loss for the direct
+        candle-check side."""
+        conn = MockForexConnector()
+        conn._balance = 1000.0
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
+        conn.broker_trades = []
+        conn.trade_details[tid] = {
+            "state": "CLOSED", "open_time": None, "close_time": None,
+            "avg_close_price": 1.0779, "realized_pl": -40.0, "close_reason": "sl",
+        }
+        assert rm._daily_loss == 0.0
+        tm.reconcile_open_trades()
+        assert rm._daily_loss == -40.0   # 4% of $1000 balance — above the 3% halt
+
+    def test_reconciled_loss_crossing_3pct_halts_new_trades(self):
+        """The actual safety behavior that matters: once accumulated
+        reconciled losses cross MAX_DAILY_DRAWDOWN, validate_pre_trade()
+        must start rejecting new signals — not just that a number
+        somewhere got updated."""
+        conn = MockForexConnector()
+        conn._balance = 1000.0
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780))
+        conn.broker_trades = []
+        conn.trade_details[tid] = {
+            "state": "CLOSED", "open_time": None, "close_time": None,
+            "avg_close_price": 1.0779, "realized_pl": -35.0, "close_reason": "sl",   # 3.5% of $1000
+        }
+        assert rm.TRADING_HALTED is False
+        tm.reconcile_open_trades()
+        assert rm.TRADING_HALTED is True
+        ok, reason = rm.validate_pre_trade(score=90, open_trade_count=0, pair="GBP_USD", open_pairs=[])
+        assert ok is False
+        assert "TRADING_HALTED" in reason
+
+    def test_unknown_broker_close_also_feeds_daily_loss_tracker(self):
+        """Same gap, the other fallback path (TradeDetails AND the
+        transaction log both fail — see test_detail_fetch_failure_also_
+        raises above): must still reach _finalize_close() and therefore
+        still update the daily-loss tracker, using the best-estimate pnl."""
+        conn = MockForexConnector()
+        conn._balance = 1000.0
+        tm = TradeManager(conn, "forex", save_path=False)
+        tid = tm.open_trade(_signal(pair="EUR_USD", entry=1.0800, sl=1.0780, score=80))
+        tm.open_trades[tid]["last_price"] = 1.0750   # big adverse move, no broker data at all
+        conn.broker_trades = []
+        conn.trade_details_raises.add(tid)
+        # tx_close_data left empty — both TradeDetails and the transaction
+        # log fail, forcing the "unknown_broker_close" best-estimate path.
+        assert rm._daily_loss == 0.0
+        tm.reconcile_open_trades()
+        assert tm.closed_trades[-1]["close_reason"] == "unknown_broker_close"
+        assert rm._daily_loss < 0   # a real loss was still recorded, not silently dropped
 
     def test_detail_fetch_failure_still_finalizes_with_best_estimate(self):
         """The trade is definitely gone broker-side either way — if the

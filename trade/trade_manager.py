@@ -309,10 +309,10 @@ class TradeManager:
         sl_hit = (d == "long" and low <= t["sl"]) or \
                  (d == "short" and high >= t["sl"])
         if sl_hit:
-            pnl_before = t.get("realised_pnl", 0.0)
             fill_price = self._exec_close(t, t["sl"], t["remaining"], "sl")
-            pnl = t.get("realised_pnl", 0.0) - pnl_before
-            update_daily_loss(pnl, self._get_account().get("balance", t["size"] * t["entry"]))
+            # update_daily_loss() is now called once, centrally, inside
+            # _finalize_close() below — covers every close path, not just
+            # this one. See _finalize_close()'s docstring for why.
             self._finalize_close(t, fill_price, "sl")
             return True
 
@@ -381,6 +381,25 @@ class TradeManager:
         persisted like PaperTrader), and feed the ML training data the same
         way a closed paper trade does — previously only paper trades ever
         reached learning.data_collector.record_close().
+
+        Also the single place update_daily_loss() is called (fixed
+        2026-10-07 — see bugs_daily_drawdown_halt_not_wired memory).
+        Previously only the bot's own tick-by-tick SL check (above) called
+        it, directly, with a locally-computed pnl delta. Every OTHER close
+        path — reconciled broker-side closes (the NORMAL way a stop-loss
+        actually fires, since the SL order lives on the broker, not in this
+        code's polling loop), TP3, manual close, unknown_broker_close — all
+        funnel through this one function and never touched the daily-loss
+        tracker at all. Confirmed live: a 28-pair session produced a real
+        -$32.40 / 7.3% day (6 SL losses, all via the broker-reconciled
+        path) while TRADING_HALTED never engaged, because config's 3%
+        daily halt was tracking a number (_daily_loss) that this path never
+        updated. _finalize_close() runs exactly once per trade, when it's
+        fully closed (t["realised_pnl"] is each partial fill's pnl already
+        summed by then — see _exec_close()), so calling it here once, with
+        the final total, is correct for every path at once instead of
+        scattered per-call-site risk of missing one (which is exactly how
+        this gap happened the first time).
         """
         t["close_reason"] = reason
         t["exit_price"]   = price
@@ -389,6 +408,12 @@ class TradeManager:
             "LIVE CLOSED  %s %s  reason=%s  exit=%.5f  total_pnl=%+.2f",
             t["direction"].upper(), t["pair"], reason, price, t["realised_pnl"],
         )
+        try:
+            update_daily_loss(t.get("realised_pnl", 0.0),
+                               self._get_account().get("balance", t["size"] * t["entry"]))
+        except Exception as exc:
+            logger.error("update_daily_loss failed for %s — daily halt may undercount: %s",
+                          t.get("id"), exc, exc_info=True)
         self._log_outcome(t)   # before the copy below, so ml_logged is kept
         self.closed_trades.append(dict(t))
         self.closed_trades = self.closed_trades[-500:]

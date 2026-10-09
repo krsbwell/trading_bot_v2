@@ -436,7 +436,27 @@ class OandaConnector:
                      tp2/tp3 are managed by trade_manager on subsequent candles
 
         Returns trade_id string.
-        Raises V20Error on API failure or ValueError if order was rejected.
+        Raises V20Error on API failure, or ValueError if OANDA did not
+        actually open a trade (rejected, cancelled, or an unrecognized
+        response shape — see the ordering note below).
+
+        Response handling order (2026-10-08 — see
+        bugs_phantom_trade_from_order_cancel memory for the incident this
+        fixes): a successful FILL is checked FIRST, before either failure
+        path, so a legitimate orderFillTransaction can never be shadowed
+        by a reject/cancel key that happens to also be present in the same
+        response. Only once "did this actually open a trade" is answered
+        NO do we look at why: explicit reject, explicit cancel, or (last
+        resort) a shape this code doesn't recognize at all — the last case
+        raises loudly with the full response logged rather than guessing
+        a trade_id from relatedTransactionIDs, which is what silently
+        manufactured phantom trade_ids out of INSUFFICIENT_MARGIN order
+        cancellations before this fix (confirmed live: 5 "trades" at
+        28-pair scale were actually ORDER_CANCEL transaction IDs, stored
+        in TradeManager.open_trades as if real, later surfacing as
+        unknown_broker_close with fabricated P&L once reconciliation gave
+        up looking for a close that never happened because the trade
+        never opened).
         """
         order_body: dict = {
             "order": {
@@ -470,32 +490,60 @@ class OandaConnector:
             )
             raise
 
-        # Market order rejected (e.g. market closed, insufficient margin)
+        # ── 1. Did we get a successful fill? Checked FIRST — a real
+        # tradeOpened.tradeID is the one unambiguous "this actually
+        # opened" signal, and must win regardless of whatever else the
+        # response does or doesn't also contain. ──────────────────────────
+        fill = resp.get("orderFillTransaction", {})
+        trade_opened = fill.get("tradeOpened", {})
+        trade_id = trade_opened.get("tradeID")
+
+        if trade_id:
+            direction = "BUY" if units > 0 else "SELL"
+            logger.info(
+                "%s %s  units=%s  SL=%.5f  TP1=%s  → trade_id=%s",
+                direction, instrument, units, sl_price,
+                f"{tp_prices[0]:.5f}" if tp_prices else "none",
+                trade_id,
+            )
+            return str(trade_id)
+
+        # ── 2. Did OANDA explicitly reject the order? (e.g. market closed) ──
         if "orderRejectTransaction" in resp:
             reason = resp["orderRejectTransaction"].get("rejectReason", "unknown")
             logger.error("Order rejected for %s: %s", instrument, reason)
             raise ValueError(f"Oanda rejected order for {instrument}: {reason}")
 
-        fill = resp.get("orderFillTransaction", {})
-        trade_opened = fill.get("tradeOpened", {})
-        trade_id = trade_opened.get("tradeID")
+        # ── 3. Did OANDA explicitly cancel the order? (e.g. a FOK market
+        # order that can't fill — confirmed live: INSUFFICIENT_MARGIN at
+        # 28-pair scale.) A cancellation is a different response key
+        # (orderCancelTransaction) than a rejection and was previously not
+        # checked at all, falling through to the dangerous guess below. ──
+        if "orderCancelTransaction" in resp:
+            reason = resp["orderCancelTransaction"].get("reason", "unknown")
+            logger.error("Order cancelled for %s: %s", instrument, reason)
+            raise ValueError(f"Oanda cancelled order for {instrument}: {reason}")
 
-        if not trade_id:
-            # Fall back to relatedTransactionIDs if tradeOpened not present
-            ids = resp.get("relatedTransactionIDs", [])
-            trade_id = ids[-1] if ids else "unknown"
-            logger.warning(
-                "tradeOpened not in fill response; guessing trade_id=%s", trade_id
-            )
-
-        direction = "BUY" if units > 0 else "SELL"
-        logger.info(
-            "%s %s  units=%s  SL=%.5f  TP1=%s  → trade_id=%s",
-            direction, instrument, units, sl_price,
-            f"{tp_prices[0]:.5f}" if tp_prices else "none",
-            trade_id,
+        # ── 4. None of the above — no fill, no reject, no cancel. This is
+        # an unrecognized response shape, not a known outcome. Previously
+        # this guessed a trade_id from relatedTransactionIDs[-1], which is
+        # exactly how a cancellation's own transaction ID got manufactured
+        # into the appearance of a real trade. Deliberately NOT silently
+        # handled and NOT removed outright either — flagged loudly (raise
+        # + full response logged) since the full space of legitimate OANDA
+        # response variants hasn't been audited. If this ever fires in
+        # practice, the logged response is what to review before deciding
+        # whether it needs its own explicit branch. ────────────────────────
+        logger.error(
+            "place_market_order: unrecognized response for %s — no fill, no "
+            "reject, no cancel. Full response: %s",
+            instrument, resp,
         )
-        return str(trade_id)
+        raise RuntimeError(
+            f"Oanda order response for {instrument} matched no known outcome "
+            f"(no fill/reject/cancel) — see logged response for review, "
+            f"refusing to invent a trade_id."
+        )
 
     def place_limit_order(
         self,

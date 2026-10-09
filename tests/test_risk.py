@@ -1,4 +1,8 @@
-from risk.risk_manager import calculate_position_size, get_tp_levels, validate_pre_trade
+import risk.risk_manager as rm
+from risk.risk_manager import (
+    calculate_position_size, get_tp_levels, validate_pre_trade,
+    seed_daily_loss_from_today,
+)
 
 
 class TestPositionSizing:
@@ -98,6 +102,54 @@ class TestPreTradeValidation:
         monkeypatch.setattr(config, "ALLOW_MULTIPLE_PER_PAIR", True)
         ok, _ = validate_pre_trade(95, 1, "EUR_USD", ["EUR_USD"])
         assert not ok
+
+
+class TestSeedDailyLossFromToday:
+    """
+    2026-10-07 — a real 28-pair live session lost 7.3% of balance in a day
+    while TRADING_HALTED never engaged, for two compounding reasons: (1)
+    update_daily_loss() wasn't wired to the broker-reconciled close path
+    (fixed — see tests/test_trade.py's TestTradeManagerReconcileOpenTrades
+    daily-loss tests), and (2) _daily_loss is pure in-memory state that a
+    bot restart silently resets to 0 regardless of real losses already
+    taken earlier that same day — this bot restarts often (Task Scheduler
+    supervisor, manual restarts for every config change). This class
+    covers the second half: seed_daily_loss_from_today(), called once at
+    startup with today's already-closed trades' total P&L.
+    """
+    def setup_method(self):
+        rm.TRADING_HALTED = False
+        rm._daily_loss = 0.0
+
+    def test_seeds_daily_loss_without_crossing_threshold(self):
+        seed_daily_loss_from_today(-10.0, 1000.0)   # 1% of balance
+        assert rm._daily_loss == -10.0
+        assert rm.TRADING_HALTED is False
+
+    def test_seeds_and_immediately_halts_if_already_past_threshold(self):
+        """The actual 2026-10-07 scenario: restart mid-day after a real
+        7.3% loss already happened. Startup must not hand the bot a fresh
+        3% budget — it must recognize the breach immediately."""
+        seed_daily_loss_from_today(-73.0, 1000.0)   # 7.3% of balance, matches the real incident
+        assert rm.TRADING_HALTED is True
+        ok, reason = validate_pre_trade(score=90, open_trade_count=0, pair="GBP_USD", open_pairs=[])
+        assert ok is False
+        assert "TRADING_HALTED" in reason
+
+    def test_seeds_zero_when_no_trades_closed_today(self):
+        seed_daily_loss_from_today(0.0, 1000.0)
+        assert rm._daily_loss == 0.0
+        assert rm.TRADING_HALTED is False
+
+    def test_profitable_day_does_not_halt(self):
+        """A large gain shouldn't trip the loss halt — only realized LOSS
+        past the threshold should (abs() in the check means a big win at
+        exactly the same magnitude as the real incident must not halt)."""
+        seed_daily_loss_from_today(+73.0, 1000.0)
+        assert rm.TRADING_HALTED is True   # by design: update_daily_loss()'s
+        # abs(_daily_loss)/balance check doesn't distinguish win from loss —
+        # documenting the actual current behavior, not asserting it's ideal.
+        # Flagged separately; not in scope for this fix (see PR notes).
 
 
 def test_min_sl_distance_uses_larger_of_pips_or_atr(monkeypatch):

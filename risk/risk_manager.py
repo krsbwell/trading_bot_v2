@@ -1,3 +1,7 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
 TRADING_HALTED = False
 _daily_loss = 0.0
 _session_open_balance = 0.0
@@ -183,3 +187,33 @@ def reset_daily_state(current_balance: float) -> None:
     _daily_loss = 0.0
     _session_open_balance = current_balance
     TRADING_HALTED = False
+
+
+def seed_daily_loss_from_today(realized_pnl_today: float, balance: float) -> None:
+    """
+    Call once at bot startup, after loading today's already-closed trades
+    from disk, so a mid-day restart doesn't silently reset the 3% halt's
+    counter to 0 regardless of what already happened earlier that day.
+
+    _daily_loss/TRADING_HALTED are pure in-memory state (see
+    update_daily_loss()/reset_daily_state() above) — they don't survive a
+    process restart on their own. This bot restarts often (Task Scheduler
+    supervisor, manual restarts for config changes, crash recovery), and
+    with no seeding step, every restart was an implicit "you have a fresh
+    3% budget" regardless of real losses already realized that day. Found
+    2026-10-07 alongside the related update_daily_loss() wiring gap (see
+    bugs_daily_drawdown_halt_not_wired memory) — same root problem
+    (the halt's state doesn't reliably reflect reality), different cause.
+    """
+    global _daily_loss, TRADING_HALTED
+    from config import MAX_DAILY_DRAWDOWN
+
+    _daily_loss = realized_pnl_today
+    if balance > 0 and abs(_daily_loss) / balance >= MAX_DAILY_DRAWDOWN:
+        TRADING_HALTED = True
+        logger.warning(
+            "TRADING_HALTED on startup: today's already-realized P&L ($%.2f) "
+            "is %.1f%% of balance ($%.2f) — at or past the %.0f%% daily halt.",
+            _daily_loss, 100 * abs(_daily_loss) / balance, balance,
+            100 * MAX_DAILY_DRAWDOWN,
+        )

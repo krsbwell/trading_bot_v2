@@ -133,6 +133,94 @@ class TestOandaConnectorTransactionFallback:
         assert connector.get_trade_close_from_transactions("77") is None
 
 
+class TestOandaConnectorPlaceMarketOrder:
+    """
+    place_market_order() — fixed 2026-10-08 after a live incident: at
+    28-pair scale, FOK market orders started getting cancelled by OANDA
+    for INSUFFICIENT_MARGIN. The code only checked for
+    orderRejectTransaction, not orderCancelTransaction, so a cancellation
+    fell through to a fallback that guessed a trade_id from
+    relatedTransactionIDs[-1] — which is the CANCEL transaction's own ID,
+    not a trade ID. That phantom "trade" then got stored in
+    TradeManager.open_trades as if real (see
+    bugs_phantom_trade_from_order_cancel memory for the full incident).
+
+    Response handling order is deliberate and tested explicitly below: a
+    successful fill is checked FIRST, before reject or cancel, so it can
+    never be shadowed even if a response hypothetically carried more than
+    one of these keys at once.
+    """
+    @pytest.fixture
+    def connector(self, monkeypatch):
+        import config as cfg
+        monkeypatch.setattr(cfg, "OANDA_API_KEY", "fake-key")
+        monkeypatch.setattr(cfg, "OANDA_ACCOUNT_ID", "fake-account")
+        from connectors.oanda_connector import OandaConnector
+        return OandaConnector()
+
+    def test_successful_fill_returns_real_trade_id(self, connector, monkeypatch):
+        monkeypatch.setattr(connector.client, "request", lambda req: {
+            "orderFillTransaction": {"tradeOpened": {"tradeID": "336"}},
+            "relatedTransactionIDs": ["335", "336"],
+        })
+        trade_id = connector.place_market_order("EUR_USD", 1000, 1.0800, [1.0850])
+        assert trade_id == "336"
+
+    def test_order_cancelled_insufficient_margin_raises_not_phantom_id(self, connector, monkeypatch):
+        """The exact live incident: a cancelled FOK order must raise, never
+        return a trade_id — the OANDA transaction ID of the cancellation
+        itself (334 in the real case) must never be mistaken for a trade."""
+        monkeypatch.setattr(connector.client, "request", lambda req: {
+            "orderCancelTransaction": {"id": "334", "reason": "INSUFFICIENT_MARGIN"},
+            "relatedTransactionIDs": ["333", "334"],
+        })
+        with pytest.raises(ValueError, match="INSUFFICIENT_MARGIN"):
+            connector.place_market_order("EUR_AUD", 2497, 1.6100, [1.6050])
+
+    def test_order_rejected_still_raises_as_before(self, connector, monkeypatch):
+        """Regression — the pre-existing reject path must keep working
+        unchanged."""
+        monkeypatch.setattr(connector.client, "request", lambda req: {
+            "orderRejectTransaction": {"rejectReason": "MARKET_HALTED"},
+        })
+        with pytest.raises(ValueError, match="MARKET_HALTED"):
+            connector.place_market_order("EUR_USD", 1000, 1.0800, [1.0850])
+
+    def test_fill_takes_priority_over_reject_and_cancel_if_both_present(self, connector, monkeypatch):
+        """The ordering safety requirement: if a response ever carried BOTH
+        a real fill AND a reject/cancel-shaped key (shouldn't normally
+        happen, but the check order must not assume it can't), the fill
+        must win — a real opened trade can never be shadowed into a raise
+        by an unrelated/stale key also being present."""
+        monkeypatch.setattr(connector.client, "request", lambda req: {
+            "orderFillTransaction": {"tradeOpened": {"tradeID": "500"}},
+            "orderCancelTransaction": {"id": "499", "reason": "LINKED_TRADE_CLOSED"},
+            "orderRejectTransaction": {"rejectReason": "STALE_DATA"},
+        })
+        trade_id = connector.place_market_order("GBP_USD", 1000, 1.3000, [1.3050])
+        assert trade_id == "500"
+
+    def test_unrecognized_response_shape_raises_and_does_not_guess(self, connector, monkeypatch):
+        """No fill, no reject, no cancel — this is the dangerous fallback
+        the incident came from (trade_id = ids[-1] if ids else "unknown").
+        Must now raise rather than manufacture a trade_id, even though
+        relatedTransactionIDs is populated and would have supplied one
+        under the old code."""
+        monkeypatch.setattr(connector.client, "request", lambda req: {
+            "relatedTransactionIDs": ["900", "901"],
+        })
+        with pytest.raises(RuntimeError, match="no known outcome"):
+            connector.place_market_order("USD_JPY", 1000, 150.00, [150.50])
+
+    def test_unrecognized_response_with_no_related_ids_also_raises(self, connector, monkeypatch):
+        """Even the emptiest possible response (what the old code would
+        have returned trade_id="unknown" for) must raise, not succeed with
+        a placeholder ID."""
+        monkeypatch.setattr(connector.client, "request", lambda req: {})
+        with pytest.raises(RuntimeError, match="no known outcome"):
+            connector.place_market_order("USD_JPY", 1000, 150.00, [150.50])
+
+
 class TestOandaConnectorPagination:
     """2026-08-17 — get_candles() transparently pages past OANDA's 4999-
     candle single-request cap. This silently limited every M15/M30 backtest
