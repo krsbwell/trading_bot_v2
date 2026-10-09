@@ -119,11 +119,20 @@ class TestStrategyRoutingForSwitchedPairs:
 
 class TestPairListsReflectThePause:
     def test_forex_pairs_after_rescreen(self):
-        """2026-09-28: only the 3 pairs that passed the pre-set criteria."""
-        assert config.FOREX_PAIRS == ["GBP_USD", "EUR_USD", "AUD_JPY"]
+        """2026-09-28: the screen itself still only validated 3 pairs
+        (GBP_USD/EUR_USD/AUD_JPY) — this just checks they're still present,
+        not that FOREX_PAIRS is limited to them. 2026-10-07: the user
+        explicitly re-added the other 25 rejected pairs for trade-volume
+        reasons (see config.py's FOREX_PAIRS comment); that override didn't
+        re-validate them, so this test doesn't claim they're profitable."""
+        for pair in ("GBP_USD", "EUR_USD", "AUD_JPY"):
+            assert pair in config.FOREX_PAIRS
+        assert len(config.FOREX_PAIRS) == 28
 
     def test_failed_pairs_removed_not_watched(self):
-        """User's rule: a pair that fails the screen is removed, not watched."""
+        """User's rule: a pair that fails the screen is removed, not watched.
+        Still true after 2026-10-07 — the 25 re-added pairs went straight
+        back into FOREX_PAIRS, not FOREX_WATCH, so this stays empty."""
         assert config.FOREX_WATCH == []
 
 

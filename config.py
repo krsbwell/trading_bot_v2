@@ -90,7 +90,29 @@ MODE = "demo"   # "paper" (pure simulation, no OANDA orders) / "demo" (real
 #   GBP_USD trend_retest    1st PF 1.16 (22) | 2nd PF 2.25 (27) | DD 7.2%
 #   EUR_USD trend_retest    1st PF 1.17 (22) | 2nd PF 1.55 (16) | DD 7.2%
 #   AUD_JPY breakout_retest 1st PF 1.53 (30) | 2nd PF 1.34 (39) | DD 7.7%
-FOREX_PAIRS  = ["GBP_USD", "EUR_USD", "AUD_JPY"]
+#
+# 2026-10-07 — all 25 rejected pairs added back (user's explicit call,
+# overriding the 09-28 screen above) to raise trade throughput for
+# statistical sample size; MODE is still "demo" (OANDA practice account,
+# no real capital). The 09-28 PF/DD numbers above and in the "Rejected"
+# comment below are UNCHANGED and still apply to these pairs — re-adding
+# them did not re-validate them, it just lets them trade again.
+# KNOWN GAP: none of these 25 have a STRATEGY_OVERRIDE entry, so they run
+# on the default strategy_ema_cci_macd ("EMA-bounce") — the one strategy
+# the 2026-08-13 exhaustive WFO search found NO live edge for on ANY pair
+# tested. The 09-28 screen's actual per-pair winning strategy (breakout_
+# retest vs trend_retest) wasn't preserved to disk, so it couldn't be
+# restored here without re-running the full screen. If/when trade volume
+# on these pairs is reviewed, re-running that screen to assign each pair
+# its better-of-two strategy (instead of the EMA-bounce default) is the
+# logical next step.
+FOREX_PAIRS  = ["GBP_USD", "EUR_USD", "AUD_JPY",
+                 "AUD_CAD", "AUD_CHF", "AUD_NZD", "AUD_USD",
+                 "CAD_CHF", "CAD_JPY", "CHF_JPY",
+                 "EUR_AUD", "EUR_CAD", "EUR_CHF", "EUR_GBP", "EUR_JPY", "EUR_NZD",
+                 "GBP_AUD", "GBP_CAD", "GBP_CHF", "GBP_JPY", "GBP_NZD",
+                 "NZD_CAD", "NZD_CHF", "NZD_JPY", "NZD_USD",
+                 "USD_CAD", "USD_CHF", "USD_JPY"]
 
 # Per-pair strategy override — a pair not listed here uses the default
 # (strategy_ema_cci_macd / "EMA-bounce"). breakout_retest and trend_retest
@@ -109,7 +131,25 @@ STRATEGY_OVERRIDE = {
                                       # 10% cap and 1st-half PF 1.04 < 1.1); trend_retest
                                       # won the 1st half and passed out-of-sample
     "EUR_USD":  "trend_retest",
-    "AUD_JPY":  "breakout_retest",
+    "AUD_JPY":  "breakout_retest",   # 2026-10-07 — user reviewed Phase 1's fire-rate/
+                                      # trade-count numbers (breakout_retest: 14.3% fire,
+                                      # only 2 historical trades vs ema_bounce's 21.4%/42
+                                      # and trend_retest's 15.5%/7) and decided to
+                                      # deprioritize breakout_retest going forward:
+                                      # EMA Bounce primary, Trend-Retest secondary. AUD_JPY
+                                      # is deliberately kept here rather than defaulted to
+                                      # ema_bounce or moved to trend_retest — it's one of
+                                      # only 3 pairs (of 28) that passed the 09-28 re-screen,
+                                      # specifically ON breakout_retest (1st PF 1.53, 2nd PF
+                                      # 1.34, DD 7.7%); neither of the other two strategies
+                                      # has ever been validated for this pair specifically,
+                                      # so reassigning it would trade a proven combination
+                                      # for an untested one. Since AUD_JPY is already the
+                                      # only pair using breakout_retest, "deprioritizing" it
+                                      # is this comment, not a code change — strategy_
+                                      # breakout_retest.py is untouched and still live for
+                                      # this one pair. Don't add new pairs to it without a
+                                      # fresh backtest; see tasks/todo.md "Phase 2C".
 }
 
 # Per-pair tuned knobs for strategy_trend_retest.py (h4_bias_period,

@@ -73,6 +73,13 @@ _PAIR_ENCODING: dict = {
     "EUR_AUD": 5, "EUR_JPY": 6, "USD_CAD": 7, "EUR_CHF": 8, "EUR_CAD": 9,
     "EUR_GBP": 10, "CAD_CHF": 11, "NZD_CHF": 12, "XAU_USD": 13,
     "EUR_USD": 14,   # 2026-09-28 — live again after the full re-screen
+    # 2026-10-07 — the other 14 pairs FOREX_PAIRS gained when all 25
+    # 09-28-rejected pairs were re-added (see config.py's FOREX_PAIRS
+    # comment). Appended, not inserted — same rule as above.
+    "AUD_CAD": 15, "AUD_CHF": 16, "AUD_NZD": 17, "AUD_USD": 18,
+    "CAD_JPY": 19, "EUR_NZD": 20, "GBP_AUD": 21, "GBP_CHF": 22,
+    "GBP_JPY": 23, "GBP_NZD": 24, "NZD_CAD": 25, "NZD_JPY": 26,
+    "USD_CHF": 27, "USD_JPY": 28,
 }
 
 # ── Encoding maps ─────────────────────────────────────────────────────────────
