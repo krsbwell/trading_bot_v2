@@ -20,6 +20,7 @@ from engine.signal_audit import log_signal as _audit
 from learning.data_collector import _get_session
 from learning.pattern_learner import PatternLearner
 from risk.risk_manager import get_tp_levels
+from engine.signal_lifecycle import next_signal_id, log_event, format_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,18 @@ class SignalEngine:
         # ── Confluence ────────────────────────────────────────────────────────
         final_score = score_signal(ema_score, struct_score, pa_score, ml_win_prob)
 
+        # ── Phase 2B: signal lifecycle instrumentation (logging only — see
+        # engine/signal_lifecycle.py's module docstring and tasks/todo.md
+        # "Phase 2B"). signal_id is allocated once a strategy actually
+        # scores > 0 — "signal" means "the strategy found something," not
+        # "we looked." no_audit mirrors _do_audit's own suppression so
+        # diagnostic/display-only scans (main.py's _diagnostic_scan /
+        # _live_diagnostic_scan) never allocate an id either.
+        _strategy = config.STRATEGY_OVERRIDE.get(pair, "ema_bounce")
+        _diag_str = format_diagnostics(_strategy, _diag)
+        sig_id = (next_signal_id(pair, config.primary_tf_for(pair))
+                  if (not no_audit and final_score > 0) else None)
+
         logger.info(
             "Signal %s %s dir=%s score=%d (EMA=%.0f Struct=%.0f PA=%.0f H4=%s D=%s ATR=%.1f pips)",
             pair, market, direction, final_score,
@@ -250,6 +263,11 @@ class SignalEngine:
                    macd_hist_val=_diag.get("macd_hist_val"),
                    h4_trend=h4_trend, d_trend=d_trend,
                    result="NO_SIGNAL", reject_reason=f"Score {final_score} < 40 discard threshold")
+            if sig_id:
+                log_event(signal_id=sig_id, pair=pair, timeframe=config.primary_tf_for(pair),
+                           direction=direction, strategy=_strategy, signal_score=final_score,
+                           stage="SIGNAL_CREATED", signal_status="DISCARDED_BELOW_40",
+                           diagnostics=_diag_str)
             return None
 
         # ── Compute SL/TP early — needed for chart overlay on WATCHING signals too ─
@@ -279,12 +297,18 @@ class SignalEngine:
                    h4_trend=h4_trend, d_trend=d_trend,
                    result=status,
                    reject_reason=f"Score {final_score} < MIN_CONFLUENCE_SCORE {config.MIN_CONFLUENCE_SCORE}")
+            if sig_id:
+                log_event(signal_id=sig_id, pair=pair, timeframe=config.primary_tf_for(pair),
+                           direction=direction, strategy=_strategy, signal_score=final_score,
+                           stage="SIGNAL_CREATED", signal_status=status, diagnostics=_diag_str)
             # Return partial signal — SL/TP included so chart overlay shows full setup
             return {
                 "pair":             pair,
                 "market":           market,
                 "direction":        direction,
                 "timeframe":        config.primary_tf_for(pair),
+                "signal_id":        sig_id,
+                "strategy":         _strategy,
                 "score":            final_score,
                 "ema_score":        ema_score,
                 "structure_score":  struct_score,
@@ -313,9 +337,14 @@ class SignalEngine:
                    confluence_score=final_score,
                    h4_trend=h4_trend, d_trend=d_trend,
                    result="BLOCKED", reject_reason=reason)
+            if sig_id:
+                log_event(signal_id=sig_id, pair=pair, timeframe=config.primary_tf_for(pair),
+                           direction=direction, strategy=_strategy, signal_score=final_score,
+                           stage="SIGNAL_CREATED", signal_status="ATR_TOO_LOW", diagnostics=_diag_str)
             return {
                 "pair": pair, "market": market, "direction": direction,
                 "timeframe": config.primary_tf_for(pair),
+                "signal_id": sig_id, "strategy": _strategy,
                 "score": final_score, "ema_score": ema_score,
                 "structure_score": struct_score, "pa_score": pa_score,
                 "entry": float(df_h1["close"].iloc[-1]),
@@ -333,9 +362,14 @@ class SignalEngine:
                    confluence_score=final_score,
                    h4_trend=h4_trend, d_trend=d_trend,
                    result="BLOCKED", reject_reason=reason)
+            if sig_id:
+                log_event(signal_id=sig_id, pair=pair, timeframe=config.primary_tf_for(pair),
+                           direction=direction, strategy=_strategy, signal_score=final_score,
+                           stage="SIGNAL_CREATED", signal_status="ATR_TOO_HIGH", diagnostics=_diag_str)
             return {
                 "pair": pair, "market": market, "direction": direction,
                 "timeframe": config.primary_tf_for(pair),
+                "signal_id": sig_id, "strategy": _strategy,
                 "score": final_score, "ema_score": ema_score,
                 "structure_score": struct_score, "pa_score": pa_score,
                 "entry": float(df_h1["close"].iloc[-1]),
@@ -357,6 +391,13 @@ class SignalEngine:
                macd_hist_val=_diag.get("macd_hist_val"),
                h4_trend=h4_trend, d_trend=d_trend,
                result="TRIGGERED")
+        if sig_id:
+            log_event(signal_id=sig_id, pair=pair, timeframe=config.primary_tf_for(pair),
+                       direction=direction, strategy=_strategy, signal_score=final_score,
+                       stage="SIGNAL_CREATED", signal_status="TRIGGERED", diagnostics=_diag_str)
+            log_event(signal_id=sig_id, pair=pair, timeframe=config.primary_tf_for(pair),
+                       direction=direction, strategy=_strategy, signal_score=final_score,
+                       stage="TRIGGERED", signal_status="TRIGGERED", diagnostics=_diag_str)
 
         # ── Build full signal dict ────────────────────────────────────────────
         # SL/TP already computed above (shared with WATCHING path)
@@ -377,6 +418,8 @@ class SignalEngine:
             "market":              market,
             "direction":           direction,
             "timeframe":           config.primary_tf_for(pair),
+            "signal_id":           sig_id,
+            "strategy":            _strategy,
             # open time of the candle that produced this signal — main.py
             # allows one entry per (pair, direction, signal_bar)
             "signal_bar":          str(df_h1.index[-1]),

@@ -35,7 +35,7 @@ from trade.paper_trader import PaperTrader
 from trade.trade_manager import TradeManager
 from risk.risk_manager import (
     validate_pre_trade, calculate_position_size, get_quote_to_usd_rate,
-    update_daily_loss, reset_daily_state, TRADING_HALTED,
+    update_daily_loss, reset_daily_state, seed_daily_loss_from_today, TRADING_HALTED,
 )
 from learning.data_collector import make_snapshot, record_close, record_skip, clear_pending
 from learning.pattern_learner import PatternLearner
@@ -52,6 +52,7 @@ from alerts.telegram_alert import (
 )
 from dashboard import state
 from engine.signal_audit import log_signal as _audit_blocked
+from engine.signal_lifecycle import log_event as lifecycle_log
 
 _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -343,6 +344,21 @@ def _process_pair(pair: str, market: str, engine) -> None:
         return
 
     score = signal["score"]
+    # Phase 2B lifecycle instrumentation (logging only, see
+    # engine/signal_lifecycle.py + tasks/todo.md "Phase 2B"). sig_id is
+    # None only for signals already filtered out above (no_signal / score
+    # <= 0 discarded inside signal_engine.run()) — every gate below is
+    # additive, placed next to the existing decision, never inside one.
+    _sig_id    = signal.get("signal_id")
+    _strategy  = signal.get("strategy", "ema_bounce")
+    _tf        = signal.get("timeframe", config.primary_tf_for(pair))
+
+    def _log_lifecycle(stage: str, **kw) -> None:
+        if _sig_id:
+            lifecycle_log(signal_id=_sig_id, pair=pair, timeframe=_tf,
+                           direction=signal["direction"], strategy=_strategy,
+                           signal_score=score, stage=stage, **kw)
+
     # Sidebar "SIGNAL" badge must reflect the actual gate this pair has to clear —
     # WFO can set a stricter per-pair min_score than the global slider, and that
     # check happens inside signal_engine.run() regardless of the slider's value.
@@ -392,15 +408,20 @@ def _process_pair(pair: str, market: str, engine) -> None:
                 confluence_score=score,
                 result="BLOCKED", reject_reason=_floor_reason,
             )
+            _log_lifecycle("GATE_BLOCKED", failure_reason=_floor_reason)
         record_skip(signal)   # log for shadow-outcome resolution regardless of watching status
         return
 
     def _block(reason: str) -> None:
         """Stamp the signal detail with a trade_blocked_reason for the dashboard,
         and log the rejected signal for shadow-outcome resolution — covers every
-        gate below (ML/structure/session/news/duplicate/pre-trade/cooldown)."""
+        gate below (ML/structure/session/news/duplicate/pre-trade/cooldown).
+        Also the single Phase 2B GATE_BLOCKED log point for all of them — every
+        gate below routes through here, so this one line covers six of the
+        eight gates without touching each call site individually."""
         state.update_signal_detail(pair, {**signal, "trade_blocked_reason": reason})
         record_skip(signal)
+        _log_lifecycle("GATE_BLOCKED", failure_reason=reason)
 
     # ── ML tiered gate ───────────────────────────────────────────────────────
     # Signals scoring 55–64 are marginal — only trade when ML backs them up.
@@ -519,6 +540,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
             result="BLOCKED", reject_reason=_same_bar,
         )
         state.update_signal_detail(pair, {**signal, "trade_blocked_reason": _same_bar})
+        _log_lifecycle("GATE_BLOCKED", failure_reason=_same_bar)
         return   # not a new setup, so no record_skip() either
 
     _open_trade_source = _paper_trader if config.MODE == "paper" else _trade_manager_fx
@@ -597,6 +619,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
                 return
 
     # ≥ threshold + in session: fire alert + open trade
+    _log_lifecycle("GATE_APPROVED")
     try:
         play_alert(signal["direction"])
     except Exception:
@@ -629,6 +652,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
     if config.MODE == "paper" and _paper_trader:
         tp         = signal["tp_levels"]
         latency_ms = round((time.perf_counter() - _t_signal_start) * 1000, 1)
+        _log_lifecycle("OPEN_TRADE_CALLED", mode=config.MODE)
         try:
             actual_id  = _paper_trader.open_trade(
                 pair=pair,
@@ -642,8 +666,14 @@ def _process_pair(pair: str, market: str, engine) -> None:
             )
             _sync_paper_state()
             logger.debug("Latency %s → %.1f ms", pair, latency_ms)
+            if actual_id:
+                _log_lifecycle("EXECUTED", execution_status="PAPER_EXECUTED",
+                                trade_id=str(actual_id), mode=config.MODE)
+            else:
+                _log_lifecycle("EXEC_FAILED", failure_reason="ORDER_REJECTED", mode=config.MODE)
         except Exception as _open_exc:
             logger.error("TRADE OPEN FAILED for %s: %s", pair, _open_exc, exc_info=True)
+            _log_lifecycle("EXEC_FAILED", failure_reason="EXCEPTION", mode=config.MODE)
         # Telegram: trade opened
         try:
             if tg_enabled() and actual_id:
@@ -655,8 +685,19 @@ def _process_pair(pair: str, market: str, engine) -> None:
     else:
         manager   = _trade_manager_fx
         if manager:
+            _log_lifecycle("OPEN_TRADE_CALLED", mode=config.MODE)
             actual_id = manager.open_trade(signal)
             _sync_live_state()
+            if actual_id:
+                _exec_status = "LIVE_EXECUTED" if config.MODE == "live" else "DEMO_EXECUTED"
+                _log_lifecycle("EXECUTED", execution_status=_exec_status,
+                                trade_id=str(actual_id), mode=config.MODE)
+            else:
+                # TradeManager.open_trade() swallows its own failures (validate_pre_trade
+                # re-check, zero-size, order-placement exception) and returns None in every
+                # case — see trade/trade_manager.py — so there's no distinct exception to
+                # catch here; this is the ORDER_REJECTED case Phase 2A couldn't rule out.
+                _log_lifecycle("EXEC_FAILED", failure_reason="ORDER_REJECTED", mode=config.MODE)
             try:
                 if tg_enabled() and actual_id:
                     t_opened = manager.get_open_trade(pair)
@@ -666,6 +707,7 @@ def _process_pair(pair: str, market: str, engine) -> None:
                 pass
         else:
             logger.warning("No trade manager for %s — signal logged but not traded", pair)
+            _log_lifecycle("EXEC_FAILED", failure_reason="NO_TRADE_MANAGER", mode=config.MODE)
 
     if actual_id:
         logger.info("Trade opened: %s", actual_id)
@@ -1199,6 +1241,23 @@ def main() -> None:
             _refresh_account()   # push current balance + append latest equity point
             logger.info("TradeManager(forex): open_trades=%d  closed=%d",
                         len(_trade_manager_fx.open_trades), len(_trade_manager_fx.closed_trades))
+            # Seed the 3% daily-drawdown halt with today's ALREADY-realized
+            # P&L (closed_trades survives a restart via disk persistence —
+            # see TradeManager.__init__ — but risk_manager's _daily_loss is
+            # pure in-memory state and does not). Without this, every
+            # restart silently handed the bot a fresh 3% budget regardless
+            # of real losses already taken earlier that day — found
+            # 2026-10-07 alongside the update_daily_loss() wiring gap, see
+            # bugs_daily_drawdown_halt_not_wired memory.
+            _today = datetime.now(timezone.utc).date()
+            _today_pnl = sum(
+                t.get("realised_pnl", 0.0) for t in _trade_manager_fx.closed_trades
+                if t.get("close_time") and t["close_time"].date() == _today
+            )
+            _acct_balance = state.get_key("account", {}).get("balance", 500.0)
+            seed_daily_loss_from_today(_today_pnl, _acct_balance)
+            if _today_pnl != 0:
+                logger.info("Daily loss tracker seeded from today's closed trades: $%.2f", _today_pnl)
 
     # ── Signal engines ────────────────────────────────────────────────────────
     _forex_engine = _init_engines(_oanda_connector)

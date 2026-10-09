@@ -33,3 +33,20 @@ def _isolate_signal_log(tmp_path, monkeypatch):
     """
     import learning.data_collector as _dc
     monkeypatch.setattr(_dc, "SIGNAL_LOG", str(tmp_path / "test_signal_log.csv"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_signal_lifecycle(tmp_path, monkeypatch):
+    """
+    Phase 2B (2026-10-07) — signal_engine.run() and main.py's _process_pair()
+    both call into engine.signal_lifecycle on every real (non no_audit) call,
+    same risk class as the signal_log.csv incident above: any test that
+    exercises either path would otherwise append to the live bot's
+    data/signal_lifecycle.csv and advance data/signal_id_seq.json's counter.
+    _initialised is reset too — it's a module-level latch (see _ensure_file())
+    that would otherwise skip writing the header into the new tmp path.
+    """
+    import engine.signal_lifecycle as _sl
+    monkeypatch.setattr(_sl, "_LOG_PATH", tmp_path / "test_signal_lifecycle.csv")
+    monkeypatch.setattr(_sl, "_SEQ_PATH", tmp_path / "test_signal_id_seq.json")
+    monkeypatch.setattr(_sl, "_initialised", False)
