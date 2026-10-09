@@ -639,3 +639,409 @@ blank space between the last candle and the price scale.
   fix for one case didn't break the others. No automated test suite
   covers `chart.js` (static JS asset, outside the Python pytest suite),
   so this Playwright verification is the record for this change.
+
+# Round 5: trade volume + chart labels (2026-10-07)
+
+User's framing: too few trades close for the bot's numbers to mean
+anything yet ("2027 will get here before 100 trades"). Asked for (1)
+multi-trade per pair/pair confirmed already built, (2) more pairs, (3)
+breakeven that at least covers commission, (4) indicator pane labels, (5)
+whether my own GBP/USD chart read differs from the bot's live strategy.
+
+- [x] Confirmed `ALLOW_MULTIPLE_PER_PAIR=True` / `MAX_PYRAMID_PER_PAIR=3`
+      / multi-pair (`MAX_OPEN_TRADES=5`) were already live — no code
+      change needed there. Real bottleneck was `FOREX_PAIRS` only having 3
+      pairs after the 09-28 re-screen; confirmed via a closed-trade overlap
+      scan that pyramiding has fired 0 times in the 10 days since
+      PYRAMID_MIN_SCORE dropped to 55 (too few signals across 3 pairs for
+      two same-pair/same-direction entries to ever overlap).
+- [x] `FOREX_PAIRS`: re-added all 25 pairs the 09-28 re-screen rejected
+      (user's explicit call after I surfaced the backtest numbers) —
+      28 pairs total now. MODE stays "demo" (practice account). Dated
+      comment in config.py documents the override and preserves the 09-28
+      PF/DD numbers unchanged (re-adding ≠ re-validating).
+      KNOWN GAP: the 25 re-added pairs have no STRATEGY_OVERRIDE entry, so
+      they default to EMA-bounce — the strategy the 2026-08-13 WFO search
+      found no live edge for on any pair. The 09-28 screen's actual
+      per-pair winner (breakout_retest vs trend_retest) wasn't saved to
+      disk, so restoring it means re-running that screen, not a config
+      edit. Flagged for a follow-up, not done now (minimal-change rule).
+- [x] `learning/pattern_learner.py::_PAIR_ENCODING`: appended codes 15-28
+      for the 14 newly-active pairs missing from the ML feature encoding
+      (caught by test_pattern_learner.py, not spotted by inspection first
+      — appended only, per the file's own "never reorder/remove" rule).
+- [x] `tests/test_pair_tf_routing.py`: updated the two tests that asserted
+      FOREX_PAIRS == the post-rescreen 3-pair list — they now check the 3
+      validated pairs are still present and FOREX_WATCH is still empty,
+      without claiming the other 25 are profitable.
+- [x] Breakeven +2 pips: ran a real A/B backtest (BREAKEVEN_ENABLED=False
+      vs True+BREAKEVEN_BUFFER_PIPS=2) on all 3 currently-live pairs,
+      4999 M30 bars each, live-routed strategy per pair, via
+      backtest.runner.run_backtest() — config.py untouched (BE stays off).
+      Results (trades/WR/PF/PnL, BE off -> +2 pips):
+        GBP_USD  14 trades  50.0%->64.3% WR   PF 2.71->2.28   $45.08->$33.07
+        EUR_USD   5 trades 100.0%->100.0% WR  PF 53.78->30.57 $53.78->$30.57
+        AUD_JPY  18 trades  38.9%->44.4% WR   PF 1.25->1.21   $14.01->$11.82
+      Same direction as the 2026-07-21 rejection: WR up, PF/PnL down on
+      every pair, confirmed specifically at the +2 pip buffer the user
+      asked for, not just the old test's buffer value. Recommended: leave
+      BREAKEVEN_ENABLED=False. Not enabled — waiting on user's call with
+      these numbers in hand.
+- [x] Chart: added a small white "MACD" / "RSI" label to the upper-left of
+      each sub-pane via `LightweightCharts.createTextWatermark()` (same
+      API the big center "GBP_USD 30m" watermark on the candle pane
+      already uses), only for the two panes actually shown in the
+      screenshot — CCI/Stochastic panes weren't asked for and weren't
+      touched. Watermark ref is nulled when a pane's series are removed
+      (toggle off) so the next toggle-on recreates it instead of reusing a
+      stale reference into a collapsed pane.
+- [x] Compared my manual GBP/USD chart read against engine/strategy_trend_retest.py
+      (GBP_USD's actual live strategy since 09-28): genuinely different
+      mechanism. I used EMA200/50 crossover + MACD as the trigger level;
+      the live strategy requires an H4 trend-bias hard gate + an actual
+      market-structure break (swing high/low BOS, not an EMA cross) +
+      retest + price-action rejection candle, with MACD only a small bonus
+      rather than a requirement. Declined to hand-write a new strategy
+      from one screenshot — every strategy in this file went live only
+      after a fit/holdout-validated backtest, and one chart isn't that;
+      offered a backtestable hypothesis instead (see chat).
+- [x] Tests: full suite, 532 passed (0 skipped) after the two fixes above.
+- Security: no new endpoints, no secrets touched. FOREX_PAIRS/strategy
+  changes only affect which pairs the already-demo-mode bot scans; no
+  change to OANDA credentials, dashboard binding, or any write path. The
+  A/B backtest script (scratchpad, not committed) only read OANDA candle
+  data and config in-process — never touched config.py on disk or the
+  live running bot.
+- NOTE: the live bot process (started 10/4) won't see the FOREX_PAIRS/
+  pattern_learner changes until restarted — config.py is read once at
+  import. Dashboard pair dropdown reads config.FOREX_PAIRS dynamically
+  (confirmed, app.py/panels.py/state.py), so once restarted every affected
+  surface picks the new 28-pair list up automatically, no other code
+  changes needed.
+
+# Phase 2A: trace the 214 TRIGGERED signals (2026-10-07)
+
+Investigation only, no code changes. Matched each TRIGGERED row in
+signal_audit.csv against real trades (live_state_forex.json + signal_log.csv
+live/backfill rows) and main.py-level BLOCKED rows, by pair+direction+time
+within 10 min.
+
+- [x] Result: 214 = 54 executed + 43 blocked + 117 unaccounted.
+      117 splits into 76 before 2026-07-31 (no ground-truth trade record
+      survives that far back — unverifiable, not a proven bug) and 41
+      on/after 2026-07-31 (ground truth exists and still shows nothing —
+      the real mystery).
+- [x] Eliminated for the 41: TradeManager's own silent-reject paths (0
+      log hits across main.log + 20 rotated backups), MAX_OPEN_TRADES (0-1
+      trades open at each timestamp, nowhere near the cap), pyramid/
+      duplicate-pair gate (no existing open trade on that pair at any of
+      the 41 timestamps). Every gate that CAN silently reject already
+      calls _audit_blocked() when it does — read every line of that path.
+- [x] Root cause not found — main.log's rotated backups only cover
+      2026-10-04 onward (confirmed via file mtimes), so the runtime
+      behavior for Aug/Sep no longer exists anywhere to inspect. Reported
+      as genuinely unresolved rather than guessed at.
+- [x] Found 2 real secondary bugs: (1) signal_audit.csv's c1-c6 columns
+      are named for strategy_ema_cci_macd specifically (c2_h4_aligned,
+      c4_cci_at_touch, etc.) but get populated with trend_retest's/
+      breakout_retest's own differently-meaning c1-c5 values for pairs
+      running those strategies — mislabeled, not just incomplete. (2) no
+      audit row exists at the actual moment of trade execution — the only
+      way to know a TRIGGERED signal resolved is to cross-reference a
+      different file after the fact, and only if that file still has the
+      record.
+
+# Phase 2B: signal lifecycle instrumentation (2026-10-07)
+
+User's assignment, following directly from 2A's finding that the real
+problem is observability, not (provably) decision logic. Explicit
+constraints: no strategy logic, entry thresholds, risk parameters, or ML
+behavior change — this is logging-only. Objective: every signal_id's last
+row in the new log IS its documented terminal state, so Phase 2C never
+again has to say "we think N signals disappeared."
+
+Design decisions confirmed with user: signal_id assigned only when a
+strategy scores > 0 (not for the 80% pure NO_TOUCH scans — "signal" means
+"the strategy found something," matching the lifecycle diagram's own
+wording); sequence number is a global monotonic counter, never resets.
+
+- [x] New `engine/signal_lifecycle.py`: `next_signal_id(pair, timeframe)`
+      (format `SIG-{YYYYMMDD}-{PAIRNOUNDERSCORE}-{TF}-{NNNNNN}`, counter
+      persisted in `data/signal_id_seq.json`), `log_event(...)` (appends
+      one row to `data/signal_lifecycle.csv`), `format_diagnostics(strategy,
+      diag)` (strategy-specific pipe-joined key=value string — see below),
+      `terminal_states()` (returns {signal_id: last row} for Phase 2C).
+- [x] Fix the c1-c6 mislabeling the RIGHT way: don't touch legacy
+      signal_audit.csv's schema (other code may depend on it, and it's a
+      historical record — rewriting it would be the same mistake in
+      reverse). Instead `format_diagnostics()` builds correctly-labeled
+      strings per strategy from each strategy's own get_last_diag() output:
+        ema_bounce:       above_ema, h4_aligned, touch, cci_at_touch,
+                          cci_recovery, macd_confirm, macd_rising (c1-c7,
+                          confirmed against strategy_ema_cci_macd.py's own
+                          source — c6=hist above threshold, c7=hist rising)
+        trend_retest:     h4_bias, retest, not_invalidated, price_action,
+                          ma_aligned, macd_bonus
+        breakout_retest:  bos, retest, not_invalidated, price_action,
+                          macd_momentum
+- [x] `engine/signal_engine.py::run()`: generate signal_id once final_score
+      is computed and > 0 (before the TRIGGERED/WATCHING/SCANNING split),
+      attach to every signal dict returned from that point on. Log
+      SIGNAL_CREATED (signal_status = whichever of TRIGGERED/WATCHING/
+      SCANNING/ATR-gate-blocked it resolves to) at each existing _do_audit
+      call site — reuses the call sites, doesn't change what they decide.
+      When result ends up TRIGGERED, also log a second TRIGGERED-stage row.
+- [x] `main.py::_process_pair()`: thread `signal_id = signal.get("signal_id")`
+      through. At each existing gate-reject point (score floor/ML/H4-ATR/
+      news/same-candle/risk-duplicate-pyramid-halt/cooldown) log
+      GATE_BLOCKED with the exact existing reject_reason string — same
+      call sites as the current _audit_blocked() calls, additive only.
+      Right before the alert fires (all gates cleared), log GATE_APPROVED.
+      Right before PaperTrader.open_trade()/TradeManager.open_trade() is
+      called, log OPEN_TRADE_CALLED. Right after, log EXECUTED (trade_id=
+      actual_id, execution_status = PAPER_EXECUTED/DEMO_EXECUTED/
+      LIVE_EXECUTED from config.MODE at that instant) or EXEC_FAILED
+      (failure_reason = EXCEPTION if one was caught, else ORDER_REJECTED).
+- [x] Tests: signal_lifecycle.py's own unit tests (ID format/uniqueness/
+      monotonic counter persists across restart, log_event row shape,
+      format_diagnostics per strategy, terminal_states()). Plus a
+      regression check that wiring this in does NOT change any existing
+      test's pass/fail outcome — this is additive logging only, the full
+      existing suite must stay green unchanged.
+- [x] Security check + review summary, per usual.
+
+## Review — Phase 2B
+
+What changed: one new file (`engine/signal_lifecycle.py`, ~200 lines),
+~15 small additive call sites in `engine/signal_engine.py` and
+`main.py::_process_pair()` (every one placed next to an existing decision,
+never inside one), one new autouse test fixture (`conftest.py`), one new
+test file (21 tests). Nothing in `config.py`, no strategy module touched.
+
+Verified, not assumed:
+- Full existing suite (532 tests) passes **unchanged** after wiring this
+  in — the concrete evidence that no decision logic moved, not just a
+  claim.
+- Smoke-tested against real live OANDA data (not just unit tests) before
+  touching the live bot: confirmed signal_id allocation, SIGNAL_CREATED
+  logging, and diagnostics formatting all fire correctly end-to-end.
+- Caught a real bug during that smoke test: strategy diag dicts mix plain
+  Python `bool` with numpy's `bool` scalar (confirmed on real data —
+  `strategy_ema_cci_macd`'s c1 came back `numpy.bool`, c2-c7 plain Python
+  `bool`, in the same dict). `isinstance(v, bool)` silently missed the
+  numpy one, which is not a `bool` subclass despite sharing numpy's
+  display name "bool" — would have produced a diagnostics string mixing
+  "True"/"False" and "1"/"0" in the same row. Fixed to match on type name
+  instead of isinstance; added a regression test using real `numpy.bool_`.
+- Restarted the live bot (same lock-holder-survives-the-scheduled-task-
+  stop issue as the morning's pair-expansion restart — found and killed
+  the actual PID again, verified the lock was free before restarting).
+  Confirmed clean startup, no new errors, heartbeat current.
+
+Known limitation, stated plainly: this closes the gap going forward only.
+The 41 historically-unaccounted TRIGGERED signals from Phase 2A remain
+unexplained — the logs that could have proven a root cause don't exist
+anymore. Nothing in Phase 2B retroactively recovers that.
+
+# Phase 2C: collect 28-pair data + reporting tool (2026-10-07)
+
+- [x] `scripts/signal_lifecycle_report.py`: reads data/signal_lifecycle.csv,
+      reports signals created / triggered / gate_blocked / approved /
+      open_trade_called / executed / exec_failed, "orphaned" counts
+      (terminal stage == TRIGGERED / GATE_APPROVED / OPEN_TRADE_CALLED —
+      the Phase 2A anomaly class, now a direct count), funnel-invariant
+      sanity checks (approved+blocked should equal triggered, etc — a
+      mismatch itself is flagged as a finding), and breakdowns by pair/
+      timeframe/strategy/direction/execution_status. Also `--trace
+      SIG-...` to print one signal's full event history in order — the
+      user's explicit ask ("follow that exact signal through the entire
+      lifecycle"). 7 tests, distinguishing the two counting modes
+      (pipeline = "ever reached this stage" vs terminal = "stopped here")
+      explicitly, since confusing them would silently invert what the
+      tool reports.
+- [x] Strategy consolidation decision (user's call, based on Phase 1's
+      numbers — breakout_retest 14.3% fire rate / 2 historical trades vs
+      ema_bounce 21.4%/42 and trend_retest 15.5%/7): EMA Bounce primary,
+      Trend-Retest secondary, Breakout-Retest deprioritized but not
+      deleted. AUD_JPY — the only pair ever routed to breakout_retest —
+      deliberately kept on it rather than reassigned: it's one of only 3
+      pairs (of 28) that passed the 09-28 re-screen, specifically on
+      breakout_retest. Net effect: zero code/behavior change (AUD_JPY was
+      already the only user of that strategy), documented in config.py's
+      STRATEGY_OVERRIDE comment so a future session doesn't silently
+      re-add pairs to it without a fresh backtest.
+- [ ] Ongoing: let the 28-pair, 2-active-strategy system run and
+      accumulate real signal_lifecycle.csv data. First read (minutes
+      after the Phase 2B restart, ~38 signals): invariants held, 0
+      orphans, 3/3 trades executed cleanly — too small a sample to mean
+      anything yet. Revisit with `scripts/signal_lifecycle_report.py`
+      once real volume has built up (days, not minutes) before drawing
+      any conclusion about fire rates or gate behavior at 28-pair scale.
+- Roadmap correction (user, 2026-10-07): Breakout-Retest is out of the
+  optimization roadmap entirely, not deferred to a later phase — earlier
+  wording ("Phase 4: evaluate/refine Breakout-Retest") implied it was
+  still a candidate for active development later; it isn't. AUD_JPY's
+  routing stays exactly where it is (existing validated decision, not a
+  signal that Breakout-Retest is being adopted/developed). Current
+  roadmap: Phase 2C (here) -> analyze EMA Bounce + Trend-Retest
+  performance -> backtest/refine those two only -> demo/paper validation
+  -> only then consider live.
+- Explicit DO-NOT-TOUCH list while Phase 2C is collecting data (user,
+  2026-10-07) — the measurement would be contaminated by any of: loosening
+  entry conditions, lowering the score threshold, adding more pairs,
+  changing risk params, changing ML gates, optimizing EMA settings or
+  Trend-Retest, adding another strategy, removing AUD_JPY's Breakout-
+  Retest routing, or anything framed as "increase trade frequency." No
+  code changes until the user reviews `scripts/signal_lifecycle_report.py`
+  output after at least one full trading day (preferably several).
+
+# Safety fix: 3% daily-drawdown halt was non-functional (2026-10-07, same day)
+
+User flagged a real -$32.40 / 7.3% day (6 SL losses) a few hours into the
+28-pair run and asked directly: "7% lose?" Investigated rather than
+reassured — this wasn't normal variance, it was a broken circuit breaker.
+Explicit exception to the embargo above (user's call, asked first): this
+is a risk-control fix, not a strategy change.
+
+- [x] Root cause #1: `update_daily_loss()` was only called from ONE of
+      several trade-close paths in `trade/trade_manager.py` — the bot's
+      own tick-by-tick SL check. Confirmed in tonight's actual logs: all 6
+      of today's losses closed via the broker-reconciliation path instead
+      ("LIVE RECONCILED CLOSE ... detected via broker poll, not our own
+      candle check") — the NORMAL way a stop fires, since the SL order
+      lives on the broker. That path never touched `_daily_loss` at all.
+      Fixed by moving the call into `_finalize_close()`, the one
+      chokepoint every close path (SL, TP3, reconciled, unknown_broker_
+      close, manual) already shares — one call site instead of N,
+      structurally can't be missed by a future close path the way the
+      original scattered version was.
+- [x] Root cause #2 (found while fixing #1, same bug class): `_daily_loss`/
+      `TRADING_HALTED` are pure in-memory state with no startup seeding.
+      This bot restarts often — 3x today alone. Every restart silently
+      handed it a fresh 3% budget regardless of real losses already taken
+      earlier that calendar day. Fixed: new `risk_manager.
+      seed_daily_loss_from_today()`, called once at startup in `main.py`
+      right after `TradeManager` loads its disk-persisted `closed_trades`
+      — sums today's (UTC) already-realized P&L and halts immediately if
+      already past 3%, instead of starting counting from zero.
+- [x] Flagged, NOT fixed (out of the approved scope — asking first rather
+      than quietly expanding it): `alerts.telegram_alert.send_drawdown_halt`
+      is imported in main.py as `tg_halt` but never actually called
+      anywhere — the halt now works but fires silently, no notification.
+      Also noted: the threshold check is `abs(_daily_loss)/balance`, so a
+      large single-day GAIN would also trip "TRADING_HALTED" — pre-
+      existing behavior inherited by the fix, not introduced by it,
+      documented in a test rather than silently changed.
+- [x] Also noted, not fixed: 4 of today's 6 losing pairs shared a currency
+      leg (AUD_NZD x2, NZD_CAD, GBP_AUD, GBP_NZD) — correlated exposure
+      across "independent" 1%-risk trades, a portfolio-construction risk
+      distinct from the halt bug. Flagged for the user, no code change.
+- [x] Tests: 4 new in `tests/test_trade.py` (reconciled-close path, the
+      actual TRADING_HALTED-crossing-3%-blocks-new-trades behavior, and
+      the unknown_broker_close fallback path, plus confirming the direct
+      candle-check path still works post-refactor), 4 new in
+      `tests/test_risk.py` for `seed_daily_loss_from_today()`. Full suite:
+      568 passed (was 564).
+- [x] Restarted the bot (same lock-holder-survives-Stop-ScheduledTask
+      drill as every other restart today). Confirmed live in the real
+      log: `TRADING_HALTED on startup: today's already-realized P&L
+      ($-32.40) is 7.3% of balance ($445.50) — at or past the 3% daily
+      halt.` New trades are blocked for the rest of today; the existing
+      open EUR_AUD trade is still managed normally (TRADING_HALTED only
+      gates new opens via validate_pre_trade(), not managing what's
+      already open).
+
+# Dashboard: hide quiet pairs + dropdown stale-browser diagnosis (2026-10-08)
+
+User: dropdown still showed 3 pairs though the Signal Monitor sidebar had
+all 28; also asked to stop showing all 28 pairs in the sidebar all the
+time, only the ones scoring high enough to matter.
+
+- [x] Dropdown: diagnosed, not a bug needing a code fix. `_traded_pair_
+      options()` in dashboard/app.py builds the dropdown's options once,
+      at `app.layout = html.Div(...)` (module-import time), unlike the
+      Signal Monitor panel which is a live Dash callback re-reading state
+      every refresh. The *backend* already had 28 pairs (confirmed —
+      restarted twice since the FOREX_PAIRS change), the user's *browser
+      tab* just hadn't reloaded since. Told the user to hard-refresh;
+      also restarted the bot anyway for the panel change below, which
+      resets the server-side layout fresh for any new/reloaded page load.
+- [x] `dashboard/panels.py::signal_monitor_panel()`: neutral/no-touch
+      pairs (score 0, direction "—") no longer render as rows — user's
+      explicit choice was "fully hidden, no way to expand" (not a
+      collapsible/expandable group). Only pairs the strategy found
+      *something* on (cleared NO_TOUCH/CONDITIONS_WEAK/H4_NEUTRAL) show.
+      Added a small non-interactive "N pairs quiet (no touch) — hidden"
+      footer so the panel doesn't look like only 3-4 pairs exist — purely
+      informational, not a way to drill into them (per the user's choice).
+      Fixed an edge case this introduced along the way: when ALL pairs are
+      quiet, active_rows is empty same as "no scan has ever run" would be
+      — these are different states and were about to collapse into the
+      same misleading "Waiting for first scan…" message; now distinct
+      ("All pairs quiet — no touch this cycle" vs the real waiting state).
+- [x] Tests: 5 new in tests/test_alerts_dashboard.py (hides neutral rows,
+      footer count + pluralization, the all-quiet-vs-no-data-yet
+      distinction both ways). 572/572 full suite passing.
+- [x] Restarted the bot (same lock-holder drill). Noted in passing, not
+      part of this change: the new daily-halt fix correctly engaged again
+      TODAY (2026-10-08) — `TRADING_HALTED on startup: today's already-
+      realized P&L ($-25.21) is 5.9% of balance ($424.71)`. Second
+      consecutive rough day; flagged to the user, not investigated further
+      this pass (would be a strategy question, inside the Phase 2C
+      embargo — the halt itself is doing its job).
+
+# unknown_broker_close investigation + fix (2026-10-08)
+
+User asked for file-mapping + data correlation first (dashboard "Closed
+Trades"/"ML Engine"/unknown_broker_close — all traced to exact files/
+functions, no changes), then approved a scoped fix after the root cause
+was found. See [[bugs_phantom_trade_from_order_cancel]] for full detail.
+
+- [x] Investigation: traced "Accuracy: 50.2% | 300 trades" to
+      PatternLearner._load_closed() (learning/pattern_learner.py:393) —
+      92% of that sample is would_win/would_lose shadow-resolved outcomes
+      of NEVER-TRADED signals, not real trades; only 26 of 318 rows are
+      real win/loss, and 39 more real trades (source=backfill) are
+      silently excluded. Reported, not touched (ML logic off-limits).
+- [x] Investigation: correlated dashboard's 60 closed trades against
+      signal_lifecycle.csv/signal_log.csv by exact trade_id — 100% match
+      rate for the 12 trades the ~18h-old instrumentation has had a chance
+      to observe (10 closed + 2 still open, zero orphans); the other 50
+      predate the instrumentation, expected not a gap.
+- [x] Root cause of unknown_broker_close: queried OANDA's live API
+      directly for every recent occurrence — 5 of 6 were ORDER_CANCEL
+      (INSUFFICIENT_MARGIN) transactions, not real trades. The pagination
+      hypothesis from the prior session was tested against the live API
+      and DISPROVEN (9-18 txns returned, nowhere near a page limit) —
+      explicitly not implemented, per the user's "don't guess" instruction.
+- [x] Fix: connectors/oanda_connector.py::place_market_order() ONLY.
+      Reordered checks (fill success FIRST, then explicit reject, then
+      explicit cancel — new — then raise on any unrecognized shape instead
+      of guessing a trade_id from relatedTransactionIDs). The dangerous
+      `ids[-1]` fallback is now unreachable in normal cases, not deleted
+      outright (full space of OANDA response variants unaudited) — flagged
+      via raise+full-response-log if ever hit.
+- [x] Explicitly NOT touched, per approved scope: engine/*, strategy
+      logic, entry/exit thresholds, ML logic, learning/*, lifecycle
+      instrumentation, risk parameters, reconcile_open_trades() itself,
+      daily-loss-halt logic.
+- [x] Tests: 6 new in tests/test_connectors.py (TestOandaConnectorPlace
+      MarketOrder — fill success, cancel raises, reject still raises,
+      fill-takes-priority-if-both-present ordering check, unrecognized
+      shape raises, empty response raises), 1 new end-to-end in
+      tests/test_trade.py (open_trade() creates zero phantom entries when
+      the connector raises). 579/579 full suite passing.
+- [x] Restarted the bot (same lock-holder drill). Clean startup, no
+      errors, pid=34744.
+- [ ] Pending, per user's explicit instruction — do not evaluate strategy
+      yet. Verify over time: cancelled orders show EXEC_FAILED not
+      EXECUTED in signal_lifecycle.csv; no new phantom trade_ids in
+      open_trades; MAX_OPEN_TRADES/duplicate-pair gates not consumed by
+      phantoms; unknown_broker_close stops appearing for cancellation
+      cases; genuine broker-reconciliation (real SL our candle check
+      missed) keeps working unchanged.
+- [ ] Pending, separate future step (user's explicit instruction — do NOT
+      delete historical records): classify which of the 60 existing closed
+      trades are phantom (order-cancel-originated) vs real, with an
+      auditable trail, before trusting the 7.3%/5.9% daily-drawdown
+      figures as real financial performance.
