@@ -244,6 +244,52 @@ class TestDashboardPanels:
         panel = signal_monitor_panel(self._signals())
         assert isinstance(panel, html.Div)
 
+    def test_signal_monitor_hides_neutral_pairs(self):
+        """2026-10-08 (user's call, 28-pair roster): NEUTRAL/no-touch pairs
+        no longer render as rows — at 28 pairs, ~88% of scans are NO_TOUCH
+        (see signal_lifecycle_report.py output), so showing all of them
+        buried the handful worth looking at. Only pairs with a real
+        long/short direction show; AUD_USD (NEUTRAL, direction="—") in
+        self._signals() must not appear as a row, while the active pairs
+        still do."""
+        from dashboard.panels import signal_monitor_panel
+        html_out = str(signal_monitor_panel(self._signals()))
+        assert "EUR_USD" in html_out
+        assert "GBP_USD" in html_out
+        assert "AUD_USD" not in html_out
+        assert "1 pair quiet (no touch) — hidden" in html_out
+
+    def test_signal_monitor_quiet_count_pluralizes(self):
+        from dashboard.panels import signal_monitor_panel
+        signals = {
+            "EUR_USD": {"score": 82, "direction": "long", "status": "SIGNAL"},
+            "AUD_USD": {"score": 0,  "direction": "—",    "status": "NEUTRAL"},
+            "NZD_USD": {"score": 0,  "direction": "—",    "status": "NEUTRAL"},
+        }
+        html_out = str(signal_monitor_panel(signals))
+        assert "2 pairs quiet (no touch) — hidden" in html_out
+
+    def test_signal_monitor_all_quiet_shows_distinct_message_not_waiting(self):
+        """Edge case the hide-neutral-pairs change introduced: if every
+        scanned pair comes back NO_TOUCH, active_rows (and therefore
+        all_rows) is empty — must not be confused with 'no scan has ever
+        run', which is a different, more alarming state."""
+        from dashboard.panels import signal_monitor_panel
+        signals = {
+            "EUR_USD": {"score": 0, "direction": "—", "status": "NEUTRAL"},
+            "AUD_USD": {"score": 0, "direction": "—", "status": "NEUTRAL"},
+        }
+        html_out = str(signal_monitor_panel(signals))
+        assert "All pairs quiet" in html_out
+        assert "Waiting for first scan" not in html_out
+        # No redundant footer when the placeholder already says it
+        assert "quiet (no touch) — hidden" not in html_out
+
+    def test_signal_monitor_no_data_yet_still_shows_waiting_message(self):
+        from dashboard.panels import signal_monitor_panel
+        html_out = str(signal_monitor_panel({}))
+        assert "Waiting for first scan" in html_out
+
     def test_open_trades_empty(self):
         from dash import html
         from dashboard.panels import open_trades_panel

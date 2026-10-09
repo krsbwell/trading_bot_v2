@@ -245,7 +245,22 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
             style={"cursor": "pointer", "borderBottom": "1px solid #161b22"}))
         active_rows.append(diag_row)
 
-    all_rows = active_rows + neutral_rows
+    # 2026-10-08 (user's call, 28-pair roster) — neutral/no-touch pairs no
+    # longer render here at all. At 28 pairs, most of them sit at NO_TOUCH
+    # most of the time (confirmed: ~88% of all scans across the whole
+    # roster — see signal_lifecycle_report.py output), so showing all 28
+    # every tick buried the handful actually worth looking at under two
+    # dozen "NEUTRAL" rows. Only pairs that cleared NO_TOUCH/CONDITIONS_
+    # WEAK/H4_NEUTRAL (i.e. the strategy found *something*, whether or not
+    # it went on to trade) show here now — that's active_rows, unchanged.
+    # Deliberately no expand/show-all control (explicit user choice, not
+    # an oversight) — bot-health visibility for a specific quiet pair
+    # still comes from the ⚠ BOT HEALTH banner above (stale-scan check)
+    # or logs/main.log, not this panel. _n_hidden is a plain count, not
+    # interactive, just enough to say "yes, the other 24 are still being
+    # scanned, they're just quiet" instead of looking like 3 pairs exist.
+    _n_hidden = len(neutral_rows)
+    all_rows = active_rows
     scan_ts = ""
     if last_scan_time:
         try:
@@ -261,14 +276,32 @@ def signal_monitor_panel(signals: dict, signal_details: dict = None,
     ], style={"display": "flex", "justifyContent": "space-between",
               "marginBottom": "0.75rem"})
 
-    table_or_empty = (
-        html.Table(all_rows, style={"width": "100%", "borderCollapse": "collapse"})
-        if all_rows else
-        html.Div("Waiting for first scan…",
-                 style={"color": _MUTED, "fontSize": "0.8rem",
-                        "textAlign": "center", "padding": "0.75rem 0"})
+    # Distinguish "no scan data exists yet" from "scans happened, every
+    # pair came back quiet" — all_rows alone can't tell these apart now
+    # that neutral pairs are filtered out of it; signals (the raw input,
+    # pre-filter) still can. Showing "Waiting for first scan…" for the
+    # second case would be actively misleading, not just empty.
+    if all_rows:
+        table_or_empty = html.Table(all_rows, style={"width": "100%", "borderCollapse": "collapse"})
+    elif signals:
+        table_or_empty = html.Div("All pairs quiet — no touch this cycle",
+                                   style={"color": _MUTED, "fontSize": "0.8rem",
+                                          "textAlign": "center", "padding": "0.75rem 0"})
+    else:
+        table_or_empty = html.Div("Waiting for first scan…",
+                                   style={"color": _MUTED, "fontSize": "0.8rem",
+                                          "textAlign": "center", "padding": "0.75rem 0"})
+    # Suppressed when all_rows is empty — the "All pairs quiet" placeholder
+    # above already says this, a separate footer would just repeat it.
+    quiet_footer = (
+        html.Div(f"{_n_hidden} pair{'s' if _n_hidden != 1 else ''} quiet (no touch) — hidden",
+                 style={"color": "#3d444d", "fontSize": "0.65rem",
+                        "textAlign": "center", "padding": "0.4rem 0", **_mono})
+        if (_n_hidden and all_rows) else None
     )
     body = [header, table_or_empty]
+    if quiet_footer:
+        body.append(quiet_footer)
     if learning_line:
         body = [learning_line] + body
     if health_banner:

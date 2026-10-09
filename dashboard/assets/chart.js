@@ -31,6 +31,13 @@
     const WM_FONT  = "'IBM Plex Sans',sans-serif";
     const WM_SIZE  = 38;
 
+    /* Small upper-left name label for the MACD/RSI sub-panes (distinct from
+       the big centered WM_* watermark on the main candle pane above) —
+       plain white so it reads against the dark pane background regardless
+       of which series colors are active underneath it. */
+    const SUBWM_COLOR = '#ffffff';
+    const SUBWM_SIZE  = 12;
+
     /* ── plain drawing tools (h-line) ────────────────────────────────────── */
     let drawMode = null, drawColor = '#ffd700', drawWidth = 1, drawStyle = 'solid';
     let drawings = [];
@@ -4154,6 +4161,12 @@
                     }, _rsiPane);
                     _rsiPane = chart.panes().length - 1;
                     dotted(70, S.rsi); dotted(30, S.rsi); dotted(50, S.rsi);
+                    try {
+                        S.rsiWatermark = LC().createTextWatermark(chart.panes()[_rsiPane], {
+                            horzAlign: 'left', vertAlign: 'top',
+                            lines: [{ text: 'RSI', color: SUBWM_COLOR, fontSize: SUBWM_SIZE, fontFamily: WM_FONT }],
+                        });
+                    } catch(e) {}
                     (function(pi) { requestAnimationFrame(function() {
                         try { chart.panes()[pi].setHeight(IND_H); } catch(e) {}
                     }); })(_rsiPane);
@@ -4163,6 +4176,7 @@
         } else if (S.rsi) {
             try { chart.removeSeries(S.rsi); } catch(e) {}
             S.rsi = null;
+            S.rsiWatermark = null;  /* pane collapses with its last series — recreated on next show */
         }
 
         /* Stochastic — deferred pane: create on first enable, remove on disable.
@@ -4183,6 +4197,12 @@
                         crosshairMarkerVisible: false, title: '%D',
                     }, _stochPane);
                     dotted(80, S.stochK); dotted(20, S.stochK);
+                    try {
+                        S.stochWatermark = LC().createTextWatermark(chart.panes()[_stochPane], {
+                            horzAlign: 'left', vertAlign: 'top',
+                            lines: [{ text: 'Stoch', color: SUBWM_COLOR, fontSize: SUBWM_SIZE, fontFamily: WM_FONT }],
+                        });
+                    } catch(e) {}
                     (function(pi) { requestAnimationFrame(function() {
                         try { chart.panes()[pi].setHeight(IND_H); } catch(e) {}
                     }); })(_stochPane);
@@ -4195,6 +4215,7 @@
             try { chart.removeSeries(S.stochD); } catch(e) {}
             S.stochK = null;
             S.stochD = null;
+            S.stochWatermark = null;  /* pane collapses with its last series — recreated on next show */
         }
 
         /* Bollinger Bands (pane 0 overlay). Visibility is NOT set here — it's
@@ -5067,6 +5088,12 @@
                 if (S.cciMa)      S.cciMa.setData(_lastChartData.cci_ma || []);
                 if (S.cciBbUpper) S.cciBbUpper.setData(_lastChartData.cci_bb_upper || []);
                 if (S.cciBbLower) S.cciBbLower.setData(_lastChartData.cci_bb_lower || []);
+                try {
+                    S.cciWatermark = LC_.createTextWatermark(chart.panes()[_cciPane], {
+                        horzAlign: 'left', vertAlign: 'top',
+                        lines: [{ text: 'CCI', color: SUBWM_COLOR, fontSize: SUBWM_SIZE, fontFamily: WM_FONT }],
+                    });
+                } catch(e) {}
             } catch(e) {}
         } else if (!c.visible && S.cci) {
             try { chart.removeSeries(S.cci); }       catch(e) {}
@@ -5074,6 +5101,7 @@
             try { if (S.cciBbUpper) chart.removeSeries(S.cciBbUpper); } catch(e) {}
             try { if (S.cciBbLower) chart.removeSeries(S.cciBbLower); } catch(e) {}
             S.cci = S.cciMa = S.cciBbUpper = S.cciBbLower = null;
+            S.cciWatermark = null;  /* pane collapses with its last series — recreated on next show */
         }
         /* CCI visual options — only when series exists */
         try {
@@ -5142,12 +5170,19 @@
                 S.macd.setData(_lastChartData.macd || []);
                 if (S.macdLine)   S.macdLine.setData(_lastChartData.macd_line || []);
                 if (S.macdSignal) S.macdSignal.setData(_lastChartData.macd_signal || []);
+                try {
+                    S.macdWatermark = LC_.createTextWatermark(chart.panes()[_macdPane], {
+                        horzAlign: 'left', vertAlign: 'top',
+                        lines: [{ text: 'MACD', color: SUBWM_COLOR, fontSize: SUBWM_SIZE, fontFamily: WM_FONT }],
+                    });
+                } catch(e) {}
             } catch(e) {}
         } else if (!m.visible && S.macd) {
             try { chart.removeSeries(S.macd); }         catch(e) {}
             try { if (S.macdLine)   chart.removeSeries(S.macdLine); }   catch(e) {}
             try { if (S.macdSignal) chart.removeSeries(S.macdSignal); } catch(e) {}
             S.macd = S.macdLine = S.macdSignal = null;
+            S.macdWatermark = null;  /* pane collapses with its last series — recreated on next show */
         }
         /* MACD visual options — only when series exists */
         try {
