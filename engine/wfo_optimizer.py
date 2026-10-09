@@ -94,6 +94,22 @@ class WFOOptimizer:
         self._path  = save_path
         self._lock  = threading.Lock()
         self._state: dict = self._load()
+        # Set by run() immediately after each _save() call, for run_all_pairs()
+        # to read right afterward — see run()'s docstring and _save()'s return
+        # value below. Not a public API; purely an internal handoff between
+        # the two call sites in this class (confirmed the only two — _save()
+        # has exactly one caller, run() has exactly one caller, both in this
+        # file, 2026-10-09 investigation). None until the first run() call.
+        self._last_save_ok: bool | None = None
+        # Same handoff pattern as _last_save_ok above, set at each of run()'s
+        # four failure-related `return None` sites so run_all_pairs() can
+        # classify *why* a pair didn't validate, instead of lumping every
+        # None result into one generic "validation_failed" bucket (that
+        # conflated "insufficient data" with "failed out-of-sample
+        # validation" — found 2026-10-09 review, see
+        # bugs_wfo_batch_summary_reasons memory). Diagnostic only; does not
+        # change run()'s return value or any decision logic.
+        self._last_fail_reason: str | None = None
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -105,12 +121,22 @@ class WFOOptimizer:
             logger.warning("WFOOptimizer._load failed: %s", exc)
         return {}
 
-    def _save(self) -> None:
+    def _save(self) -> bool:
+        """Write self._state to disk. Returns True on success, False on any
+        write failure — the exception is still caught and logged exactly as
+        before (unchanged behavior), this only ADDS a way for the caller to
+        know the outcome instead of assuming success unconditionally. Fixed
+        2026-10-09: previously the caller (run()) logged its "best params"
+        success message regardless of whether this actually wrote to disk,
+        because a write failure here was swallowed with no signal back —
+        see run()'s success-log site for the fix."""
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._path.write_text(json.dumps(self._state, indent=2), "utf-8")
+            return True
         except Exception as exc:
             logger.warning("WFOOptimizer._save failed: %s", exc)
+            return False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -163,7 +189,21 @@ class WFOOptimizer:
         slice the grid search never saw. Only a combo that also holds up
         out-of-sample gets saved. Returns the winning param dict, or None if
         nothing validated (existing saved params, if any, are left untouched).
+
+        self._last_save_ok is reset to None here, before any early return, so
+        a caller reading it after this call never sees a stale value carried
+        over from a different pair's earlier run() call that actually reached
+        _save(). Only set to True/False further down, at the one point this
+        function calls _save().
+
+        self._last_fail_reason is reset to None the same way, then set to a
+        specific string immediately before each of the four `return None`
+        sites below — see each site's comment for the exact reason string.
+        Diagnostic only, for run_all_pairs()'s batch summary; does not affect
+        this function's return value.
         """
+        self._last_save_ok = None
+        self._last_fail_reason = None
         train_bars = getattr(config, "WFO_TRAIN_BARS", 1440)
         holdout_frac = getattr(config, "WFO_HOLDOUT_FRAC", 0.3)
         top_n        = getattr(config, "WFO_HOLDOUT_TOP_N", 8)
@@ -174,6 +214,7 @@ class WFOOptimizer:
 
         if len(train_h1) < 120:
             logger.warning("WFO %s: insufficient data (%d bars)", pair, len(train_h1))
+            self._last_fail_reason = "insufficient_data"
             return None
 
         split = int(len(train_h1) * (1 - holdout_frac))
@@ -184,6 +225,7 @@ class WFOOptimizer:
         if len(hold_h1) < 40:
             logger.warning("WFO %s: holdout slice too small (%d bars) — skipping refit",
                             pair, len(hold_h1))
+            self._last_fail_reason = "insufficient_holdout"
             return None
 
         logger.info("WFO %s: searching %d combinations over %d fit bars (%d holdout) ...",
@@ -201,6 +243,7 @@ class WFOOptimizer:
 
         if not fit_scored:
             logger.warning("WFO %s: no combination found >= 5 trades in-sample", pair)
+            self._last_fail_reason = "no_in_sample_candidate"
             return None
 
         fit_scored.sort(key=lambda t: t[0], reverse=True)
@@ -230,6 +273,7 @@ class WFOOptimizer:
                 "(need >= %d holdout trades and holdout PF > 0.5) — keeping existing params",
                 pair, min_hold_trd,
             )
+            self._last_fail_reason = "failed_oos"
             return None
 
         with self._lock:
@@ -245,7 +289,28 @@ class WFOOptimizer:
                 "holdout_trades":  best_hold_result.get("total_trades", 0),
                 "holdout_bars":    len(hold_h1),
             }
-            self._save()
+            self._last_save_ok = self._save()
+
+        # 2026-10-09: this used to log unconditionally, claiming "best" found
+        # regardless of whether _save() actually persisted it — a disk-write
+        # failure was caught and warned about inside _save() but never
+        # stopped this message from implying success. Now it reports exactly
+        # what happened: the validated params are always correct in-memory
+        # (self._state[pair] above is set either way, so get_params() still
+        # returns them for this process's lifetime), but a failed write means
+        # they will NOT survive a restart, which is materially different from
+        # genuine success and the log must say so, not paper over it.
+        if not self._last_save_ok:
+            logger.warning(
+                "WFO %s: best params found (min_score=%d CCI=%d MACD=%d/%d/%d) "
+                "but FAILED TO SAVE to %s — validated results are NOT persisted "
+                "to disk and will be lost on restart (see the _save failed "
+                "warning above for the write error)",
+                pair, best_params["min_score"], best_params["CCI_PERIOD"],
+                best_params["MACD_FAST"], best_params["MACD_SLOW"], best_params["MACD_SIGNAL"],
+                self._path,
+            )
+            return best_params
 
         logger.info(
             "WFO %s: best  min_score=%d  CCI=%d  MACD=%d/%d/%d  "
@@ -267,11 +332,58 @@ class WFOOptimizer:
         """
         Re-fit all pairs that need it. Designed to run in a background thread.
         get_candles_fn(pair, granularity, count) -> pd.DataFrame
+
+        Logs a batch summary after the loop (2026-10-09 — see
+        bugs_wfo_logging_gaps memory) so a run's outcome is auditable without
+        reconstructing it from scattered per-pair lines. Counters are
+        incremented at the exact existing control-flow point for each
+        outcome — no new branches, no change to what gets skipped, retried,
+        or saved. "Validated" and "saved" are counted separately per the
+        self._last_save_ok distinction added to run()/_save() above: a
+        pair whose params validated out-of-sample but failed to write to
+        disk must not be counted the same as a genuine success.
+
+        A `run()` result of None is further split by self._last_fail_reason
+        (2026-10-09 review follow-up — bugs_wfo_batch_summary_reasons memory)
+        into the four distinct causes run() can return None for, instead of
+        one generic bucket that silently conflated "insufficient data" and
+        "insufficient holdout" with a genuine failed out-of-sample
+        validation. If _last_fail_reason is ever None or an unrecognized
+        string at that point — which should never happen since run() sets it
+        at every one of its `return None` sites, but diagnostic code must not
+        assume its own invariants hold — it's counted as `unclassified`
+        rather than guessed into one of the four named buckets.
+
+        Known limitation, not addressed here (see run_all_pairs()'s own
+        2026-10-09 investigation notes / main.py's _wfo_job): should_refit()
+        at the top of the loop sits outside this function's own try/except,
+        same as before this change. An exception there still propagates out
+        of this function uncaught (caught instead by crash_logging.py's
+        threading.excepthook, which logs it as a generic critical error in
+        the calling thread) — and this summary log, being the last statement
+        in the function, simply never runs in that case, exactly as no
+        summary ran before this change either. Not fixed here: the task was
+        additive logging, not changing exception-handling behavior.
         """
         train_bars = getattr(config, "WFO_TRAIN_BARS", 720)
+        considered  = len(pairs)
+        skipped_fresh = 0
+        insufficient_data = 0
+        exceptions = 0
+        validated_and_saved = 0
+        validated_but_save_failed = 0
+        # Split out of the old single `validation_failed` bucket — one
+        # counter per self._last_fail_reason string set inside run(), plus
+        # `unclassified` as a safety net (see docstring above).
+        fail_insufficient_data     = 0
+        fail_insufficient_holdout  = 0
+        fail_no_in_sample_candidate = 0
+        fail_failed_oos            = 0
+        fail_unclassified          = 0
         for pair in pairs:
             if not self.should_refit(pair):
                 logger.info("WFO %s: params still fresh — skipping", pair)
+                skipped_fresh += 1
                 continue
             try:
                 df_h1 = get_candles_fn(pair, config.primary_tf_for(pair), train_bars + 60)
@@ -279,10 +391,49 @@ class WFOOptimizer:
                                         train_bars // confirm_tf_ratio(pair) + 20)
                 if df_h1 is None or len(df_h1) < 120:
                     logger.warning("WFO %s: candle fetch returned insufficient data", pair)
+                    insufficient_data += 1
                     continue
-                self.run(pair, df_h1, df_h4, market=market)
+                result = self.run(pair, df_h1, df_h4, market=market)
+                if result is None:
+                    reason = self._last_fail_reason
+                    if reason == "insufficient_data":
+                        fail_insufficient_data += 1
+                    elif reason == "insufficient_holdout":
+                        fail_insufficient_holdout += 1
+                    elif reason == "no_in_sample_candidate":
+                        fail_no_in_sample_candidate += 1
+                    elif reason == "failed_oos":
+                        fail_failed_oos += 1
+                    else:
+                        logger.error(
+                            "WFO %s: run() returned None but _last_fail_reason=%r "
+                            "is missing or unrecognized — counting as unclassified "
+                            "rather than guessing a category",
+                            pair, reason,
+                        )
+                        fail_unclassified += 1
+                elif self._last_save_ok:
+                    validated_and_saved += 1
+                else:
+                    validated_but_save_failed += 1
             except Exception as exc:
                 logger.error("WFO %s failed: %s", pair, exc, exc_info=True)
+                exceptions += 1
+
+        attempted = considered - skipped_fresh
+        logger.info(
+            "WFO batch complete: %d considered, %d skipped (fresh), %d attempted "
+            "— of those: %d validated+saved, %d validated but FAILED TO SAVE, "
+            "%d insufficient training data, %d insufficient holdout data, "
+            "%d no in-sample candidate, %d failed out-of-sample validation, "
+            "%d unclassified failure, %d insufficient data (candle fetch), "
+            "%d raised an exception",
+            considered, skipped_fresh, attempted,
+            validated_and_saved, validated_but_save_failed,
+            fail_insufficient_data, fail_insufficient_holdout,
+            fail_no_in_sample_candidate, fail_failed_oos,
+            fail_unclassified, insufficient_data, exceptions,
+        )
 
     def summary(self) -> dict:
         """All pairs' fitted params — for dashboard display."""
