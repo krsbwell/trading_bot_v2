@@ -30,7 +30,7 @@ from connectors.forexfactory_connector import is_news_blackout as ff_is_news_bla
 from engine.signal_engine import SignalEngine
 from engine.indicators import atr as _calc_atr
 from engine.adaptive_params import adaptive_params
-from engine.wfo_optimizer import wfo_optimizer
+from engine.wfo_optimizer import wfo_optimizer, _install_wfo_file_handler
 from trade.paper_trader import PaperTrader
 from trade.trade_manager import TradeManager
 from risk.risk_manager import (
@@ -117,6 +117,17 @@ crash_logging.install(logger)
 # drowning out the trading/scheduler messages this handler exists to capture.
 # WARNING+ still surfaces real dev-server errors (e.g. a bind failure).
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+# NOTE: the dedicated WFO file handler (logs/wfo.log) is installed inside
+# main()'s own body, not here at module scope — see the call near the top
+# of main() below. A module-scope call here fires the moment this file is
+# merely *imported* (as several existing tests do, e.g.
+# tests/test_scan_reliability.py, tests/test_trade_gate_parity.py), which
+# was confirmed 2026-10-12 to write into the real production logs/wfo.log
+# during ordinary test runs — the exact test-pollution bug this relocation
+# fixes. Only an actual call to main() (i.e. actually running the bot via
+# the `if __name__ == "__main__"` guard at the bottom of this file) now
+# triggers it.
 
 
 # ── Globals initialised in main() ─────────────────────────────────────────────
@@ -1214,6 +1225,16 @@ def main() -> None:
         sys.exit(0)
     atexit.register(single_instance.release, _lock_fh)
 
+    # 2026-10-12: explicit, one-time install of the dedicated WFO file
+    # handler (logs/wfo.log), as part of the actual bot process's own
+    # startup — not at module import time (see the NOTE near
+    # logging.getLogger("werkzeug") above, and bugs_wfo_logging_side_effects
+    # memory). Placed here, immediately after the single-instance guard and
+    # before anything else in main() runs, so it's unconditionally in place
+    # long before the WFO scheduler block (scheduler.add_job(_wfo_job, ...),
+    # much further below in this function) can ever register or fire a job.
+    _install_wfo_file_handler(logging.getLogger("engine.wfo_optimizer"))
+
     logger.info("══════════════════════════════════════════════════════")
     logger.info("  Trading Bot  |  Mode: %s", config.MODE.upper())
     logger.info("  Forex pairs : %s", ", ".join(config.FOREX_PAIRS))
@@ -1423,6 +1444,31 @@ def main() -> None:
             # entries sort first, "" < any ISO timestamp) means a crash costs the least.
             _fitted = wfo_optimizer.summary()
             _wfo_pairs.sort(key=lambda p: _fitted.get(p, {}).get("fitted_at", ""))
+            # Explicit date+time embedded in the message text, not just relying
+            # on the log handler's HH:MM:SS-only prefix (_log_formatter above
+            # has no date component) — this is a weekly job, so proving WHICH
+            # Sunday fired matters in a way most other log lines in this file
+            # don't need. Added 2026-10-09: this was the one message that
+            # could distinguish "the scheduled callback actually fired" from
+            # "the job was only ever registered at startup" — previously
+            # nothing logged between the cron match and the thread starting.
+            #
+            # 2026-10-12: routed through the "engine.wfo_optimizer" logger
+            # specifically (not this file's own `logger`), so it lands in
+            # the new dedicated logs/wfo.log alongside every other WFO
+            # message instead of only in main.log, which rotates far too
+            # fast (confirmed 2026-10-12: at current request volume,
+            # main.log's full ~100MB of retained history covers under a
+            # day) to still hold a weekly job's "did it fire" record by the
+            # time anyone goes looking for it. propagate=True on that
+            # logger (unchanged, see engine/wfo_optimizer.py) means this
+            # still also reaches main.log/console exactly as before.
+            logging.getLogger("engine.wfo_optimizer").info(
+                "WFO scheduled job fired at %s — %d eligible EMA-Bounce pairs, "
+                "launching background re-fit",
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                len(_wfo_pairs),
+            )
             threading.Thread(
                 target=wfo_optimizer.run_all_pairs,
                 args=(_oanda_connector.get_candles, _wfo_pairs),

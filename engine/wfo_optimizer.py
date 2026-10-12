@@ -32,6 +32,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from itertools import product
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 import config
@@ -40,6 +41,72 @@ from backtest.runner import run_backtest, confirm_tf_ratio
 logger = logging.getLogger(__name__)
 
 _SAVE_PATH = Path(__file__).parent.parent / "data" / "wfo_params.json"
+
+# ── Dedicated, persistent WFO log (2026-10-12) ───────────────────────────────
+# main.log is a 5MB x 20-backup RotatingFileHandler on the root logger, sized
+# for day-to-day trading noise, not for surviving a week between WFO runs —
+# confirmed 2026-10-12: at the 28-pair roster's current request volume, the
+# entire ~100MB of retained main.log history covered less than one day, so
+# Sunday 2026-10-11's run (if it logged at all) was already gone by Monday.
+# This handler gives WFO's own messages a separate, slower-rotating home
+# (daily rotation, 35 backups -> ~5 weeks) so a weekly job's output actually
+# survives until someone looks at it.
+#
+# 2026-10-12 review follow-up (see bugs_wfo_logging_side_effects memory):
+# this used to be installed unconditionally at module import time, right
+# here. That meant merely `import engine.wfo_optimizer` -- including every
+# test run that imports this module or anything that imports it, and any
+# standalone script -- silently created logs/ and opened a handle on the
+# real production logs/wfo.log, with no path override available (unlike
+# _SAVE_PATH). On top of polluting test output, it created a genuine
+# Windows multi-process hazard: the live bot process and a second process
+# (a test run, a script) each holding their own TimedRotatingFileHandler on
+# the identical path can collide during rotation (os.rename on a file the
+# other process still has open raises WinError 32). Installation is now
+# ONLY triggered by an explicit call -- main.py makes that call once,
+# during its own logging initialization, before the WFO scheduler job can
+# ever fire. Importing this module by itself no longer has this side
+# effect at all (see test_importing_engine_wfo_optimizer_alone_does_not_install_handler).
+_WFO_LOG_DIR  = Path(__file__).parent.parent / "logs"
+_WFO_LOG_PATH = _WFO_LOG_DIR / "wfo.log"
+
+
+def _install_wfo_file_handler(
+    target_logger: logging.Logger, log_path: Path = _WFO_LOG_PATH,
+) -> None:
+    """Attach the dedicated WFO file handler to `target_logger`, unless one
+    is already attached. Idempotent on purpose: this module's logger is a
+    process-wide singleton (logging.getLogger caches by name), so calling
+    this more than once in the same process -- e.g. a test calling it
+    directly -- must not register the handler twice and double every log
+    line to disk. The dedup check looks only for the marker below, not for
+    a matching `log_path`, so a second call with a different path is still
+    correctly treated as a no-op rather than adding a second file.
+
+    `log_path` defaults to the real production logs/wfo.log, used by
+    main.py's one production call site. Tests must always override it with
+    a tmp_path-based file instead, so test runs never create, rotate, or
+    write into the real file (see the tests in tests/test_wfo_optimizer.py
+    following this module's "dedicated logs/wfo.log" marker comment).
+
+    Attached ONLY to `target_logger`, not the root logger main.py
+    configures -- this is an additional destination for WFO's own messages,
+    not a replacement. `target_logger.propagate` is left exactly as the
+    logging module defaults it (True), so every message still also reaches
+    main.log/console exactly as it did before this handler existed.
+    """
+    for h in target_logger.handlers:
+        if getattr(h, "_is_wfo_handler", False):
+            return
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = TimedRotatingFileHandler(
+        log_path, when="D", interval=1, backupCount=35, encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    handler._is_wfo_handler = True  # marker the dedup check above looks for
+    target_logger.addHandler(handler)
 
 # ── Parameter search grid ─────────────────────────────────────────────────────
 # 3 x 3 x 2 x 2 x 2 x 3 = 216 combinations per pair — ~5 min background job
@@ -354,19 +421,19 @@ class WFOOptimizer:
         assume its own invariants hold — it's counted as `unclassified`
         rather than guessed into one of the four named buckets.
 
-        Known limitation, not addressed here (see run_all_pairs()'s own
-        2026-10-09 investigation notes / main.py's _wfo_job): should_refit()
-        at the top of the loop sits outside this function's own try/except,
-        same as before this change. An exception there still propagates out
-        of this function uncaught (caught instead by crash_logging.py's
-        threading.excepthook, which logs it as a generic critical error in
-        the calling thread) — and this summary log, being the last statement
-        in the function, simply never runs in that case, exactly as no
-        summary ran before this change either. Not fixed here: the task was
-        additive logging, not changing exception-handling behavior.
+        2026-10-12 update: an unexpected exception raised outside the
+        per-pair try/except below (the only such call is should_refit() at
+        the top of the loop) is now logged here before being re-raised —
+        previously it propagated silently to crash_logging.py's
+        threading.excepthook with no WFO-specific record at all. It still
+        propagates exactly as before (not suppressed, not swallowed into a
+        counter) and the batch-summary log below still does not run in that
+        case, since the function still exits via the exception — this adds
+        a log line, it does not change what happens afterward.
         """
         train_bars = getattr(config, "WFO_TRAIN_BARS", 720)
         considered  = len(pairs)
+        logger.info("WFO batch starting: %d pairs to consider", considered)
         skipped_fresh = 0
         insufficient_data = 0
         exceptions = 0
@@ -380,45 +447,60 @@ class WFOOptimizer:
         fail_no_in_sample_candidate = 0
         fail_failed_oos            = 0
         fail_unclassified          = 0
-        for pair in pairs:
-            if not self.should_refit(pair):
-                logger.info("WFO %s: params still fresh — skipping", pair)
-                skipped_fresh += 1
-                continue
-            try:
-                df_h1 = get_candles_fn(pair, config.primary_tf_for(pair), train_bars + 60)
-                df_h4 = get_candles_fn(pair, config.confirm_tf_for(pair),
-                                        train_bars // confirm_tf_ratio(pair) + 20)
-                if df_h1 is None or len(df_h1) < 120:
-                    logger.warning("WFO %s: candle fetch returned insufficient data", pair)
-                    insufficient_data += 1
+        try:
+            for pair in pairs:
+                if not self.should_refit(pair):
+                    logger.info("WFO %s: params still fresh — skipping", pair)
+                    skipped_fresh += 1
                     continue
-                result = self.run(pair, df_h1, df_h4, market=market)
-                if result is None:
-                    reason = self._last_fail_reason
-                    if reason == "insufficient_data":
-                        fail_insufficient_data += 1
-                    elif reason == "insufficient_holdout":
-                        fail_insufficient_holdout += 1
-                    elif reason == "no_in_sample_candidate":
-                        fail_no_in_sample_candidate += 1
-                    elif reason == "failed_oos":
-                        fail_failed_oos += 1
+                try:
+                    df_h1 = get_candles_fn(pair, config.primary_tf_for(pair), train_bars + 60)
+                    df_h4 = get_candles_fn(pair, config.confirm_tf_for(pair),
+                                            train_bars // confirm_tf_ratio(pair) + 20)
+                    if df_h1 is None or len(df_h1) < 120:
+                        logger.warning("WFO %s: candle fetch returned insufficient data", pair)
+                        insufficient_data += 1
+                        continue
+                    result = self.run(pair, df_h1, df_h4, market=market)
+                    if result is None:
+                        reason = self._last_fail_reason
+                        if reason == "insufficient_data":
+                            fail_insufficient_data += 1
+                        elif reason == "insufficient_holdout":
+                            fail_insufficient_holdout += 1
+                        elif reason == "no_in_sample_candidate":
+                            fail_no_in_sample_candidate += 1
+                        elif reason == "failed_oos":
+                            fail_failed_oos += 1
+                        else:
+                            logger.error(
+                                "WFO %s: run() returned None but _last_fail_reason=%r "
+                                "is missing or unrecognized — counting as unclassified "
+                                "rather than guessing a category",
+                                pair, reason,
+                            )
+                            fail_unclassified += 1
+                    elif self._last_save_ok:
+                        validated_and_saved += 1
                     else:
-                        logger.error(
-                            "WFO %s: run() returned None but _last_fail_reason=%r "
-                            "is missing or unrecognized — counting as unclassified "
-                            "rather than guessing a category",
-                            pair, reason,
-                        )
-                        fail_unclassified += 1
-                elif self._last_save_ok:
-                    validated_and_saved += 1
-                else:
-                    validated_but_save_failed += 1
-            except Exception as exc:
-                logger.error("WFO %s failed: %s", pair, exc, exc_info=True)
-                exceptions += 1
+                        validated_but_save_failed += 1
+                except Exception as exc:
+                    logger.error("WFO %s failed: %s", pair, exc, exc_info=True)
+                    exceptions += 1
+        except Exception as exc:
+            # Only reachable from code in this loop OUTSIDE the per-pair
+            # try/except above -- i.e. should_refit() itself raising. Log
+            # it against the WFO logger (so it lands in wfo.log, not just
+            # crash_logging's generic thread-level record) and re-raise
+            # unchanged: no suppression, no new return value, no counter
+            # incremented for the pair that triggered it or any pair after
+            # it in the list -- behavior here is identical to before this
+            # change except for this one added log line.
+            logger.error(
+                "WFO batch: unexpected exception outside per-pair handling "
+                "(most likely should_refit()): %s", exc, exc_info=True,
+            )
+            raise
 
         attempted = considered - skipped_fresh
         logger.info(

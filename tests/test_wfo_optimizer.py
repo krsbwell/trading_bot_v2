@@ -13,11 +13,20 @@ holds up on data the grid search never scored against.
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
 import config
 from engine.wfo_optimizer import WFOOptimizer
+
+_PROJECT_ROOT = Path(__file__).parent.parent
+# The REAL production WFO log -- used only to fingerprint (size, mtime)
+# around subprocess-isolated import checks below, never written to
+# directly by any test in this file.
+_WFO_LOG_FOR_TESTS = _PROJECT_ROOT / "logs" / "wfo.log"
 
 
 def _wfo(tmp_path):
@@ -429,3 +438,226 @@ def test_run_all_pairs_unclassified_fallback_when_reason_missing(tmp_path, monke
     )
     summary = next(r.message for r in caplog.records if "WFO batch complete" in r.message)
     assert "1 unclassified failure" in summary
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2026-10-12 — dedicated logs/wfo.log (see bugs_wfo_dedicated_logfile memory):
+# main.log's RotatingFileHandler rotates by size and, at current 28-pair
+# request volume, was confirmed to retain under a day of history -- nowhere
+# near enough to survive the week between WFO runs. engine.wfo_optimizer's
+# logger now also writes to a separate, daily-rotating, 35-backup
+# logs/wfo.log via _install_wfo_file_handler(), attached once at import time.
+# Also covers: a "WFO batch starting" line added at the top of
+# run_all_pairs(), and should_refit() exceptions (which sit outside the
+# per-pair try/except) now being logged before they re-raise.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 2026-10-12 correction (approved review follow-up, see
+# bugs_wfo_logging_side_effects memory): _install_wfo_file_handler() is no
+# longer called automatically at module import -- only main.py calls it
+# explicitly now, from inside main()'s own body (not module scope), so it
+# only fires when the bot process actually starts, never from a plain
+# `import main` (as tests/test_scan_reliability.py and
+# tests/test_trade_gate_parity.py both do). Every test below that exercises
+# the installer must call it explicitly too, and MUST always pass a
+# tmp_path-based `log_path` override -- never the default -- so no test run
+# ever creates, rotates, or writes into the real logs/wfo.log.
+#
+# engine.wfo_optimizer's logger (mod.logger) is a process-wide singleton
+# that persists for the life of the test session. Any test that installs a
+# handler directly onto it must remove that handler again afterward, or it
+# leaks into every test that runs later in the same process.
+# _clean_wfo_logger snapshots and restores mod.logger.handlers around each
+# test that uses it.
+
+@pytest.fixture
+def _clean_wfo_logger():
+    import engine.wfo_optimizer as mod
+    snapshot = list(mod.logger.handlers)
+    yield mod.logger
+    mod.logger.handlers = snapshot
+
+
+# 2026-10-12 correction #2: the original in-process version of this check
+# (assert mod.logger has no WFO handler right after import) passed in
+# isolation but FAILED when the full suite ran test_scan_reliability.py or
+# test_trade_gate_parity.py first -- those files `import main`, and since
+# main.py's install call used to also sit at module scope, that import
+# permanently attached a real handler to the shared singleton for the rest
+# of the pytest process. An in-process assertion on a process-wide
+# singleton can only ever prove "nothing ELSE in this process already did
+# this," never "importing this module alone never does this" -- so this is
+# rewritten as two subprocess checks, each a genuinely fresh interpreter
+# with no shared state, and each one also fingerprints the real
+# logs/wfo.log around the call to directly confirm it wasn't touched.
+
+def _wfo_log_fingerprint():
+    if _WFO_LOG_FOR_TESTS.exists():
+        st = _WFO_LOG_FOR_TESTS.stat()
+        return (st.st_size, st.st_mtime)
+    return None
+
+
+def test_importing_engine_wfo_optimizer_alone_does_not_install_handler():
+    """Requirement 13: a fresh python -c subprocess imports ONLY
+    engine.wfo_optimizer and reports whether a WFO handler got attached --
+    immune to whatever any other test file has already imported earlier in
+    this pytest process. Also confirms the real logs/wfo.log is untouched."""
+    import subprocess
+    before = _wfo_log_fingerprint()
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import engine.wfo_optimizer as mod; "
+         "print(any(getattr(h, '_is_wfo_handler', False) for h in mod.logger.handlers))"],
+        cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=60,
+    )
+    after = _wfo_log_fingerprint()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+    assert before == after, "logs/wfo.log changed from merely importing engine.wfo_optimizer"
+
+
+def test_importing_main_alone_does_not_install_handler():
+    """Requirement 14: importing main.py WITHOUT calling main() must also
+    not install the WFO handler -- it's only installed from inside main()'s
+    own body now, reached only via the `if __name__ == '__main__'` guard at
+    the bottom of main.py, never by import alone. Also confirms the real
+    logs/wfo.log is untouched by the import."""
+    import subprocess
+    before = _wfo_log_fingerprint()
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import logging; import main; "
+         "print(any(getattr(h, '_is_wfo_handler', False) "
+         "for h in logging.getLogger('engine.wfo_optimizer').handlers))"],
+        cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=60,
+    )
+    after = _wfo_log_fingerprint()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+    assert before == after, "logs/wfo.log changed from merely importing main.py"
+
+
+def test_explicit_install_creates_exactly_one_handler(tmp_path, _clean_wfo_logger):
+    import engine.wfo_optimizer as mod
+    log = _clean_wfo_logger
+    mod._install_wfo_file_handler(log, log_path=tmp_path / "wfo_test.log")
+    wfo_handlers = [h for h in log.handlers if getattr(h, "_is_wfo_handler", False)]
+    assert len(wfo_handlers) == 1
+
+
+def test_explicit_install_is_idempotent(tmp_path, _clean_wfo_logger):
+    """Calling it twice -- even with a different log_path the second time
+    -- must not add a second handler. The dedup check only looks for the
+    marker, not for a matching path, so this also documents that a second
+    call's `log_path` argument is simply ignored once a handler exists."""
+    import engine.wfo_optimizer as mod
+    log = _clean_wfo_logger
+    mod._install_wfo_file_handler(log, log_path=tmp_path / "wfo_test.log")
+    mod._install_wfo_file_handler(log, log_path=tmp_path / "wfo_test_2.log")
+    wfo_handlers = [h for h in log.handlers if getattr(h, "_is_wfo_handler", False)]
+    assert len(wfo_handlers) == 1
+
+
+def test_installed_handler_configuration(tmp_path, _clean_wfo_logger):
+    """Requirement D: TimedRotatingFileHandler, when='D', interval=1 (which
+    the stdlib normalizes to 86400 seconds), backupCount=35, and a
+    formatter whose datefmt includes the full date, not just time-of-day
+    (unlike main.py's own root-logger formatter, which is HH:MM:SS only)."""
+    import engine.wfo_optimizer as mod
+    log = _clean_wfo_logger
+    mod._install_wfo_file_handler(log, log_path=tmp_path / "wfo_test.log")
+    handler = next(h for h in log.handlers if getattr(h, "_is_wfo_handler", False))
+
+    assert isinstance(handler, TimedRotatingFileHandler)
+    assert handler.when == "D"
+    assert handler.interval == 24 * 60 * 60
+    assert handler.backupCount == 35
+    assert handler.formatter.datefmt == "%Y-%m-%d %H:%M:%S"
+
+
+def test_installed_handler_attaches_to_named_logger_not_root(tmp_path, _clean_wfo_logger):
+    """Requirement E: the handler goes on engine.wfo_optimizer's own
+    logger, never on the root logger main.py separately configures."""
+    import logging
+    import engine.wfo_optimizer as mod
+    log = _clean_wfo_logger
+    assert log.name == "engine.wfo_optimizer"
+    root_handlers_before = list(logging.getLogger().handlers)
+
+    mod._install_wfo_file_handler(log, log_path=tmp_path / "wfo_test.log")
+
+    assert any(getattr(h, "_is_wfo_handler", False) for h in log.handlers)
+    assert not any(getattr(h, "_is_wfo_handler", False) for h in logging.getLogger().handlers)
+    assert logging.getLogger().handlers == root_handlers_before
+
+
+def test_wfo_logger_propagation_preserved():
+    """Requirement F (propagation half): the file handler must be purely
+    additive -- propagate must stay True (untouched by this module
+    entirely) so messages still also reach main.log/console exactly as
+    before, and so pytest's caplog (which hooks in above the root logger)
+    keeps seeing WFO log records at all. True regardless of whether the
+    handler has been explicitly installed in this process yet."""
+    import engine.wfo_optimizer as mod
+    assert mod.logger.propagate is True
+
+
+def test_caplog_still_captures_wfo_messages_with_file_handler_attached(tmp_path, _clean_wfo_logger, caplog):
+    """Requirement F: existing caplog-based tests in this file must keep
+    working even once the dedicated file handler has been explicitly
+    installed (simulating main.py's own init) -- a second handler on this
+    logger must not interfere with caplog's own capture of the same
+    records (it hooks in via propagation to root)."""
+    import logging
+    log = _clean_wfo_logger
+    import engine.wfo_optimizer as mod
+    mod._install_wfo_file_handler(log, log_path=tmp_path / "wfo_test.log")
+    with caplog.at_level(logging.INFO):
+        log.info("caplog smoke test message")
+    assert any("caplog smoke test message" in r.message for r in caplog.records)
+
+
+def test_run_all_pairs_batch_starting_precedes_batch_complete(tmp_path, caplog):
+    import logging
+    wfo = _wfo(tmp_path)
+
+    def _get_candles(pair, granularity, count):
+        return None  # -> insufficient_data (candle-fetch), fastest path through the loop
+
+    with caplog.at_level(logging.INFO):
+        wfo.run_all_pairs(_get_candles, ["EUR_USD"])
+
+    messages = [r.message for r in caplog.records]
+    start_idx = next(i for i, m in enumerate(messages) if "WFO batch starting" in m)
+    complete_idx = next(i for i, m in enumerate(messages) if "WFO batch complete" in m)
+    assert start_idx < complete_idx
+
+
+def test_run_all_pairs_logs_and_reraises_should_refit_exception(tmp_path, monkeypatch, caplog):
+    """should_refit() sits outside the per-pair try/except -- an exception
+    there must be logged against the WFO logger (so it survives in wfo.log,
+    not just crash_logging's generic thread-level record) and must still
+    propagate unchanged: not suppressed, not turned into a counter, and the
+    batch-summary log must NOT appear, since the function still exits via
+    the exception exactly as it did before this change."""
+    import logging
+
+    wfo = _wfo(tmp_path)
+
+    def _boom(pair):
+        raise RuntimeError("simulated should_refit crash")
+    monkeypatch.setattr(wfo, "should_refit", _boom)
+
+    def _get_candles(pair, granularity, count):
+        raise AssertionError("should never be reached -- should_refit raises first")
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(RuntimeError, match="simulated should_refit crash"):
+            wfo.run_all_pairs(_get_candles, ["EUR_USD"])
+
+    assert any(
+        r.levelname == "ERROR" and "unexpected exception outside per-pair handling" in r.message
+        for r in caplog.records
+    )
+    assert not any("WFO batch complete" in r.message for r in caplog.records)
