@@ -1045,3 +1045,41 @@ was found. See [[bugs_phantom_trade_from_order_cancel]] for full detail.
       trades are phantom (order-cancel-originated) vs real, with an
       auditable trail, before trusting the 7.3%/5.9% daily-drawdown
       figures as real financial performance.
+
+
+# Phase 5B: WFO validation diagnostics (2026-10-18)
+
+Why: the 2026-10-18 WFO run saved 0/25 pairs (23 failed_oos). The log can't
+say why. Additive logging only -- no threshold/scoring/selection change.
+Files in scope: engine/wfo_optimizer.py, tests/test_wfo_optimizer.py, tasks/todo.md.
+
+- [x] Pure helpers in wfo_optimizer.py: _result_pf (same formula as
+      _composite_score), _classify_oos_rejection, _format_oos_diagnostic.
+- [x] run(): count in-sample combos that returned None; record per-candidate
+      (trades, pf, score) in the existing holdout loop; both inside try/except.
+- [x] run(): emit ONE diagnostic INFO line in the failed_oos branch and one in
+      the no_in_sample_candidate branch (wrapped in try/except; existing
+      warnings, _last_fail_reason and return values untouched).
+- [x] Tests: identical selection / rejection / saved params with diagnostics
+      on vs. off; diagnostic content correct; no persistence change on
+      rejection; diagnostic exception safety.
+- [x] Focused tests, then full suite.
+- [x] Read-only: WFO thread vs live trading concurrency.
+- [x] Review section + security check + walkthrough.
+- NOT touched: scoring, thresholds (WFO_HOLDOUT_MIN_TRADES=3 configured,
+  effective 5 via _composite_score), scheduler, strategy, risk, execution.
+
+## Review (Phase 5B)
+- engine/wfo_optimizer.py: 3 pure helpers + 2 INFO diagnostic lines (failed_oos
+  and no_in_sample_candidate branches) + 3 counters/collections. Every new call
+  is in try/except; no existing line's logic changed.
+- Reported separately (unchanged): configured holdout min 3, effective min 5
+  (via _composite_score -1 floor), effective PF condition is score>0 (the
+  warning text's "PF > 0.5" is not what the code enforces).
+- tests/test_wfo_optimizer.py: 8 new tests (+ parametrized classifier). WFO file
+  35 passed; full suite 615 passed.
+- Concurrency (read-only): WFO runs in its own daemon thread; all 27 M30
+  slots 06:00-18:30 UTC on 10-18 ran within 5s of schedule, none missed.
+- Security: logs contain only counts/ratios, no credentials or account data;
+  no new inputs, endpoints, files or dependencies.
+- Deployment: needs a bot restart to take effect (NOT done). Not committed.

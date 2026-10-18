@@ -151,6 +151,76 @@ def _composite_score(result: dict) -> float:
     return pf * (0.5 + wr)
 
 
+# ── Rejection diagnostics (2026-10-18, Phase 5B) ─────────────────────────────
+# Pure, read-only helpers: they only read values run() already computed and
+# never feed anything back into selection, scoring, or persistence. Every call
+# site in run() is wrapped in try/except so a bug here can only lose a log line.
+#
+# Two thresholds are deliberately reported separately, neither changed here:
+#   configured holdout minimum = config.WFO_HOLDOUT_MIN_TRADES (3)
+#   effective scoring minimum  = 5, because _composite_score() returns -1 for
+#     <5 trades and run() only keeps a candidate whose score beats -1.0.
+# Likewise the effective PF condition is `score > 0` (i.e. PF > 0 once >=5
+# trades), not the PF > 0.5 that the run() warning text states.
+_EFFECTIVE_MIN_TRADES = 5
+
+
+def _result_pf(result: dict) -> float:
+    """Profit factor computed exactly as _composite_score does (no 5-trade floor)."""
+    trades  = result.get("trades", []) or []
+    gross_p = sum(t["realised_pnl"] for t in trades if t["realised_pnl"] > 0)
+    gross_l = abs(sum(t["realised_pnl"] for t in trades if t["realised_pnl"] < 0))
+    return (gross_p / gross_l) if gross_l > 0 else (gross_p or 0.0)
+
+
+def _classify_oos_rejection(cands: list) -> str:
+    """cands: [(trades, pf, score)] for holdout runs that returned a result."""
+    if not cands:
+        return "no_holdout_results"
+    if any(t >= _EFFECTIVE_MIN_TRADES for t, _pf, _s in cands):
+        return "low_pf"                      # enough trades, none profitable
+    if any(pf > 0 for _t, pf, _s in cands):
+        return "too_few_trades"              # some profitable, none reached 5 trades
+    return "both"                            # too few trades AND no profit
+
+
+def _min_med_max(values: list) -> str:
+    if not values:
+        return "n/a"
+    s = sorted(values)
+    n = len(s)
+    med = s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+    return f"{s[0]:.4g}/{med:.4g}/{s[-1]:.4g}"
+
+
+def _format_oos_diagnostic(pair, tfs, best_fit, fit_none, hold_none, cands,
+                           configured_min) -> str:
+    trades = [t for t, _pf, _s in cands]
+    pfs    = [pf for _t, pf, _s in cands]
+    lt_cfg = sum(1 for t in trades if t < configured_min)
+    mid    = sum(1 for t in trades if configured_min <= t < _EFFECTIVE_MIN_TRADES)
+    ge_eff = sum(1 for t in trades if t >= _EFFECTIVE_MIN_TRADES)
+    pf_ok  = sum(1 for _t, _pf, s in cands if s > 0)
+    pf_05  = sum(1 for pf in pfs if pf > 0.5)
+    both   = sum(1 for t, pf, _s in cands
+                 if t < _EFFECTIVE_MIN_TRADES and pf <= 0)
+    fit_tr, fit_pf = best_fit if best_fit else ("n/a", "n/a")
+    return (
+        f"WFO {pair} OOS-reject diagnostic: tf={tfs[0]}/{tfs[1]} strategy=EMA-Bounce | "
+        f"verdict={_classify_oos_rejection(cands)} | "
+        f"best in-sample: trades={fit_tr} PF={fit_pf} | "
+        f"holdout candidates evaluated={len(cands)} (None={hold_none}) | "
+        f"holdout trades min/med/max={_min_med_max(trades)} | "
+        f"holdout PF min/med/max={_min_med_max(pfs)} | "
+        f"trades <{configured_min}: {lt_cfg}, {configured_min}-{_EFFECTIVE_MIN_TRADES - 1}: {mid}, "
+        f">={_EFFECTIVE_MIN_TRADES}: {ge_eff} "
+        f"(configured min={configured_min}, effective min={_EFFECTIVE_MIN_TRADES}) | "
+        f"PF condition met (score>0): {pf_ok}, PF>0.5: {pf_05} | "
+        f"failed both (trades<{_EFFECTIVE_MIN_TRADES} and PF<=0): {both} | "
+        f"in-sample combos returning None: {fit_none}"
+    )
+
+
 class WFOOptimizer:
     """
     Per-pair walk-forward parameter optimizer.
@@ -300,9 +370,11 @@ class WFOOptimizer:
 
         # ── Stage 1: rank all combos in-sample on the fit slice only ──────────
         fit_scored = []
+        diag_fit_none = 0   # diagnostic only: combos whose backtest raised
         for combo in _PARAM_COMBINATIONS:
             result = self._run_combo(pair, combo, fit_h1, fit_h4, market)
             if result is None:
+                diag_fit_none += 1
                 continue
             s = _composite_score(result)
             if s > 0:
@@ -310,6 +382,12 @@ class WFOOptimizer:
 
         if not fit_scored:
             logger.warning("WFO %s: no combination found >= 5 trades in-sample", pair)
+            try:
+                logger.info("WFO %s no-in-sample-candidate diagnostic: in-sample combos "
+                            "returning None: %d of %d", pair, diag_fit_none,
+                            len(_PARAM_COMBINATIONS))
+            except Exception:
+                pass
             self._last_fail_reason = "no_in_sample_candidate"
             return None
 
@@ -320,11 +398,20 @@ class WFOOptimizer:
         best_params      = None
         best_hold_result = None
         best_fit_score   = None
+        diag_hold = []       # diagnostic only: (trades, pf, score) per holdout result
+        diag_hold_none = 0
 
         for fit_score, combo, _fit_result in fit_scored[:top_n]:
             hold_result = self._run_combo(pair, combo, hold_h1, hold_h4, market)
             if hold_result is None:
+                diag_hold_none += 1
                 continue
+            try:
+                diag_hold.append((hold_result.get("total_trades", 0),
+                                  _result_pf(hold_result),
+                                  _composite_score(hold_result)))
+            except Exception:
+                pass
             if hold_result.get("total_trades", 0) < min_hold_trd:
                 continue
             hs = _composite_score(hold_result)
@@ -340,6 +427,16 @@ class WFOOptimizer:
                 "(need >= %d holdout trades and holdout PF > 0.5) — keeping existing params",
                 pair, min_hold_trd,
             )
+            try:
+                _top = fit_scored[0][2]
+                logger.info(_format_oos_diagnostic(
+                    pair,
+                    (config.primary_tf_for(pair), config.confirm_tf_for(pair)),
+                    (_top.get("total_trades", 0), round(_result_pf(_top), 2)),
+                    diag_fit_none, diag_hold_none, diag_hold, min_hold_trd,
+                ))
+            except Exception:
+                pass
             self._last_fail_reason = "failed_oos"
             return None
 

@@ -661,3 +661,164 @@ def test_run_all_pairs_logs_and_reraises_should_refit_exception(tmp_path, monkey
         for r in caplog.records
     )
     assert not any("WFO batch complete" in r.message for r in caplog.records)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2026-10-18 — Phase 5B: OOS-rejection diagnostics. Logging only: these tests
+# prove the diagnostics are observable AND that they cannot change what the
+# optimizer selects, rejects, or saves.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _sabotage_diagnostics(monkeypatch):
+    """Make every diagnostic helper raise -- equivalent to 'diagnostics off'."""
+    import engine.wfo_optimizer as mod
+
+    def _boom(*a, **kw):
+        raise RuntimeError("diagnostic bug (simulated)")
+    monkeypatch.setattr(mod, "_result_pf", _boom)
+    monkeypatch.setattr(mod, "_format_oos_diagnostic", _boom)
+
+
+def _state_without_time(wfo, pair):
+    return {k: v for k, v in wfo._state[pair].items() if k != "fitted_at"}
+
+
+def test_diagnostics_do_not_change_selection_or_saved_params(tmp_path, monkeypatch):
+    import json
+    import engine.wfo_optimizer as mod
+    monkeypatch.setattr(mod, "run_backtest", _fake_run_backtest_factory())
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    a = _wfo(tmp_path / "a")
+    b = _wfo(tmp_path / "b")
+    res_a = a.run("EUR_JPY", _df(300), _df(300))
+    _sabotage_diagnostics(monkeypatch)
+    res_b = b.run("EUR_JPY", _df(300), _df(300))
+
+    assert res_a == res_b and res_a["min_score"] == 55
+    assert _state_without_time(a, "EUR_JPY") == _state_without_time(b, "EUR_JPY")
+    ja = json.loads((tmp_path / "a" / "test_wfo_params.json").read_text())
+    jb = json.loads((tmp_path / "b" / "test_wfo_params.json").read_text())
+    for j in (ja, jb):
+        j["EUR_JPY"].pop("fitted_at")
+    assert ja == jb
+
+
+def _profile_fake():
+    """Fit: every combo (except CCI_PERIOD 28 -> raises) gets 10 trades PF 4.
+    Holdout: the first 8 holdout calls follow fixed profiles (see below)."""
+    calls = {"hold": 0}
+    profiles = [
+        [-5.0, 5.0],            # 2 trades, PF 1
+        [-5.0],                 # 1 trade,  PF 0
+        [5.0, 5.0, -5.0],       # 3 trades, PF 2
+        [-5.0] * 4,             # 4 trades, PF 0
+        [-5.0] * 5,             # 5 trades, PF 0
+        [-5.0] * 6,             # 6 trades, PF 0
+        [],                     # 0 trades
+        None,                   # raises -> run_backtest error -> None
+    ]
+
+    def _fake(pair, h1, h4, min_score=None, market=None, adaptive=None):
+        if len(h1) >= 140:
+            if adaptive["CCI_PERIOD"] == 28:
+                raise RuntimeError("fit combo error (simulated)")
+            return _mk_result([5.0] * 8 + [-5.0] * 2)
+        p = profiles[calls["hold"]]
+        calls["hold"] += 1
+        if p is None:
+            raise RuntimeError("holdout combo error (simulated)")
+        return _mk_result(p)
+    return _fake
+
+
+def test_rejection_diagnostic_content_and_classification(tmp_path, monkeypatch, caplog):
+    import logging
+    import engine.wfo_optimizer as mod
+    monkeypatch.setattr(mod, "run_backtest", _profile_fake())
+
+    wfo = _wfo(tmp_path)
+    with caplog.at_level(logging.INFO):
+        result = wfo.run("EUR_JPY", _df(300), _df(300))
+
+    assert result is None
+    assert wfo._last_fail_reason == "failed_oos"
+    line = next(r.message for r in caplog.records if "OOS-reject diagnostic" in r.message)
+    assert "WFO EUR_JPY" in line
+    assert f"tf={config.primary_tf_for('EUR_JPY')}/{config.confirm_tf_for('EUR_JPY')}" in line
+    assert "strategy=EMA-Bounce" in line
+    assert "verdict=low_pf" in line                      # 5+ trades exist, none profitable
+    assert "best in-sample: trades=10 PF=4.0" in line
+    assert "holdout candidates evaluated=7 (None=1)" in line
+    assert "holdout trades min/med/max=0/3/6" in line
+    assert "holdout PF min/med/max=0/0/2" in line
+    assert "trades <3: 3, 3-4: 2, >=5: 2" in line
+    assert "configured min=3, effective min=5" in line
+    assert "PF condition met (score>0): 0, PF>0.5: 2" in line
+    assert "failed both (trades<5 and PF<=0): 3" in line
+    assert "in-sample combos returning None: 72" in line
+
+
+def test_rejection_leaves_state_and_disk_untouched(tmp_path, monkeypatch):
+    import engine.wfo_optimizer as mod
+    monkeypatch.setattr(mod, "run_backtest", _profile_fake())
+
+    wfo = _wfo(tmp_path)
+    wfo._state["EUR_JPY"] = {"params": {"min_score": 999}, "fitted_at": "sentinel"}
+    before = dict(wfo._state["EUR_JPY"])
+    assert wfo.run("EUR_JPY", _df(300), _df(300)) is None
+    assert wfo._state["EUR_JPY"] == before
+    assert wfo._last_save_ok is None
+    assert not wfo._path.exists(), "a rejection must never write the params file"
+
+
+def test_rejection_decision_identical_with_diagnostics_broken(tmp_path, monkeypatch):
+    import engine.wfo_optimizer as mod
+    monkeypatch.setattr(mod, "run_backtest", _profile_fake())
+    assert _wfo(tmp_path).run("EUR_JPY", _df(300), _df(300)) is None
+
+    monkeypatch.setattr(mod, "run_backtest", _profile_fake())   # fresh call counter
+    _sabotage_diagnostics(monkeypatch)
+    wfo = _wfo(tmp_path)
+    assert wfo.run("EUR_JPY", _df(300), _df(300)) is None
+    assert wfo._last_fail_reason == "failed_oos"
+
+
+def test_no_in_sample_candidate_logs_none_count(tmp_path, monkeypatch, caplog):
+    import logging
+    import engine.wfo_optimizer as mod
+
+    def _fake(pair, h1, h4, min_score=None, market=None, adaptive=None):
+        if adaptive["CCI_PERIOD"] == 28:
+            raise RuntimeError("simulated")
+        return _mk_result([-5.0])          # <5 trades -> score -1
+    monkeypatch.setattr(mod, "run_backtest", _fake)
+
+    wfo = _wfo(tmp_path)
+    with caplog.at_level(logging.INFO):
+        assert wfo.run("EUR_JPY", _df(300), _df(300)) is None
+    assert wfo._last_fail_reason == "no_in_sample_candidate"
+    assert any("no-in-sample-candidate diagnostic" in r.message
+               and "returning None: 72 of 216" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("cands,expected", [
+    ([], "no_holdout_results"),
+    ([(5, 0.0, -1.0)], "low_pf"),
+    ([(4, 2.0, -1.0), (2, 0.0, -1.0)], "too_few_trades"),
+    ([(4, 0.0, -1.0), (0, 0.0, -1.0)], "both"),
+])
+def test_classify_oos_rejection(cands, expected):
+    from engine.wfo_optimizer import _classify_oos_rejection
+    assert _classify_oos_rejection(cands) == expected
+
+
+def test_result_pf_matches_composite_formula():
+    from engine.wfo_optimizer import _result_pf, _composite_score
+    r = _mk_result([5.0] * 3 + [-5.0] * 3 + [5.0] * 2)       # 8 trades, PF 10/... 
+    pf = _result_pf(r)
+    assert pf == pytest.approx(25.0 / 15.0)
+    assert _composite_score(r) == pytest.approx(pf * (0.5 + r["win_rate"]))
+    assert _result_pf(_mk_result([5.0, 5.0])) == 10.0         # no losses -> gross profit
+    assert _result_pf({}) == 0.0
