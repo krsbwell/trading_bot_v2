@@ -231,6 +231,21 @@ logger = logging.getLogger(__name__)
 _WARMUP = 60
 
 
+def confirm_candles_closed_at(df_h1: pd.DataFrame, df_h4: pd.DataFrame, i: int) -> int:
+    """How many confirm-TF candles had CLOSED by the close of primary bar `i`.
+
+    Same rule and same candle-length inference as run_backtest()'s main loop
+    (`c_end <= bar_time + p_len`), from the actual timestamps in the frames --
+    never from row counts. Used by WFO to verify, before a holdout is scored,
+    that the confirm TF is really warmed up at the first scored bar.
+    """
+    def _bar_len(df):
+        d = pd.Series(df.index).diff().dropna()
+        return d.median() if len(d) else pd.Timedelta(minutes=30)
+    c_end = df_h4.index + _bar_len(df_h4)
+    return int((c_end <= df_h1.index[i] + _bar_len(df_h1)).sum())
+
+
 def run_backtest(
     pair: str,
     df_h1: pd.DataFrame,
@@ -245,9 +260,18 @@ def run_backtest(
     tp_fn=None,
     df_d: "pd.DataFrame | None" = None,
     require_d_trend_alignment: bool = False,
+    eval_start: "int | None" = None,
 ) -> dict:
     """
     Run a full backtest for one pair.
+
+    eval_start: optional index into df_h1 of the FIRST bar that may be scored
+    (default None == _WARMUP, i.e. unchanged behaviour). Bars before it are
+    CONTEXT ONLY: the strategy slices still include them (exactly as live sees
+    its last LIVE_CANDLE_WINDOW candles) but no signal is evaluated, no trade
+    is opened, and no equity/performance is recorded for them. Floored at
+    _WARMUP. Added 2026-10-27 (Phase 5D-1B) so WFO's holdout can borrow the
+    fit period as warm-up instead of starting cold -- see tasks/todo.md.
 
     buy_fn/sell_fn/stop_loss_fn: signal/stop-loss functions with the same
     signatures as strategy_ema_cci_macd's. Default to None, which resolves
@@ -349,7 +373,11 @@ def run_backtest(
     c_end = df_h4.index + c_len          # when each confirm candle CLOSES
     win   = config.LIVE_CANDLE_WINDOW
 
-    for i in range(_WARMUP, len(df_h1)):
+    first_bar = _WARMUP if eval_start is None else max(_WARMUP, int(eval_start))
+    entry_signals = 0   # opens with no same-pair position already open
+    addon_entries = 0   # pyramid add-ons onto an already-open same-pair position
+
+    for i in range(first_bar, len(df_h1)):
         bar_time = df_h1.index[i]
         d_trend  = _d_trend_at(daily_prep, bar_time)
 
@@ -482,9 +510,14 @@ def run_backtest(
         if config.BACKTEST_SPREAD_ENABLED:
             _sp = config.spread_pips_for(pair) * (0.01 if "JPY" in pair or "XAU" in pair else 0.0001)
             fill = entry + _sp if direction == "long" else entry - _sp
-        pt.open_trade(pair=pair, direction=direction, entry_price=fill,
-                      sl=stop_loss, tp_levels=tp_levels, size=size,
-                      extra={"_sig": sig_feat})
+        opened_id = pt.open_trade(pair=pair, direction=direction, entry_price=fill,
+                                  sl=stop_loss, tp_levels=tp_levels, size=size,
+                                  extra={"_sig": sig_feat})
+        if opened_id is not None:   # count real fills only (None == rejected)
+            if existing:
+                addon_entries += 1
+            else:
+                entry_signals += 1
 
         signal_log.append({
             "bar_idx":  i,
@@ -494,12 +527,15 @@ def run_backtest(
             "entry":    entry,
             "sl":       stop_loss,
             "tp1":      tp_levels["tp1"],
+            "addon":    bool(existing),
         })
 
     # Close any remaining open positions at last bar price
     last_price = float(df_h1["close"].iloc[-1])
+    forced_closes = 0   # end-of-data closes: counted in total_trades, but NOT new entries
     for t in list(pt.open_trades):
-        pt.manual_close(t["id"], last_price)
+        if pt.manual_close(t["id"], last_price):
+            forced_closes += 1
 
     closed  = pt.closed_trades
     total   = len(closed)
@@ -529,6 +565,11 @@ def run_backtest(
         "trades":         closed,
         "equity_curve":   equity,
         "signal_log":     signal_log,
+        # Additive diagnostics (Phase 5D-1B); none of the fields above change meaning.
+        "eval_start":     first_bar,
+        "entry_signals":  entry_signals,
+        "addon_entries":  addon_entries,
+        "forced_closes":  forced_closes,
     }
 
 

@@ -3,10 +3,23 @@ Tests for bot_service.py's supervise() — added 2026-08-12 alongside the fix
 for the missing bot_service.py file (see bugs_bot_service_missing memory).
 Uses a fake Popen so no real processes are spawned.
 """
+import logging
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import bot_service
+# bot_service attaches a RotatingFileHandler to the REAL logs/bot_service.log at
+# import time (module level), and supervise() logs every start/restart -- so
+# importing it plainly made these tests append fake entries to the live
+# supervisor's log. Swap the handler class for a NullHandler for the duration
+# of the import only; tests/conftest.py's _isolate_bot_service_log covers
+# the case where another module imported it first.
+import logging.handlers as _lh
+_real_rfh = _lh.RotatingFileHandler
+_lh.RotatingFileHandler = lambda *a, **k: logging.NullHandler()
+try:
+    import bot_service
+finally:
+    _lh.RotatingFileHandler = _real_rfh
 
 
 class _FakeProc:

@@ -3110,20 +3110,37 @@ def ml_action(retrain_n, wfo_n):
         return connector.get_candles(pair, gran, count)
 
     if triggered == "ml-wfo-btn":
-        import threading
-        from engine.wfo_optimizer import wfo_optimizer
-        from alerts.telegram_alert import send_wfo_started, send_wfo_complete
-
-        send_wfo_started(pairs)
-
-        def _run_wfo():
-            wfo_optimizer.run_all_pairs(_candles_fn, pairs, market="forex")
-            send_wfo_complete(wfo_optimizer.summary())
-
-        threading.Thread(target=_run_wfo, daemon=True).start()
-        return f"WFO started for {len(pairs)} pair(s) — running in background. Telegram notification will follow when done."
+        return _start_wfo_from_dashboard(pairs, _candles_fn)
 
     return no_update
+
+
+_WFO_ALREADY_RUNNING_MSG = "WFO optimization is already running. No additional batch was started."
+
+
+def _start_wfo_from_dashboard(pairs, candles_fn, optimizer=None):
+    """Run-WFO button (Phase 5D-5). The batch guard inside run_all_pairs() is the only
+    authority; the batch_running() pre-check just gives the user an immediate, accurate
+    message. The "started" Telegram notice is sent from inside the guard (on_start) and
+    the "complete" notice only if this request really ran a batch, so a rejected request
+    never announces a new optimization."""
+    import threading
+    from alerts.telegram_alert import send_wfo_started, send_wfo_complete
+    if optimizer is None:
+        from engine.wfo_optimizer import wfo_optimizer as optimizer
+
+    if optimizer.batch_running():
+        return _WFO_ALREADY_RUNNING_MSG
+
+    def _run_wfo():
+        ran = optimizer.run_all_pairs(candles_fn, pairs, market="forex",
+                                      on_start=lambda: send_wfo_started(pairs))
+        if ran:
+            send_wfo_complete(optimizer.summary())
+
+    threading.Thread(target=_run_wfo, daemon=True, name="wfo-dashboard").start()
+    return (f"WFO start requested for {len(pairs)} pair(s) — running in background unless another "
+            f"batch is already active. Telegram notifications will follow.")
 
 
 # ── Backtest panel show / hide ────────────────────────────────────────────────

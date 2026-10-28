@@ -50,3 +50,36 @@ def _isolate_signal_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setattr(_sl, "_LOG_PATH", tmp_path / "test_signal_lifecycle.csv")
     monkeypatch.setattr(_sl, "_SEQ_PATH", tmp_path / "test_signal_id_seq.json")
     monkeypatch.setattr(_sl, "_initialised", False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_adaptive_params(tmp_path, monkeypatch):
+    """
+    2026-10-27 (Phase 5D): learning.feedback_loop.generate_suggestions() calls
+    engine.adaptive_params' module-level singleton .force_tier(), which saved
+    to the live bot's data/adaptive_state.json (found via a plugin that
+    recorded every _save() aimed at the real path: two TestFeedbackLoop tests
+    in test_learning.py). Redirect the singleton's save path to tmp and give
+    each test its own copy of the in-memory state so tier changes can't leak
+    between tests either.
+    """
+    import copy
+    from engine.adaptive_params import adaptive_params as _ap
+    monkeypatch.setattr(_ap, "_path", tmp_path / "test_adaptive_state.json")
+    monkeypatch.setattr(_ap, "_state", copy.deepcopy(_ap._state))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_bot_service_log(monkeypatch):
+    """
+    bot_service.py installs a RotatingFileHandler on the real
+    logs/bot_service.log when imported, and supervise() logs through it, so
+    test_bot_service.py's supervise() calls appended fake start/restart
+    entries to the live supervisor's log. If the module is loaded, swap its
+    handlers for a NullHandler for the duration of every test.
+    """
+    import logging
+    import sys
+    if "bot_service" in sys.modules:
+        monkeypatch.setattr(logging.getLogger("bot_service"), "handlers",
+                            [logging.NullHandler()])

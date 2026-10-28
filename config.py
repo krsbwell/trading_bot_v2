@@ -628,7 +628,22 @@ EMA_FIXED_PERIODS   = (20, 50, 200)   # short, mid, long
 # last WFO_TRAIN_BARS of live candle data. Runs in a background thread.
 WFO_ENABLED    = True   # Set False to disable the weekly re-fit entirely
 WFO_TRAIN_BARS = 1440   # M30 bars used for fitting (~30 days: 48 bars/day × 30; was 720 H1)
-WFO_REFIT_DAYS = 7      # Days between re-fits per pair
+WFO_REFIT_DAYS = 7      # LEGACY (Phase 5D-5): no longer read -- freshness is weekly-cycle based, see below
+
+# Phase 5D-5 (2026-10-27): weekly-cycle freshness. A pair is eligible again once its
+# `fitted_at` is earlier than the START of the current scheduled cycle (the most recent
+# WFO_CYCLE_* instant in WFO_SCHEDULE_TZ). The old `(now - fitted_at).days >= 7` skipped
+# every pair saved by the previous batch (fitted_at is written AFTER the trigger, so the
+# age at the next trigger is always just under 7 days) and breaks on DST weeks.
+# WFO_CYCLE_* MUST match main.py's CronTrigger (day_of_week="sun", hour=2, minute=0);
+# tests/test_wfo_freshness.py fails if they drift. WFO_SCHEDULE_TZ is explicit on purpose;
+# the cron itself uses the machine zone, so a startup warning fires if they ever differ.
+WFO_SCHEDULE_TZ        = "America/New_York"
+WFO_CYCLE_DAY_OF_WEEK  = 6      # Monday=0 ... Sunday=6
+WFO_CYCLE_HOUR         = 2
+WFO_CYCLE_MINUTE       = 0
+WFO_REFIT_CYCLES       = 1      # Scheduled cycles between re-fits per pair (integer >= 1;
+                                # invalid/missing -> 1 with a warning). Replaces WFO_REFIT_DAYS.
 
 # Fit/holdout split added 2026-08-11 — see engine/wfo_optimizer.py module
 # docstring for why: picking the single best-in-sample combo out of 216 with
@@ -638,7 +653,25 @@ WFO_REFIT_DAYS = 7      # Days between re-fits per pair
 # validate the top WFO_HOLDOUT_TOP_N in-sample candidates before one is saved.
 WFO_HOLDOUT_FRAC       = 0.3   # Fraction of WFO_TRAIN_BARS reserved for validation
 WFO_HOLDOUT_TOP_N      = 8     # How many top in-sample combos get OOS-checked
-WFO_HOLDOUT_MIN_TRADES = 3     # Minimum holdout trades for a combo to be trusted
+# 2026-10-27 (Phase 5D-2): holdout eligibility is two explicit checks made BEFORE
+# ranking -- completed holdout trades >= MIN_TRADES AND holdout profit factor >=
+# MIN_PF. (Before: MIN_TRADES was 3 but a hidden 5-trade floor inside the score
+# applied anyway, and "PF > 0.5" was documented but only "any winner" enforced.)
+# PF == 1.0 is eligible; it is a minimum bar, not evidence of a reliable edge.
+# `total_trades` counts completed trades including pyramid add-ons and the
+# end-of-data forced close; entry_signals/addon_entries/forced_closes are logged
+# separately and gate nothing.
+WFO_HOLDOUT_MIN_TRADES = 5     # Minimum COMPLETED holdout trades (was 3, effectively 5)
+WFO_HOLDOUT_MIN_PF     = 1.0   # Minimum holdout profit factor (new; PF >= this is eligible)
+# 2026-10-27 (Phase 5D-1B): the holdout combos are backtested on the whole
+# WFO_TRAIN_BARS window with eval_start at the holdout boundary, so the fit
+# period only serves as indicator / confirm-TF context. This is a WFO-only
+# sanity guard, NOT a strategy signal threshold: if fewer than this many
+# confirm-TF candles had actually CLOSED (by timestamp) before the first
+# holdout bar, the pair's refit is skipped instead of scoring a cold-started
+# holdout. 100 = EMA/MACD/ADX convergence and detect_pivots' 100-candle scan.
+# 0 disables the guard.
+WFO_CONTEXT_CONFIRM_CANDLES = 100
 
 # ── Adaptive parameter tuning ─────────────────────────────────────────────────
 # Adjusts CCI threshold, EMA touch band, and MACD bar count per pair based on

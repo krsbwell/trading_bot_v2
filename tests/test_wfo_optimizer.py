@@ -45,7 +45,14 @@ def _small_train_window(monkeypatch):
     monkeypatch.setattr(config, "WFO_TRAIN_BARS", 200)
     monkeypatch.setattr(config, "WFO_HOLDOUT_FRAC", 0.3)
     monkeypatch.setattr(config, "WFO_HOLDOUT_TOP_N", 8)
-    monkeypatch.setattr(config, "WFO_HOLDOUT_MIN_TRADES", 3)
+    # Phase 5D-2: the holdout minimum is now enforced exactly as written (it used to be
+    # 3 on paper but 5 in effect), so pin the production policy rather than 3.
+    monkeypatch.setattr(config, "WFO_HOLDOUT_MIN_TRADES", 5)
+    monkeypatch.setattr(config, "WFO_HOLDOUT_MIN_PF", 1.0)
+    # Phase 5D-1B: these tests feed degenerate 30-min frames as BOTH timeframes
+    # and fake run_backtest, so the real-calendar confirm-context guard doesn't
+    # apply here; it is covered by tests/test_wfo_holdout_context.py.
+    monkeypatch.setattr(config, "WFO_CONTEXT_CONFIRM_CANDLES", 0)
 
 
 def _mk_result(pnls):
@@ -69,8 +76,8 @@ def _fake_run_backtest_factory(fit_bars=140):
     combo B (identical except min_score=55) is modest in-sample but genuinely
     holds up out-of-sample. Every other combo returns <5 trades so it can't
     crowd combo A/B out of the top-N fit ranking."""
-    def _fake(pair, h1, h4, min_score=None, market=None, adaptive=None):
-        is_holdout = len(h1) < fit_bars
+    def _fake(pair, h1, h4, min_score=None, market=None, adaptive=None, eval_start=None):
+        is_holdout = eval_start is not None
         is_first_grid_slot = (
             adaptive["CCI_PERIOD"] == 14 and adaptive["MACD_FAST"] == 12
             and adaptive["cci_threshold"] == 15 and adaptive["touch_lookback"] == 30
@@ -121,8 +128,8 @@ def test_nothing_validates_leaves_existing_params_untouched(tmp_path, monkeypatc
     clobber whatever was already saved for that pair."""
     import engine.wfo_optimizer as mod
 
-    def _always_fails_holdout(pair, h1, h4, min_score=None, market=None, adaptive=None):
-        is_holdout = len(h1) < 140
+    def _always_fails_holdout(pair, h1, h4, min_score=None, market=None, adaptive=None, eval_start=None):
+        is_holdout = eval_start is not None
         if not is_holdout:
             return _mk_result([5.0] * 10 + [-5.0] * 2)  # looks fine in-sample
         return _mk_result([-5.0, 5.0])  # always < 3 holdout trades
@@ -228,7 +235,7 @@ def test_last_save_ok_resets_between_pairs_not_stale(tmp_path, monkeypatch):
 
     # Second pair: every combo returns too few trades -> validation never
     # even reaches the save step.
-    def _always_too_few(pair, h1, h4, min_score=None, market=None, adaptive=None):
+    def _always_too_few(pair, h1, h4, min_score=None, market=None, adaptive=None, eval_start=None):
         return _mk_result([-5.0])
     monkeypatch.setattr(mod, "run_backtest", _always_too_few)
     none_result = wfo.run("GBP_USD", _df(300), _df(300))
@@ -264,11 +271,12 @@ def test_run_all_pairs_batch_summary_counts_are_accurate(tmp_path, monkeypatch, 
             return None
         return _df(300)
 
-    def _run_backtest_dispatch(pair, h1, h4, min_score=None, market=None, adaptive=None):
+    def _run_backtest_dispatch(pair, h1, h4, min_score=None, market=None, adaptive=None, eval_start=None):
         if pair == "REJECTED":
             return _mk_result([-5.0])   # 1 trade, excluded at the <5-trade floor
         return _fake_run_backtest_factory()(pair, h1, h4, min_score=min_score,
-                                             market=market, adaptive=adaptive)
+                                             market=market, adaptive=adaptive,
+                                             eval_start=eval_start)
     monkeypatch.setattr(mod, "run_backtest", _run_backtest_dispatch)
 
     with caplog.at_level(logging.INFO):
@@ -341,8 +349,8 @@ def test_fail_reason_failed_oos(tmp_path, monkeypatch):
     all."""
     import engine.wfo_optimizer as mod
 
-    def _good_fit_bad_holdout(pair, h1, h4, min_score=None, market=None, adaptive=None):
-        is_holdout = len(h1) < 140  # fit=140 bars per the _small_train_window fixture
+    def _good_fit_bad_holdout(pair, h1, h4, min_score=None, market=None, adaptive=None, eval_start=None):
+        is_holdout = eval_start is not None  # 5D-1B: holdout == scored from a boundary
         if not is_holdout:
             return _mk_result([5.0] * 6 + [-5.0] * 2)   # 8 trades, score > 0
         return _mk_result([-5.0])                       # 1 holdout trade < min_hold_trd=3
@@ -378,11 +386,11 @@ def test_run_all_pairs_classifies_fail_reasons_and_reconciles(tmp_path, monkeypa
             return _df(130)       # -> insufficient_holdout
         return _df(300)           # NOGOODFIT / BADOOS
 
-    def _run_backtest_dispatch(pair, h1, h4, min_score=None, market=None, adaptive=None):
+    def _run_backtest_dispatch(pair, h1, h4, min_score=None, market=None, adaptive=None, eval_start=None):
         if pair == "NOGOODFIT":
             return _mk_result([-5.0])                       # -> no_in_sample_candidate
         if pair == "BADOOS":
-            is_holdout = len(h1) < 140
+            is_holdout = eval_start is not None
             if not is_holdout:
                 return _mk_result([5.0] * 6 + [-5.0] * 2)
             return _mk_result([-5.0])                        # -> failed_oos
@@ -720,8 +728,8 @@ def _profile_fake():
         None,                   # raises -> run_backtest error -> None
     ]
 
-    def _fake(pair, h1, h4, min_score=None, market=None, adaptive=None):
-        if len(h1) >= 140:
+    def _fake(pair, h1, h4, min_score=None, market=None, adaptive=None, eval_start=None):
+        if eval_start is None:
             if adaptive["CCI_PERIOD"] == 28:
                 raise RuntimeError("fit combo error (simulated)")
             return _mk_result([5.0] * 8 + [-5.0] * 2)
@@ -748,15 +756,17 @@ def test_rejection_diagnostic_content_and_classification(tmp_path, monkeypatch, 
     assert "WFO EUR_JPY" in line
     assert f"tf={config.primary_tf_for('EUR_JPY')}/{config.confirm_tf_for('EUR_JPY')}" in line
     assert "strategy=EMA-Bounce" in line
-    assert "verdict=low_pf" in line                      # 5+ trades exist, none profitable
+    # 5D-2: 5+ trades exist on two candidates and PF >= 1 on two others, but never the
+    # same candidate -> "mixed" (the old Phase 5B classifier called this "low_pf").
+    assert "verdict=mixed" in line
+    assert "policy: min_trades=5 min_pf=1" in line
     assert "best in-sample: trades=10 PF=4.0" in line
     assert "holdout candidates evaluated=7 (None=1)" in line
     assert "holdout trades min/med/max=0/3/6" in line
     assert "holdout PF min/med/max=0/0/2" in line
-    assert "trades <3: 3, 3-4: 2, >=5: 2" in line
-    assert "configured min=3, effective min=5" in line
-    assert "PF condition met (score>0): 0, PF>0.5: 2" in line
-    assert "failed both (trades<5 and PF<=0): 3" in line
+    assert "trades_ok=2 pf_ok=2 eligible=0" in line
+    assert "failed: trades-only=2 pf-only=2 both=3" in line
+    assert "effective min" not in line and "PF>0.5" not in line     # contradictory old text is gone
     assert "in-sample combos returning None: 72" in line
 
 
@@ -789,7 +799,7 @@ def test_no_in_sample_candidate_logs_none_count(tmp_path, monkeypatch, caplog):
     import logging
     import engine.wfo_optimizer as mod
 
-    def _fake(pair, h1, h4, min_score=None, market=None, adaptive=None):
+    def _fake(pair, h1, h4, min_score=None, market=None, adaptive=None, eval_start=None):
         if adaptive["CCI_PERIOD"] == 28:
             raise RuntimeError("simulated")
         return _mk_result([-5.0])          # <5 trades -> score -1
@@ -808,6 +818,11 @@ def test_no_in_sample_candidate_logs_none_count(tmp_path, monkeypatch, caplog):
     ([(5, 0.0, -1.0)], "low_pf"),
     ([(4, 2.0, -1.0), (2, 0.0, -1.0)], "too_few_trades"),
     ([(4, 0.0, -1.0), (0, 0.0, -1.0)], "both"),
+    ([(5, 0.99, 1.0), (3, 5.0, 1.0)], "mixed"),                 # trades ok / PF ok, never together
+    ([(5, 1.0, 1.0)], "eligible"),                              # PF exactly 1.0 + 5 trades qualifies
+    ([(5, float("inf"), 1.0)], "eligible"),                     # no-loss set
+    ([(5, float("nan"), 0.0)], "low_pf"),                       # undefined PF is never eligible
+    ([(3, float("inf"), 1.0)], "too_few_trades"),
 ])
 def test_classify_oos_rejection(cands, expected):
     from engine.wfo_optimizer import _classify_oos_rejection

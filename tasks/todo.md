@@ -1083,3 +1083,638 @@ Files in scope: engine/wfo_optimizer.py, tests/test_wfo_optimizer.py, tasks/todo
 - Security: logs contain only counts/ratios, no credentials or account data;
   no new inputs, endpoints, files or dependencies.
 - Deployment: needs a bot restart to take effect (NOT done). Not committed.
+
+# Phase 5D: WFO data sufficiency and validation design (plan drafted 2026-10-27)
+
+Context: scheduled WFO runs 10-18 and 10-25 each saved 0/25 pairs (10-25: 21
+failed OOS, 2 no in-sample candidate, 2 fetch exceptions EUR_CAD + GBP_JPY,
+both Cloudflare 504; 13h25m). Suspected structural cause: backtest skips every
+bar until >= 50 confirm-TF candles have closed (backtest/runner.py ~L352-366),
+but WFO gives the M30 holdout only 54 H4 candles -> only ~33 of 433 holdout
+bars can signal. UNVERIFIED until 5D-1A. Approved order (user, 2026-10-27):
+
+- [x] **5D-1A** Verify warmup starvation, READ-ONLY. Compute, from slice sizes
+      and bar timestamps only (no backtest, no optimization, no broker calls),
+      the first bar index at which `len(slice_h4) >= 50` in the fit slice and
+      the holdout slice, for an M30/H4 pair and for GBP_CAD (H4/D). Explain the
+      GBP_NZD 3-holdout-trade anomaly. Report active-bar counts. STOP and
+      report before any code change.
+- [x] **5D-1B** (B1 IMPLEMENTED + tested 2026-10-27, NOT deployed) Only if 5D-1A confirms: design the smallest safe warmup fix
+      (e.g. give each slice enough prior confirm-TF context while scoring only
+      its own bars). Get the design approved BEFORE implementing. Tests:
+      no-lookahead (nothing after bar i's close visible), holdout isolation
+      (no holdout trade/score leaks into fit ranking), active-bar count.
+- [x] **5D-3** (IMPLEMENTED + tested 2026-10-27, NOT deployed) Bounded retry for transient historical candle-fetch failures.
+      Helper in engine/wfo_optimizer.py around the two get_candles_fn calls
+      (connector and live scans untouched). 3 attempts total, ~5s then ~20s
+      backoff + jitter. Retry: HTTP 502/503/504, connection reset, connect/read
+      timeout, chunked-encoding error. Never retry 400/401/403/404 or any other
+      V20Error. Log each retry; re-raise the original exception after the last
+      attempt so the existing `except Exception` + "raised an exception"
+      counter behave as today. 429 NOT included. Read-only GETs: no order
+      path, no duplicate-trade risk. Tests: fake client — retry then success,
+      give up after 3, 401/400 not retried, original exception preserved.
+- [x] **5D-2** (IMPLEMENTED + tested 2026-10-27, NOT deployed) Explicit validation policy. Config: WFO_HOLDOUT_MIN_TRADES = 5
+      (single source of truth; remove the hidden <5 floor inside
+      _composite_score from the eligibility path) and WFO_HOLDOUT_MIN_PF = 1.0.
+      Keep scoring/ranking separate from eligibility: eligible = trades >= min
+      AND PF >= min PF; rank eligible candidates only; accept the best eligible.
+      Log a distinct reason per rejection (too_few_trades / low_pf / both /
+      none_eligible). Fix warning text to match behaviour. Keep the Phase 5B
+      diagnostics working. Tests: boundary cases (4/5 trades, PF 0.99/1.0),
+      reason codes, ranking unchanged among eligible candidates.
+- [ ] **5D-1C** Only AFTER 5D-1B: evaluate WFO_TRAIN_BARS = 3000 (single
+      request; est. runtime 28-38h vs 13.4h measured). Consider 4500 (est.
+      42-61h) only if holdouts are still short AND runtime is acceptable.
+      Check Sunday-17:00-EDT market-open overlap and CPU contention with live
+      scans (WFO shares the bot process). GBP_CAD (H4/D) sized separately.
+      Decision on window size comes with measured data, not before.
+- [x] **5D-5** (IMPLEMENTED + tested 2026-10-27, NOT deployed) WFO overlap protection + freshness fix. (a) Refuse to start a
+      batch if a `wfo-refit` thread is alive (log it). (b) should_refit uses
+      integer `.days >= 7`, so a pair saved late in one batch is skipped next
+      Sunday. DESIGN WRITTEN 2026-10-27 (see "Phase 5D-5" section at end of
+      file); the 6.5-day tolerance idea is WITHDRAWN (a 13.4 h batch defeats it);
+      recommended rule is weekly-cycle freshness. Not implemented; awaiting approval.
+      Tests for both.
+- [ ] **5D-6** Full regression + controlled deployment plan: full test suite
+      (watch the known test-isolation gap writing to real logs/state), a
+      reduced-grid smoke run only if the user allows it, deploy Mon-Sat with no
+      wfo-refit thread running and the bot flat, restart verified in logs.
+      Leave bot unchanged until each stage is approved.
+
+Unresolved / out of scope until asked: dedicated WFO process instead of a thread
+in the live bot; 429 handling; misfire_grace_time for a missed Sunday run;
+whether a third zero-save week is acceptable.
+
+Rules for this phase: no code changes before the stage is approved; no
+restarts mid-WFO-run; every stage ends with a review entry here.
+
+## Review (Phase 5D-1A, 2026-10-27) — read-only, no code/config/state touched
+Method: code reading + 10-25 wfo.log + a scratchpad arithmetic script that applies
+the runner's exact gate (`c_end <= bar_time + p_len`, `len(slice_h4) < 50`) to
+synthetic OANDA-style calendars. No backtest, no optimization, no broker calls.
+No candle data is cached locally, so exact first-eligible bars on REAL data are
+NOT established — results assume contiguous FX weeks and data ending at Friday close.
+- Starvation CONFIRMED (arithmetic): M30/H4 holdout = 433 M30 bars + 55 H4 candles
+  (hold_c starts 7 bars before hold_p). First eligible index 392; 41 of 433 bars
+  (9.5%, ~0.85 trading day) can signal — NOT 33. Fit: first eligible 399, 608 of 1007 (60%).
+  Float truncation: int(1440*(1-0.3))=1007, int(180*0.7)=125 (matches the log's 1007/433).
+- GBP_CAD (H4/D): same defect, smaller: holdout 133 of 433 eligible (31%), fit 708 of 1007 (70%).
+- GBP_NZD 3 trades in ~41 bars: NOT proven. Plausible, code-verified mechanisms:
+  pyramiding on (ALLOW_MULTIPLE_PER_PAIR, MAX_PYRAMID_PER_PAIR=3) and the end-of-data
+  forced close counted as a trade. Also: in most pairs all 8 holdout candidates logged
+  identical trades/PF -> they share one tiny sample, not 8 independent ones.
+- Proposed smallest fix (NOT implemented): optional `eval_start` param on run_backtest
+  (default = _WARMUP, behaviour unchanged); fetch + prepend ~460 M30 / ~60 H4 context
+  bars; fit runs on [context+fit] only; holdout runs on [context+fit+hold] with eval_start
+  at holdout start. Awaiting approval for 5D-1B.
+
+# Phase 5D-1B DESIGN (drafted 2026-10-27) — NOTHING IMPLEMENTED, awaiting approval
+Scope per user: preserve historical context, keep the 1,440-bar evaluation window
+(1007 fit / 433 holdout) UNCHANGED. No strategy change, no threshold change
+(-> 5D-2), no window increase (-> 5D-1C), no restart.
+
+## 1. How much context is actually needed (derived from code, not assumed)
+| Requirement | Source | Value |
+|---|---|---|
+| Hard gate: closed confirm candles before a bar may signal | backtest/runner.py L365 `len(slice_h4) < 50`; strategy_ema_cci_macd.py L171 | 50 |
+| Pivot/structure/BOS scan depth (both TFs) | strategy_market_structure.py L22 `df.tail(100)` | 100 |
+| EMA/MACD/ADX/ATR convergence | engine/indicators.py: all `ewm(adjust=False)`, seeded at the SLICE start and recomputed per bar. Seed weight (1-a)^n: EMA20 (a=.095) n=100 -> 4.5e-5; ADX/ATR (a=1/14) and MACD-slow (a=.074) n=60 -> 1.2e-2, n=100 -> 6e-4 | ~100 |
+| Touch lookback | strategy_ema_cci_macd.py L177 (grid, <= 40) | inside slice |
+| Live slice window | config.LIVE_CANDLE_WINDOW | 250 |
+
+=> Hard minimum 50 confirm candles (= 400 M30 bars). Scoring-parity sufficient: 100
+candles per TF (= 800 M30 bars for M30/H4). Exact live window: 250 candles.
+The earlier "460 M30 + 60 H4" figure is WITHDRAWN: it was 400 + the 60-bar warmup, i.e.
+the hard minimum only; it ignored the 100-candle pivot depth.
+Key observation: the HOLDOUT needs NO extra fetch — the fit slice already precedes it
+(1007 M30 / 125 H4 candles >= 100). Only the FIT slice would need extra history.
+
+## 2. Common mechanism (all options)
+- `run_backtest(..., eval_start: int | None = None)` (keyword at the END of the signature;
+  None = today's behaviour exactly). Loop becomes
+  `range(max(_WARMUP, eval_start or _WARMUP), len(df))`. Slices are already
+  `df.iloc[max(0,i+1-win):i+1]` and confirm is already gated by `c_end <= bar_time + p_len`,
+  so context bars are visible exactly as live would see them and nothing in the future is.
+  No trade can open before eval_start (those bars are never evaluated), so fit-period
+  positions cannot leak into holdout statistics.
+- Context-sufficiency guard: require >= WFO_CONTEXT_CONFIRM_CANDLES (100) closed confirm
+  candles at the first scored bar, else report insufficient (reuse reason
+  `insufficient_holdout`) instead of silently scoring starved bars (today's failure mode).
+- Time-based (not proportional-count) confirm slicing: removes the 7-bar misalignment
+  (hold_c started 7 M30 bars before hold_p in the 5D-1A arithmetic).
+- Entry-signal accounting (additive result keys only; `total_trades` unchanged):
+  `entry_signals` (opens with no same-pair position open), `addon_entries` (pyramids),
+  `forced_closes` (positions still open at end of data, closed at the last price and today
+  counted as trades), plus an `addon` flag on signal_log rows. Printed by the Phase 5B
+  diagnostic so GBP_NZD's 3 trades can be decomposed on the next run, and so 5D-2 can
+  decide whether the trade floor counts completed trades or independent entries.
+
+## 3. Option A — Full historical context (live parity everywhere)
+Fit and holdout both run on frames with >= 250 candles per TF before the scored period.
+- Fetch: M30 1440 + ~2000 context (+margin) ~ 3.5k bars; H4 180 + 250 + margin ~ 440.
+  Each is still ONE request (< 4,999). Fit frame = [context + fit]; holdout frame =
+  [context + fit + hold].
+- Fit becomes fully active (1007 of 1007 vs 608 today): fit rankings CHANGE and are no
+  longer comparable with the 10-18 / 10-25 runs.
+- Correctness: highest (exact live slices at every scored bar). Complexity: highest (fetch
+  sizing, context trimming, fit/hold bookkeeping in run_all_pairs and run()).
+- Runtime (ESTIMATE): fit evals 216x1007 = 217k vs 216x608 = 131k (+66%). 13.4h x
+  [1.0-1.66] = 13.4-22.2h; holdout adds ~19 min. Regression risk: highest (changes fit ranking).
+- Over-delivers: nothing past 100 candles is read by the scoring path.
+
+## 4. Option B — Minimal context injection (RECOMMENDED), staged
+B1 (recommended first, holdout-only): the fit run stays byte-identical. Holdout combos run
+   on the whole 1440-bar window frames (`train_h1`, `train_h4`) with
+   `eval_start = len(fit_h1)`. No new fetch, no change to the fit slice or fit ranking.
+   Holdout H4 slice at its first bar: ~125 candles (>= 100); M30 slice = the full 250.
+   Holdout becomes 433/433 eligible (from 41).
+   Runtime (ESTIMATE): 1930 s/pair / (216 x 608 evals) ~ 14.7 ms per active bar (upper
+   bound, assumes all time is active-bar time); holdout adds 8 x (433-41) = 3.1k evals
+   ~ +46 s/pair ~ +19 min on 13.4h (+2.4%).
+B2 (optional; decide only after B1 results): give the FIT slice 100 prior H4 candles
+   (~800 M30 bars) of fetched context so it is fully active too. Same ~+66% fit runtime as A
+   and changes fit ranking, so it needs its own approval and measurement.
+- Files for B1: backtest/runner.py (`run_backtest` signature + loop + additive result keys);
+  engine/wfo_optimizer.py (`_run_combo` pass-through of eval_start; `run()` holdout call
+  site ~L405 and the time-based confirm cut; diagnostic line); config.py (one new guard
+  knob WFO_CONTEXT_CONFIRM_CANDLES=100 — not a trading threshold).
+  B2 additionally: run_all_pairs fetch counts (L554-556).
+- Regression risk: lowest — default path unchanged, fit path unchanged, one new optional arg.
+
+## 5. Comparison
+| | A full context | B1 holdout-only | B2 = B1 + fit context |
+|---|---|---|---|
+| Holdout eligible bars (M30/H4) | 433/433 | 433/433 | 433/433 |
+| Fit eligible bars | 1007/1007 | 608/1007 (unchanged) | 1007/1007 |
+| Scoring parity with live | exact | pivot/EMA depth satisfied | pivot/EMA depth satisfied |
+| Extra fetch | ~2k M30 + ~260 H4 | none | ~800 M30 + ~100 H4 |
+| Runtime vs 13.4h (estimate) | 13.4-22.2h | ~13.7h | 13.4-22.2h |
+| Fit ranking changes | yes | no | yes |
+| Complexity / regression risk | high / high | low / low | medium / medium |
+
+## 6. Independence and leakage review
+- Fit ranking never sees holdout bars (fit frame ends at the split; for A/B2 the confirm
+  frame is also cut to candles whose close <= last fit bar close). Holdout sees fit bars
+  only as CONTEXT, which live also sees; no holdout trade can open before eval_start.
+- Existing limit that survives this change: the holdout is used to CHOOSE among the top-8
+  fit candidates, so the winning holdout score is optimistically biased (best of 8).
+  Flagged for 5D-2 (acceptance rule); not changed here. On 10-25 the 8 holdout candidates
+  often produced IDENTICAL trades/PF, so they were one sample, not eight.
+- End-of-data forced close and pyramiding: semantics unchanged, now counted/reported.
+- GBP_NZD 3-trade question: still UNRESOLVED; the new accounting will decompose it on the
+  next run, or an offline replay can if backtests are authorized.
+
+## 7. Tests required (written first, per stage)
+1. eval_start=None and eval_start=_WARMUP give results identical to today (golden, plus
+   the existing determinism tests).
+2. No-lookahead: perturb every bar after index k; signals/entries with bar <= k identical.
+3. Confirm-closure spy: stub strategy records slice_h4; every candle's close <= bar close.
+4. Holdout isolation: no holdout-run trade opens before eval_start; fit-run output is
+   identical whether or not holdout bars exist in the source data.
+5. Context-sufficiency guard: < 100 closed confirm candles at eval_start -> insufficient,
+   not scored.
+6. Eligible-bar counts on synthetic calendars: M30/H4 holdout 433/433, GBP_CAD H4/D, and
+   the 41 / 133 baseline reproduced with eval_start=None (documents the defect fixed).
+7. Accounting: a stub strategy firing every bar -> entry_signals + addon_entries ==
+   total_trades; forced_closes == positions open at the end; total_trades unchanged.
+8. Slice sizes stay 1007/433; time-based confirm cut removes the -7-bar offset.
+9. Existing 35 WFO tests + full suite (615) green. Deployment needs a restart (5D-6 only).
+
+## 8. Recommendation
+B1 first. It is the smallest change to the backtest engine (one optional argument), leaves
+fit ranking and runtime essentially intact (~+19 min), needs no new fetches, and lifts the
+holdout from 41 to 433 eligible bars. Decide B2 / A only after real post-B1 holdout trade
+counts, and an offline A-vs-B1 trade-list comparison on identical data (which needs a
+separate backtest authorization). Expected holdout trades after B1: ~3.6-12 per candidate
+(0.4-1.3 per day x ~9 trading days, pyramids included). Many pairs will still sit near the
+5-trade floor, which is what 5D-1C and 5D-2 address.
+
+## Review (Phase 5D-1B, Option B1 IMPLEMENTED 2026-10-27) — NOT DEPLOYED, bot not restarted, nothing committed
+Files: backtest/runner.py, engine/wfo_optimizer.py, config.py, tests/test_wfo_holdout_context.py (new, 29 tests),
+tests/test_wfo_optimizer.py (8 fake signatures + holdout detection moved from row count to `eval_start`; fixture
+disables the new guard because those tests feed degenerate 30-min frames as both TFs).
+- runner.py: `confirm_candles_closed_at()` helper (same timestamp rule as the loop); `run_backtest(..., eval_start=None)`
+  (default == _WARMUP, floored there); additive result keys `eval_start`, `entry_signals`, `addon_entries`,
+  `forced_closes`, plus an `addon` flag on signal_log rows. Counters follow the real `open_trade()` return
+  (None == rejected) and the real `manual_close()` return. total_trades / PF / WR / P&L / total_signals unchanged
+  (total_signals still logs every attempted open, a pre-existing quirk, pinned by a test).
+- wfo_optimizer.py: `_run_combo(eval_start=)` (kwarg omitted when None, so the fit path is byte-identical);
+  holdout combos run on the WHOLE window (`train_h1`, `train_h4`) with `eval_start=split`; context guard before
+  the grid search (closed confirm candles at the first holdout bar by timestamp < WFO_CONTEXT_CONFIRM_CANDLES ->
+  reason `insufficient_holdout`, no 216-combo spend); reject diagnostic now appends entry_signals / addon_entries /
+  forced_closes min/med/max.
+- config.py: WFO_CONTEXT_CONFIRM_CANDLES = 100 (WFO-only guard, 0 disables). No threshold, window size, scoring or
+  fetch-size change; fetch sizes pinned by a test (M30 1500, H4 1440//8+20).
+- Tests: 29 new + 35 legacy WFO = 64 green; full suite 644 passed, exit 0 (was 615).
+  Default behaviour pinned to a golden captured from the UNMODIFIED code (137 trades, PnL -114.8, PF 0.49).
+  Eligibility demonstrated: legacy holdout-only 41/433 (M30/H4) and 133/433 (H4/D) -> B1 433/433 and 433/433.
+  Fit stage proven unchanged: 216 calls on exactly the legacy slices (1007 bars / 125 confirm), none seeing a
+  holdout bar; holdout candidate order == ranking recomputed from fit-only results.
+  Guard on synthetic production-shaped frames: 126 closed H4 candles (M30/H4) and 168 D candles (H4/D) at the first
+  holdout bar, vs 100 required.
+  Mutation checks (temporary, reverted, files verified restored): forming-candle leak, 1-bar primary look-ahead,
+  loop ignoring eval_start, guard removed -> each caught by at least 2 tests.
+- Known side effect of running the suite (pre-existing isolation gap, see memory): tests/test_bot_service.py appends
+  fake entries to the real logs/bot_service.log (+1,537 bytes per full run) and touches data/adaptive_state.json
+  (content hash unchanged). wfo.log, wfo_params.json, live_state_forex.json, paper_state.json byte-identical.
+- Remaining uncertainty: all eligibility numbers come from a modelled FX calendar, not real candles; the guard is only
+  proven to PASS on that model. If real holdouts are rejected by the guard it is a skip, not a wrong score; check
+  the next run's logs. GBP_NZD's 3 holdout trades still unexplained until the new counters appear in a real run.
+  B1 does NOT raise fit-side activity (608/1007) — B2/A remain undecided. Deploy needs a restart (5D-6).
+
+## Review (Phase 5D-3 + test isolation, IMPLEMENTED 2026-10-27) — NOT DEPLOYED, bot not restarted, nothing committed
+### 5D-3 bounded candle-fetch retries (engine/wfo_optimizer.py only)
+- New `_fetch_with_retry(get_candles_fn, pair, granularity, count)` wraps ONLY the two get_candles_fn calls in
+  run_all_pairs(). `_transient_fetch_reason()` classifies: V20Error.code in {502,503,504} -> "HTTP n";
+  ConnectionResetError anywhere in the exception chain (requests wraps urllib3's ProtocolError which wraps the raw
+  reset only in .args) -> "connection reset"; requests Timeout / TimeoutError -> "timeout"; everything else None.
+- Never retried: 400/401/403/404/405/408/429/500/501/505, refused connections, DNS, SSL, any other exception, and a
+  None/empty result. Max 3 total attempts; waits 5s then 20s x U(0.8,1.2) (<= ~30s per fetch); no sleep after the
+  last attempt. Sleeps block only the wfo-refit daemon thread.
+- After exhaustion (or for a non-retryable error) the ORIGINAL exception object is re-raised, so the existing
+  `except Exception` -> "WFO <pair> failed" ERROR + "raised an exception" counter behave exactly as before.
+  Each retry logs pair, timeframe, attempt n/3 and reason; recovery and give-up are logged once.
+- Only the failed fetch is retried: the other timeframe is not re-fetched and run()/the grid search is never
+  retried or restarted. connectors/oanda_connector.py and main.py: zero diff. Fetch sizes unchanged (M30 1500, H4 200).
+- Tests (tests/test_wfo_fetch_retry.py, 49): classification matrix, recovery on 2nd attempt makes NO 3rd request,
+  3rd-attempt recovery, exhaustion raises the identical exception object after exactly 3 calls / 2 sleeps,
+  non-retryable fails immediately, auth after a transient error stops retrying, backoff/jitter bounds, log content,
+  batch-level wiring + summary counts, connector has no retry logic. Network is blocked (socket patched to fail) and
+  sleep is recorded, not slept. Mutation checks (retry 401, 4 attempts, swallow on exhaustion, retry any
+  ConnectionError, off-by-one at exhaustion) each caught by 2-5 tests; file restored + verified.
+- 429 is deliberately NOT retried (not in the approved list). Read timeouts are retried along with connect timeouts.
+
+### Test isolation (test setup only; no production code changed)
+- Cause 1: `bot_service` attaches a RotatingFileHandler to the real logs/bot_service.log at import and supervise()
+  logs through it -> test_bot_service.py appended fake start/restart lines (+1,537 bytes per full run).
+- Cause 2 (found with a throwaway plugin that recorded and blocked every AdaptiveParams._save aimed at the real
+  path): learning.feedback_loop.generate_suggestions() calls the module-level adaptive_params singleton's
+  force_tier(), which saved to the live data/adaptive_state.json (tests/test_learning.py::TestFeedbackLoop, 2 tests).
+  Content hash was unchanged only because the written tiers matched what was on disk; it could have persisted test
+  tiers into the live file. In-memory singleton state also leaked between tests.
+- Fixes: tests/conftest.py two autouse fixtures (adaptive singleton -> tmp path + per-test state copy; bot_service
+  logger handlers -> NullHandler when loaded); tests/test_bot_service.py swaps the handler class during import so the
+  real file is never even opened. tests/test_isolation_guards.py (7 tests) fingerprints the real files around the
+  risky calls, incl. the real feedback_loop path; verified to fail when the adaptive fixture is disabled.
+- Verification: full suite BEFORE the fix grew logs/bot_service.log by 1,537 bytes and touched adaptive_state.json;
+  AFTER the fix a full run left logs/wfo.log, logs/bot_service.log, data/wfo_params.json, data/adaptive_state.json,
+  data/live_state_forex.json, data/paper_state.json, data/signal_log.csv, data/signal_lifecycle.csv and
+  data/signal_id_seq.json identical in size, mtime AND md5. No existing runtime data was deleted or reset
+  (the ~3 KB of earlier fake lines in logs/bot_service.log from my two earlier suite runs remain).
+- Results: focused 113 (WFO) green; full suite 700 passed, pytest exit 0 (644 -> 700: +49 retry, +7 isolation).
+- Open: the stray test lines already in logs/bot_service.log are left in place (not edited). All real-candle
+  behaviour of 5D-1B still unverified. Deploy requires a restart (5D-6). Next: 5D-2 (explicit validation policy).
+
+# Phase 5D-2 DESIGN (drafted 2026-10-27) — NOTHING IMPLEMENTED, awaiting approval
+Approved starting policy (user): >= 5 completed holdout trades; holdout PF >= 1.0; both checked
+explicitly and independently of scoring; ranking keeps the existing composite; in-sample rules,
+the 216-combo grid, EMA-Bounce, live trading and risk management all unchanged.
+Evidence gathered read-only; no WFO, backtest, broker call, restart, or production edit.
+
+## 0. What the code does today (engine/wfo_optimizer.py; verified by reading + pure-function table)
+- Stage 2 loop (L532-556): `if total_trades < min_hold_trd (3): continue`, then
+  `hs = _composite_score(hold)`; keep strictly-greater `hs`; reject if `best_params is None or best_hold_score <= 0` (L558).
+- `_composite_score` (L144; the hidden floor is the literal `< 5` at L149) returns -1.0 for < 5 trades, else `pf*(0.5+wr)`.
+  It is shared by Stage 1 (L506-507: `s > 0` builds the fit ranking) and Stage 2 (L551). Hence "configured 3, effective 5":
+  a 3-4 trade candidate passes the `< 3` check, scores -1.0, and loses `hs > -1.0`... silently.
+- The documented "PF > 0.5" exists only in prose: the module docstring (L25) and the warning text (L561). The real gate is `score > 0`,
+  i.e. "at least one winning trade". Measured on the current code:
+    5 trades, PF 0.36 (a LOSING set)  -> _composite_score 0.303  -> would be SAVED today
+    5 trades, PF 0.9967               -> 1.096                    -> would be SAVED today
+    4 trades, PF 50 / 3 trades PF 15  -> -1.0                      -> dropped (hidden 5 floor)
+- `_result_pf` (and backtest `_calc_profit_factor`) returns GROSS PROFIT IN DOLLARS when there are no
+  losses (`5 x $0.01 wins -> "PF" 0.05`). Reusing it for a `PF >= 1.0` check would reject a
+  candidate with zero losses. Eligibility therefore needs its own PF definition (section 3).
+- No code outside wfo_optimizer.py and its tests reads these helpers or the holdout state fields.
+
+## 1. Answers to the five questions
+1. Trade counting: `eligible_trades = result["total_trades"]` (completed trades, definition unchanged,
+   INCLUDING pyramid add-ons and the end-of-data forced close). `entry_signals / addon_entries /
+   forced_closes` (5D-1B) are logged next to every verdict so independent setups can be told apart; they
+   do not gate anything. Known consequence, stated plainly: 5 trades can be 2 independent setups + 3 add-ons.
+2. PF exactly 1.0: passes (with the trade minimum). `holdout_pf >= min_pf - 1e-9` (tolerance for float
+   sums; 1.0 +/- 1 ulp must not flip a verdict). PF < 1.0 fails regardless of composite score.
+   Note PF >= 1.0 is equivalent to net holdout P&L >= 0 (spread is already in the backtest fill), so PF = 1.0
+   admits a break-even candidate; this is the approved threshold, flagged only so it is a conscious choice.
+3. Nothing qualifies: return None before any state/disk write; existing params untouched; no ineligible
+   fallback. (Same observable behaviour as today's reject path: `_last_fail_reason="failed_oos"`.)
+4. Ineligible candidates never influence the winner: eligibility is a pre-filter; ranking runs over the
+   eligible list only; a 4-trade PF-50 candidate cannot displace a 5-trade PF-1.0 one.
+5. Reporting: see section 5 (reason codes + per-pair line + one additive batch line).
+
+## 2. Configuration (config.py)
+| Constant | Value | Note |
+|---|---|---|
+| WFO_HOLDOUT_MIN_TRADES | 5 (was 3) | Now enforced AS WRITTEN; the hidden floor is removed from the holdout path |
+| WFO_HOLDOUT_MIN_PF | 1.0 (new) | Explicit PF eligibility floor |
+| WFO_CONTEXT_CONFIRM_CANDLES | 100 | From 5D-1B, unchanged |
+| in-sample floor | `_FIT_MIN_TRADES = 5`, module constant (renamed from `_EFFECTIVE_MIN_TRADES`) | NOT config: in-sample behaviour must not move |
+Sanity: `min_trades = max(1, int(...))`, `min_pf = max(0.0, float(...))`; code fallbacks 5 / 1.0.
+Lowering MIN_TRADES below 5 later now really admits 3-4 trade holdouts (previously impossible); the fit floor stays 5.
+
+## 3. Functions and branches that change (all in engine/wfo_optimizer.py unless noted)
+a) `_composite_value(result)`  NEW, pure: `pf*(0.5+wr)` with the legacy pf (dollar quirk deliberately
+   preserved so ranking is unchanged), NO trade floor, errors -> 0.0.
+b) `_composite_score(result)`  BEHAVIOUR UNCHANGED, bit-for-bit: `-1.0 if error or total_trades < _FIT_MIN_TRADES
+   else _composite_value(result)`. Still the only function Stage 1 calls (L506). The hidden five-trade floor is
+   therefore NOT removed from it; the holdout path simply stops depending on it. Golden-pinned (section 7).
+c) `_holdout_pf(result)`  NEW: gross_profit/gross_loss; if gross_loss == 0: `inf` when gross_profit > 0,
+   else 0.0 (no trades / all break-even => not eligible); errors -> 0.0. Never used for ranking or display of the legacy "PF".
+d) `_holdout_eligibility(result, min_trades, min_pf)`  NEW, pure -> `(trades_ok, pf_ok)`.
+   `trades_ok = total_trades >= min_trades`; `pf_ok = _holdout_pf(result) >= min_pf - 1e-9`. Eligible = both.
+   Any exception => (False, False): an error can only make a candidate ineligible, never eligible.
+e) Stage 2 loop (L532-556): replace L549-556 with: record per-candidate (trades_ok, pf_ok, value) for diagnostics;
+   `if not (trades_ok and pf_ok): continue`; else append to `eligible`. After the loop pick
+   `max(eligible, key=value)` with ties resolved to the EARLIER fit rank (== today's strict `>`).
+f) Acceptance (L558): `if winner is None:` reject path (replaces `best_params is None or best_hold_score <= 0`).
+   Before writing state, re-assert `_holdout_eligibility(winner)` (defence in depth; a failed assert => reject, never persist).
+g) `_classify_oos_rejection` (L181; new signature `(cands, min_trades, min_pf)`) and `_format_oos_diagnostic` (L201): rewritten around the
+   explicit thresholds (section 5). `_EFFECTIVE_MIN_TRADES` (L170) references removed. The warning text (L559-563) and the module docstring (L25)
+   corrected to quote the real thresholds.
+h) `run_all_pairs()`: additive verdict counters + one extra summary line; the existing summary string is untouched.
+i) `config.py`: the two constants above. No other production file changes.
+Unchanged: Stage 1, grid, top-N selection (`fit_scored[:top_n]`), `_run_combo`, B1 `eval_start`, the context guard,
+fetch retries, `_save`, persisted state fields (no new keys), `should_refit`.
+
+## 4. Order of checks
+A. Pre-grid (unchanged order): `insufficient_data` (< 120 bars) -> holdout slice < 40 bars -> 5D-1B context guard.
+B. Stage 1 (unchanged): grid -> `_composite_score > 0` -> sort -> `no_in_sample_candidate` if empty.
+C. Stage 2, per top-N fit candidate: holdout backtest on the whole window with `eval_start` (5D-1B) ->
+   (None => counted, skipped) -> eligibility (trades_ok, pf_ok) -> eligible list.
+D. Ranking: eligible only, by `_composite_value`, tie -> earlier fit rank.
+E. Acceptance: winner exists AND re-asserted eligible -> write state + `_save` (existing path). Otherwise reject,
+   no state or disk write of any kind.
+
+## 5. Reporting
+`_last_fail_reason` keeps its four batch buckets (so the existing summary line and counters are unchanged).
+New additive attribute `_last_fail_detail` (reset next to `_last_fail_reason`):
+| Situation | _last_fail_reason (unchanged) | _last_fail_detail (new) |
+|---|---|---|
+| < 120 bars | insufficient_data | - |
+| holdout slice < 40 bars | insufficient_holdout | holdout_too_small |
+| < N closed confirm candles at the boundary | insufficient_holdout | insufficient_context |
+| no fit candidate | no_in_sample_candidate | - |
+| all holdout runs returned None | failed_oos | no_holdout_results |
+| no candidate has enough trades AND none has PF >= min | failed_oos | both |
+| none has enough trades; some PF ok | failed_oos | too_few_trades |
+| some have enough trades; none PF ok | failed_oos | low_pf |
+| trades ok on some, PF ok on others, never the same candidate | failed_oos | mixed |
+| fetch failure / any other exception | counted by existing "insufficient data (candle fetch)" / "raised an exception" | - |
+Per-pair INFO line (replaces the Phase 5B text): thresholds, `trades_ok=a pf_ok=b eligible=c`, failed-trades-only /
+PF-only / both counts, holdout trades and holdout PF min/med/max (eligibility PF; inf shown as inf), plus the
+5D-1B `entry_signals / addon_entries / forced_closes`. One additive batch line after the unchanged summary:
+`WFO batch OOS breakdown: too_few_trades=a low_pf=b both=c mixed=d no_holdout_results=e | insufficient_context=f`.
+
+## 6. Interactions with Phase 5D-1B
+- Holdout counts will rise (433/433 bars eligible), so the 5-trade floor becomes reachable; that is the intent.
+- Counts still include add-ons and the forced close at the end of the window; a forced close is priced at the last
+  bar and feeds both the trade count and PF. Kept (user: do not redefine counting yet) but always logged.
+- The context guard keeps its position (before the grid) and gains the `insufficient_context` detail.
+- `eval_start`/whole-window holdout frames unchanged; the holdout is still used to CHOOSE among the top-8, so the
+  winning holdout PF is optimistically biased (best of 8). Out of scope; candidate follow-up: require holdout PF >= a
+  fraction of fit PF, or Bonferroni-style PF margin.
+- The 8 holdout candidates frequently produce identical trades (10-25 logs): requiring PF >= 1.0 on one shared sample
+  is a weaker test than it looks. Flagged, not addressed.
+
+## 7. Tests (written first; new file tests/test_wfo_validation_policy.py)
+Boundary matrix (trades x PF), via `_holdout_eligibility` and end-to-end through `run()` with a fake backtest:
+- trades {0, 4, 5, 6} x PF {no wins (0), 0.99, exactly 1.0, 1.01, no losses (inf)}: eligible iff trades >= 5 and PF >= 1.
+- exactly 1.0 passes: `[10,10,10,-15,-15]`; float case `[0.1,0.2,0.3,-0.3,-0.3]`-style sums that land on 0.9999999999 pass via tolerance.
+- no-loss tiny profit `[0.01]*5` is ELIGIBLE (legacy `_result_pf` would say 0.05); `[0]*5` break-even NOT eligible.
+- PF 0.36 / 0.99 candidates with high composite scores rejected (today they would be saved).
+- MIN_TRADES / MIN_PF read from config (set 3 -> 3-trade candidate eligible; defaults pinned 5 / 1.0).
+Ranking: extreme-score ineligible never wins; eligible low-score beats ineligible high-score; tie -> earlier fit rank;
+only eligible candidates are ranked; exceptions inside eligibility => ineligible.
+Rejection safety: seeded `_state` + on-disk file byte-identical (md5) after a rejection; `_last_save_ok is None`;
+`_save` not called (spy); `run()` returns None; for each verdict (too_few / low_pf / both / mixed / none).
+In-sample unchanged: golden table pinned from the current code (values above: 5-trade PF 1.0 -> 1.1, PF 0.9967 -> 1.09633,
+0.3636 -> 0.30303, [0.01]*5 -> 0.075, all-loss/breakeven -> 0, 4-trade/3-trade/error -> -1.0); Stage 1 call count (216) and
+fit ranking order test from 5D-1B stay green; `_composite_score` still the function Stage 1 calls (spy).
+Reporting: every detail code in section 5, the thresholds and entry_signals fields in the per-pair line, the new batch line,
+the unchanged legacy summary string (exact match), detail resets between pairs (no stale value).
+5D-1B interplay: holdout still called with eval_start; context failure => detail insufficient_context + reason insufficient_holdout.
+Legacy tests that encode the old rules and WILL need updating (expected, listed so it is deliberate):
+tests/test_wfo_optimizer.py: the Phase 5B diagnostic-content test (~L736-765: "effective min=5", "PF>0.5" strings,
+`verdict=low_pf`), `test_classify_oos_rejection` (param table; new signature + `mixed`), and any `_profile_fake` expectation
+that depends on `score > 0`. Others (fits, saves, batch summaries) are expected to pass untouched; to be confirmed when run.
+
+## 8. Expected impact
+- Runtime: none. No extra backtests; eligibility is O(top_n = 8) arithmetic per pair; a rejection saves nothing it did not save before.
+- Logging: per-pair diagnostic line count unchanged (rewritten text, a few more fields); +1 batch line per run.
+- Outcomes (honest): cannot be forecast without real post-5D-1B results. PF >= 1.0 and >= 5 trades is stricter than today
+  (which would save a PF 0.36 set) but the holdout is ~10x larger, so some pairs may finally qualify and some correctly will not.
+  A third zero-save week is still possible and would be a legitimate outcome, not a fault.
+- Persistence: state fields and `_save` path unchanged; a rejection still leaves existing params exactly as they were.
+- Deploy: needs a restart (5D-6); nothing is live.
+
+## 9. Open questions for the reviewer
+1. Keep the ranking PF quirk (no-loss sets rank by dollar profit) for now, or fix in a later phase?
+2. Should the forced end-of-window close count toward the 5 trades? (Kept as-is; logged.)
+3. Add a fit-vs-holdout PF consistency requirement later, given best-of-8 selection bias?
+4. Accept PF == 1.0 (break-even) as stated, or use a small margin such as 1.05?
+
+## Review (Phase 5D-2, explicit holdout validation policy — IMPLEMENTED 2026-10-27) — NOT DEPLOYED, bot not restarted, nothing committed
+Files (this phase): config.py, engine/wfo_optimizer.py, tests/test_wfo_validation_policy.py (new, 88 tests),
+tests/test_wfo_optimizer.py (fixture -> production policy 5 / 1.0; Phase 5B diagnostic-content test and the classifier
+table rewritten to the new semantics), tests/test_wfo_holdout_context.py (one threshold assertion 3 -> 5, + MIN_PF).
+backtest/runner.py is unchanged by this phase (its diff is 5D-1B's).
+- config.py: WFO_HOLDOUT_MIN_TRADES 3 -> 5 (now enforced as written), WFO_HOLDOUT_MIN_PF = 1.0 (new).
+- wfo_optimizer.py: `_composite_score` behaviour unchanged (only its literal 5 became the named `_FIT_MIN_TRADES`; the
+  hidden in-sample floor is still there; Stage 1 untouched). New pure helpers: `_composite_value` (floor-free twin, legacy
+  pf quirk kept so ranking is unchanged), `_holdout_pf`, `_trades_meet`, `_pf_meets`, `_holdout_eligibility`,
+  `_verdict_from_flags`, `_policy_thresholds`. Stage 2 now: backtest -> explicit eligibility -> rank ELIGIBLE only (max
+  composite, tie -> earlier fit rank) -> acceptance independently re-asserts eligibility -> existing state write. No eligible
+  candidate => return None before any state/disk write. `_EFFECTIVE_MIN_TRADES` removed; docstring/warning/diagnostic text
+  now quote the enforced thresholds. `_last_fail_detail` added (additive); `run_all_pairs` keeps every existing bucket and
+  summary string and adds one "WFO batch OOS breakdown" line.
+- Results: new file 88 passed; WFO group 213 passed; FULL SUITE 793 passed, pytest exit 0 (700 -> 793); nine live runtime
+  files (bot_service.log, wfo.log, wfo_params.json, adaptive_state.json, live/paper state, signal_log/lifecycle/seq)
+  identical in size, mtime AND md5 across the run.
+- Golden: `_composite_score` on 9 fixed cases (captured from the pre-change code before any edit) identical, incl. the
+  hidden floor (-1.0 for 3/4 trades), the PF-0.36 set scoring +0.30, [0.01]*5 -> 0.075. A spy shows Stage 1 calls it exactly
+  216x and the holdout path never calls it.
+- Boundary results: trades {0,4,5,6} x PF {0, 0.99, 1.0, 1.01, no-loss}: eligible iff trades >= 5 and PF >= 1 (20 cases).
+  5 trades PF 0.36 -> (True, False) rejected (old gate would have saved it). 5 trades PF exactly 1.0 -> eligible.
+  Float case [0.3,0.3,-0.1,-0.2,-0.3] (PF 0.9999999999999998) eligible; shortfalls 1e-12 / 1e-10 pass, 2e-9 / 1e-7 / 1e-4 / 1e-2 fail.
+  No-loss [0.01]*5 -> PF +inf, eligible (legacy `_result_pf` says 0.05). [0]*5 -> undefined -> rejected even with min_pf = 0.
+  NaN / inf / missing / non-numeric / non-list trade data -> rejected, never treated as profitable.
+- Persistence safety: for six no-eligible scenarios (too few trades, PF 0.36, PF 0, 4-trade PF-50, PF 0.9967, every holdout
+  backtest erroring) `_save` is never called, the seeded on-disk file is byte-identical with identical mtime, `_state`
+  unchanged, `_last_save_ok is None`. A forced "selection said yes, final check says no" run writes nothing
+  (`acceptance_recheck_failed`). An exception inside eligibility makes a candidate ineligible, not eligible.
+- Mutation checks (8, each temporary, file restored + diffed): PF check ignored, trade check ignored, tolerance widened to
+  1e-2, tie -> later rank, re-check removed, no-loss PF as dollars, in-sample floor 3, zero/zero PF as 0.0 -> each caught
+  by 1-8 tests.
+- Neighbours verified: 5D-1B (`eval_start` still passed for every holdout run, context guard + `insufficient_context`
+  detail) and 5D-3 (504-then-success fetch retry unchanged) tests green; isolation guards green.
+- Deliberate deviations from the design text (all stricter or additive): undefined PF is NaN, not 0.0, so a 0/0 set is
+  ineligible even if min_pf were set to 0; extra detail code `acceptance_recheck_failed`; the breakdown line appends
+  ` other=N` only when an unrecognised detail occurs.
+- Unresolved / not addressed (per decisions): ranking still uses the legacy dollar-valued PF for no-loss sets; forced
+  end-of-window closes and pyramid add-ons still count toward the 5 trades (logged separately); best-of-8 holdout selection
+  bias and the identical-sample issue remain (fit-vs-holdout consistency deferred). PF >= 1.0 admits break-even and is not
+  evidence of a reliable edge. Real-candle behaviour of 5D-1B is still unverified, so the real acceptance rate is unknown
+  and another zero-save week remains possible. Nothing is live: a restart (5D-6) is required before any of 5D-1B/3/2 runs.
+
+
+# Phase 5D-5 — WFO overlap guard + weekly-cycle freshness (DESIGN ONLY, 2026-10-27) — nothing implemented
+
+## 1. Verified facts (read from code/logs; nothing run)
+- main.py:1434-1479: `_wfo_job` logs, starts a daemon `wfo-refit` thread and RETURNS. APScheduler therefore sees every
+  job instance finish in microseconds, so `max_instances=1` can never block anything. Scheduler = `BlockingScheduler`
+  (default thread-pool executor); cron = `CronTrigger(day_of_week="sun", hour=2, minute=0)` built WITHOUT a timezone, so it
+  uses the machine zone (tzlocal = America/New_York): wfo.log line 1 shows "02:00:00 ... fired at 06:00:00 UTC". (The
+  "Sundays 02:00 UTC" startup message is wrong; known item, unchanged here.)
+- Two entry points reach `run_all_pairs`: the scheduler job (main.py) and the dashboard "WFO" button
+  (dashboard/app.py:3112-3124, runs in the same process as a dashboard thread, uses the same module singleton). Nothing stops
+  a button press while the Sunday batch runs; the 2026-10-25 batch ran 02:00 -> 15:25 EDT (13.4 h), so that window is wide.
+- Shared mutable state a second batch would touch: `_state` + `wfo_params.json` (whole-file rewrite per save, `_lock` only
+  guards the dict, not the sequence), and the instance-level handoff attributes `_last_save_ok`, `_last_fail_reason`,
+  `_last_fail_detail`, which are only correct if exactly ONE batch is running. Two batches would also double OANDA load
+  and CPU in the live-trading process and interleave wfo.log.
+- `should_refit` (wfo_optimizer.py:489): `(now - fitted_at).days >= 7`. `fitted_at` is written at SAVE time (line ~713),
+  i.e. after the trigger. So age at the next trigger is always 168 h minus (save time - trigger time) -> `.days == 6`
+  -> skipped, for EVERY pair saved by the previous batch, even one saved one second after the trigger. By code reading
+  (not yet observed in logs), a saved pair refits only every second Sunday.
+- DST makes pure elapsed time worse: Sun 2026-10-25 02:00 EDT -> Sun 2026-11-01 02:00 EST is 169 h; Sun 2027-03-07/14
+  spring-forward week is 167 h.
+
+## 2. Overlap guard
+Design: a non-reentrant `threading.Lock` (`self._batch_guard`, separate from `_lock`) in `WFOOptimizer`, taken with
+`acquire(blocking=False)` at the very top of `run_all_pairs`, released in a `finally` that wraps the whole existing body.
+- Not acquired -> log WARNING to wfo.log ("WFO batch skipped: another batch is already running (started <UTC>, running
+  <h:mm>)"), return immediately. No fetches, no `run()`, no state/handoff-attribute writes, and the skipper never
+  releases a lock it did not take.
+- Acquired -> record `_batch_started_at`, run the unchanged body (the existing body is moved into `_run_batch_locked`,
+  or simply indented under try/finally; behavior, counters and log strings otherwise identical).
+- `batch_running()` read-only helper (non-blocking probe of the lock) for the dashboard.
+- In-memory only: a restart clears it (nothing to go stale, no lock file). A daemon thread killed mid-batch dies with the
+  process, so the lock cannot outlive it.
+- No automatic stale-takeover: a "break the lock after N hours" rule would recreate the overlap it prevents. A genuinely
+  hung batch is visible instead (every skipped trigger logs the running time) and cleared by restart. Connector requests
+  already have timeouts.
+- main.py: UNCHANGED. The scheduler job still logs "launching background re-fit" and the thread's first act is the skip line
+  (slightly redundant but accurate and in wfo.log). Keeps the most safety-critical file out of this change.
+- dashboard/app.py (small, needs approval): before `send_wfo_started`, if `wfo_optimizer.batch_running()` return
+  "WFO already running — not started" (no Telegram). `run_all_pairs` returns `True` if it ran / `False` if skipped
+  (was None; no caller uses the value) so `_run_wfo` sends `send_wfo_complete` only when the batch actually ran.
+- Manual runs: covered because the guard lives in the method, not the callers. Manual and scheduled runs are mutually
+  exclusive, first one wins. Limitation: process-local. A standalone `python dashboard/app.py` (debug entry,
+  app.py:4044) would have its own singleton and is NOT covered; main.py's single_instance lock already prevents two bots.
+  Not adding a file lock (more moving parts than the risk warrants); documented.
+- Out of scope, noted: the dashboard button uses `FOREX_PAIRS + FOREX_WATCH` and ignores `STRATEGY_OVERRIDE`, unlike
+  `_wfo_job` (pre-existing; would tune pairs that do not run EMA-Bounce).
+
+## 3. Freshness — options compared
+| Option | Rule | Verdict |
+|---|---|---|
+| Today | `.days >= 7` | Always skips pairs saved the previous week (above). |
+| Elapsed 168 h | age >= 168 h | Same failure by construction (save is after the trigger) + DST. |
+| Tolerance 6.5 d (this phase's earlier note) | age >= 156 h | WRONG with real batches: a pair saved >12 h after the trigger (batch ran 13.4 h) is 154.6 h old and is skipped. I am withdrawing that suggestion. |
+| Tolerance 6.0 d | age >= 144 h | Works up to 24 h batches; breaks again for the 28-38 h batches 5D-1C may bring. |
+| **Weekly cycle (recommended)** | eligible iff `fitted_at` < start of the current scheduled cycle | Independent of batch length and DST; matches the user's stated preference. |
+
+Weekly-cycle rule: `cycle_start(now)` = most recent scheduled trigger instant (Sunday 02:00 in the SAME zone the cron
+uses) at or before `now`. `should_refit` = `fitted_at < cycle_start(now)`. A pair is therefore refit at most once per
+scheduled cycle (anything saved at/after the trigger, however late, is fresh until the next trigger) and is always
+eligible at the next trigger, even if saved 36 h into the previous batch.
+- Zone: `tzlocal.get_localzone()` — the identical call APScheduler's CronTrigger makes — so cron and freshness cannot
+  disagree; arithmetic done on aware local datetimes (zoneinfo) so DST weeks are 167/169 h without special cases.
+- Schedule constants: add `WFO_CYCLE_DAY_OF_WEEK` (Mon=0, Sun=6), `WFO_CYCLE_HOUR`, `WFO_CYCLE_MINUTE` to config.py
+  (6/2/0). main.py's cron stays hardcoded, so add a drift test that parses main.py's `CronTrigger(...)` arguments and
+  asserts they equal config. (Alternative: one-line main.py edit to read config — not proposed.)
+- `WFO_REFIT_DAYS` kept: `weeks = max(1, round(refit_days / 7))`; cutoff = `cycle_start - (weeks-1)` calendar weeks.
+  7 -> every cycle (default behavior); 14 -> every second cycle.
+- Unchanged: `fitted_at` format/value, `wfo_params.json` schema, stalest-first ordering, unparseable/missing/naive
+  timestamp -> eligible (today's behavior via except). New: a `fitted_at` more than 1 day in the FUTURE (clock skew)
+  -> eligible + warning (today it would look fresh for weeks).
+- `should_refit(pair, now=None)`: optional injectable clock for deterministic tests; production callers unchanged.
+- Behavior notes to accept: (a) a manual run mid-week (e.g. Wed) marks that pair fresh for the rest of that cycle and it
+  refits again at the next Sunday trigger; (b) a manual re-run in the same cycle skips already-saved pairs and processes
+  only unfitted/rejected ones, which also makes it a clean "resume after a mid-batch crash"; (c) a pair that FAILED
+  validation records nothing (no state-format change allowed), so a same-cycle manual run will re-attempt it (13 h-scale
+  cost, 35 min per pair). Persisting attempt markers is possible but needs a state-format approval — not proposed.
+
+## 4. Affected files and restart
+engine/wfo_optimizer.py (guard, `batch_running`, `should_refit`, cycle helper), config.py (3 constants),
+dashboard/app.py (button handler; optional), tests (new `tests/test_wfo_batch_guard.py`, `tests/test_wfo_freshness.py`;
+existing `test_run_all_pairs_logs_and_reraises_should_refit_exception` must keep passing). main.py, connectors, backtest,
+trading/risk code: untouched. No state migration. Loaded only on restart, so it rides the single 5D-6 restart
+(Mon-Sat, bot flat, no `wfo-refit` thread alive); nothing changes live until then.
+
+## 5. Tests (deterministic: threading.Event/Barrier, injected clock + ZoneInfo, no sleeps, tmp paths, fake get_candles)
+Guard: (1) 2nd call while 1st blocked in fetch -> returns False, 0 fetches/0 run() calls, WARNING with start time;
+(2) 10 threads on a Barrier -> exactly one executes; (3) lock released after normal completion -> next call runs;
+(4) released after per-pair exception; (5) released when `should_refit` raises (exception still propagates, existing
+log-and-reraise preserved); (6) released after BaseException (KeyboardInterrupt/SystemExit) in the fetch fn;
+(7) skipper never releases the holder's lock (`batch_running()` still True after skip); (8) while blocked, a skipped call
+leaves `_state`, `_last_*` attrs and wfo_params.json bytes/mtime untouched; (9) simulated restart (new instance) is
+unlocked and reads freshness from disk; (10) manual path vs scheduled path through the same singleton: dashboard handler
+returns "already running" and sends no Telegram when busy, and sends exactly one completion when it ran; (11) singleton
+identity (`main` and `dashboard` import the same object); (12) existing summary/breakdown log lines unchanged.
+Freshness (zone America/New_York): saved Sun 02:00:01 -> next Sun 02:00:00 eligible (fails on today's code); saved +13.4 h
+eligible (fails under 6.5 d); saved +36 h eligible; same-cycle checks fresh at Sun +1 min, Sat 23:59, next Sun 01:59:59;
+eligible at exactly next Sun 02:00:00; `fitted_at == cycle_start` fresh (boundary pinned); DST fall-back (2026-11-01) and
+spring-forward (2027-03-14) weeks; Sunday-before-02:00 now maps to the PREVIOUS cycle; Wed manual fit then next Sunday
+eligible; two `run_all_pairs` calls in one cycle -> second skips saved pairs; `WFO_REFIT_DAYS=14`; missing/empty/garbage/naive
+`fitted_at` -> eligible; future `fitted_at` -> eligible; `should_refit` writes nothing; saved-record keys identical to
+today; config/main.py cron drift test. Plus mutation checks (guard `acquire` removed, release removed, `<` flipped to `<=`,
+.days restored) each must fail a test, and the fingerprint check that real logs/state are untouched.
+
+## 6. Decisions requested before implementation
+1. Weekly-cycle rule (recommended) over a tolerance? 2. `run_all_pairs` returns bool (None before)? 3. Approve the small
+dashboard/app.py edit? 4. No automatic stale-lock takeover (hung batch = restart)? 5. `WFO_REFIT_DAYS` mapped to whole
+cycles as above? 6. Accept that failed-validation attempts are not recorded (a same-cycle manual run retries them)?
+
+
+## Review (Phase 5D-5, overlap guard + weekly-cycle freshness — IMPLEMENTED 2026-10-27) — NOT DEPLOYED, bot not restarted, nothing committed
+Preliminary checks (both passed, no stop condition):
+- Process topology: main.py:1321 hosts the dashboard in a daemon THREAD of the bot process (`dash_app.run`), and both the
+  `wfo-refit` job and the dashboard button import the same module singleton `engine.wfo_optimizer.wfo_optimizer`. Not
+  launched by run.ps1 / bot_service.py. Only other entry: `python dashboard/app.py` (debug dev entry, own process, own
+  singleton) -> NOT covered by a process-local lock; unsupported while the bot runs. Pinned by a topology test.
+- Callers of run_all_pairs: main.py (Thread target, value discarded), dashboard/app.py (button), tests (ignore value).
+  Nothing depends on None, so bool is compatible. True = "this call executed the batch" (zero saves still True);
+  False = skipped; exceptions still propagate.
+Config semantics: new WFO_SCHEDULE_TZ="America/New_York", WFO_CYCLE_DAY_OF_WEEK=6, WFO_CYCLE_HOUR=2, WFO_CYCLE_MINUTE=0,
+WFO_REFIT_CYCLES=1 (integer >= 1; missing/0/negative/non-integer/bool/NaN/inf -> 1 + warning). WFO_REFIT_DAYS is left in
+config, documented LEGACY, and no longer read (nothing else read it; no test did). Cron constants must equal main.py's
+CronTrigger (drift test); a startup warning fires if the machine zone != WFO_SCHEDULE_TZ.
+Changed: engine/wfo_optimizer.py (guard, batch_running, on_start, current_cycle_start, _refit_cycles, should_refit(now=)),
+config.py, dashboard/app.py (`_start_wfo_from_dashboard` only), tests/test_wfo_batch_guard.py (new, 30),
+tests/test_wfo_freshness.py (new, 56). main.py, connectors, scoring/validation/grid/window: untouched.
+Results: 86 new pass; WFO group 299 pass; FULL SUITE 879 passed (793 -> 879); nine runtime files identical in
+size/mtime/md5 before and after. Mutations (10, each caught, file restored + diffed): guard bypass, release removed,
+skipper releases holder's lock, skip returns True, `<`->`<=`, legacy .days, UTC zone, cycles ignored, on_start before guard,
+naive timestamp treated fresh.
+Corrections to the design text: the spring-forward cron instant is 07:00 UTC (02:00 EST, nonexistent locally), so
+Mar 7->14 is 168 h and Mar 14->21 is 167 h (not the 167 h I stated for the first); fall-back week 169 h as stated. Python
+`==` between aware datetimes in a DST gap is unreliable, so comparisons are done in UTC.
+Dashboard: busy -> "WFO optimization is already running. No additional batch was started." (no Telegram); otherwise
+the thread starts and the "started" notice is sent from on_start INSIDE the guard, "complete" only if run_all_pairs
+returned True, so a request that loses the race announces nothing. Its immediate message says "start requested ... unless
+another batch is already active" (a race loser cannot know synchronously).
+Deployment checks for 5D-6: confirm no second main.py/WFO process (single_instance main.lock; no dashboard standalone);
+confirm machine zone is America/New_York (tzlocal 5.4.4 reports it today); tzdata is installed in venv (2026.2) via
+APScheduler/tzlocal but is not pinned in requirements.txt (not edited here).
+Unchanged by design: failed attempts record nothing (only successful saves update fitted_at); no automatic lock takeover.
+
+
+## Review (Phase 5D-6 Step 1, deployment readiness audit, 2026-10-28 07:1x EDT) — READ-ONLY, bot untouched
+Verdict: READY WITH CONDITIONS. Nothing stopped/restarted/staged/committed; no broker contact; no config change.
+- Git: branch trade-log-pagination-export @ 0a11ed6, 11 tracked files modified + 6 new test files, all uncommitted.
+  Unrelated: file `0` (content "nono"), scripts/signal_lifecycle_report.py + its test, 4 stray .txt/odd-named files.
+- Tests: 879 passed (103 s); 9 runtime files identical before/after (bot scans only at :00/:30; run was 07:10-07:12).
+- Processes: one tree, bot_service x2 (9316, 11148) -> main.py x2 (14728, 12848), started 2026-10-24 02:15; innermost
+  12848 owns port 8050 and holds main.lock. Started BEFORE every modified file -> live bot runs none of 5D-1B/3/2/5.
+  Other python processes belong to unrelated projects (MTTC agent, Reinforced_Trading Bot dashboard).
+- WFO: last wfo.log line is 10/25 15:25:05 "batch complete"; no later "batch starting" -> no batch running.
+- Scheduler: cron built as main.py builds it -> tz America/New_York; next fires Sun 11/1 02:00 -05:00 (07:00 UTC),
+  11/8, 11/15 ...; current_cycle_start == fire instant for all six. venv: tzdata 2026.2, tzlocal 5.3.1, APScheduler 3.11.2.
+- Config: WFO_REFIT_DAYS has no consumer left (config comment only); WFO_REFIT_CYCLES=1; cycle constants match main.py.
+- Open position (LOCAL state only): AUD_USD long 1756u, id 840, opened 10/27 10:00 UTC, SL 0.70023, TP1 0.70648,
+  no TP hit, BE not set. Connector attaches stopLossOnFill + takeProfitOnFill(TP1). Broker-side verification NOT done.
+- Conditions: (1) verify trade 840 + its SL/TP1 at OANDA (or wait until flat); (2) uncommitted code = no rollback point,
+  back up/commit first (user decision); (3) restart before Sun 11/1 02:00 EST; (4) kill supervisors BEFORE main.py;
+  (5) never launch standalone dashboard; (6) leave unrelated files out of any commit.
